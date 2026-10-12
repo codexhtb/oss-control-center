@@ -1,0 +1,157 @@
+# Модель данных и ERD
+
+PostgreSQL — единственный source of truth для обращений, комментариев, решений, истории, аудита и диагностических snapshots. Данные BillingProvider сохраняются как исторический снимок, увиденный при создании заявки; актуальным источником биллинга остаётся сам провайдер. Схема ниже логическая: имена таблиц и ключи фиксируют контракт, конкретные SQL-типы и индексы оформляются версионированной миграцией Phase 1.
+
+**Граница Phase 1.1:** health endpoints не требуют доменных таблиц. Начальная пустая ревизия Alembic создаёт только `alembic_version`; таблицы ниже вводятся в следующих шагах Phase 1 контролируемыми миграциями.
+
+## ERD
+
+```mermaid
+erDiagram
+  app_users ||--o{ tickets : creates
+  app_users ||--o{ auth_sessions : opens
+  app_users ||--o{ subscriber_snapshots : requests
+  subscriber_snapshots ||--o{ connection_snapshots : contains
+  subscriber_snapshots ||--o{ tickets : captured_for
+  connection_snapshots o|--o{ tickets : selected_for
+  tickets ||--o{ ticket_comments : has
+  tickets ||--o{ ticket_decisions : has
+  tickets ||--o{ diagnostic_snapshots : has
+  tickets ||--o{ ticket_history : has
+  tickets o|--o{ audit_events : targets
+  tickets ||--o{ field_work_handoffs : may_have
+  field_work_handoffs ||--o{ field_external_messages : receives
+  app_users ||--o{ ticket_comments : writes
+  app_users ||--o{ ticket_decisions : records
+
+  app_users {
+    uuid id PK
+    text login UK
+    text role
+    boolean active
+    text credential_hash
+  }
+  auth_sessions {
+    uuid id PK
+    uuid user_id FK
+    timestamp expires_at
+    timestamp revoked_at_nullable
+  }
+  subscriber_snapshots {
+    uuid id PK
+    text account_no
+    text source
+    timestamp fetched_at
+    uuid requested_by FK
+    timestamp expires_at
+    text full_name_nullable
+    text phone_nullable
+    jsonb contracts
+    jsonb services
+  }
+  connection_snapshots {
+    uuid id PK
+    uuid subscriber_snapshot_id FK
+    text access_type
+    text device_identifier_nullable
+    text port_identifier_nullable
+    text vlan_nullable
+    text onu_identifier_nullable
+  }
+  tickets {
+    uuid id PK
+    uuid subscriber_snapshot_id FK
+    uuid connection_snapshot_id FK
+    text account_no
+    text status
+    text description
+    uuid created_by FK
+    uuid closed_by FK
+    uuid closed_decision_id FK
+    uuid client_request_id
+    int version
+    timestamp created_at
+    timestamp closed_at_nullable
+  }
+  ticket_comments {
+    uuid id PK
+    uuid ticket_id FK
+    uuid author_id FK
+    text body
+  }
+  ticket_decisions {
+    uuid id PK
+    uuid ticket_id FK
+    uuid engineer_id FK
+    text decision_text
+  }
+  diagnostic_snapshots {
+    uuid id PK
+    uuid ticket_id FK
+    text source_kind
+    text availability
+    jsonb observation
+  }
+  ticket_history {
+    uuid id PK
+    uuid ticket_id FK
+    text event_type
+    jsonb event_data
+  }
+  audit_events {
+    uuid id PK
+    uuid ticket_id FK
+    text action
+    text outcome
+  }
+  field_work_handoffs {
+    uuid id PK
+    uuid ticket_id FK
+    text delivery_state
+    text work_state
+    text chat_id_nullable
+    text message_id_nullable
+  }
+  field_external_messages {
+    uuid id PK
+    uuid handoff_id FK
+    text chat_id
+    text message_id
+    text bot_identity
+    text update_id
+    text body
+  }
+```
+
+`field_work_handoffs` и `field_external_messages` вводятся в Phase 3. Автоматические источники в `diagnostic_snapshots` вводятся в Phase 4; Phase 1 может сохранять ручное наблюдение инженера.
+
+## Таблицы Phase 1
+
+| Таблица | Обязательные поля и правила |
+| --- | --- |
+| `app_users` | `id`, уникальный `login`, `role ∈ {CALL_CENTER_OPERATOR, OSS_ENGINEER}`, `active`, хэш учётного секрета. Оба инженера OSS имеют одну роль; аккаунты заранее создаются без продуктовой роли администратора. |
+| `auth_sessions` | `id`, `user_id`, срок действия и время отзыва; серверная сессия хранится в PostgreSQL. В cookie не помещаются права или персональные данные. |
+| `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, ФИО и контакт если доступны, данные договора и услуг в версионированной структуре. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
+| `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable устройство, порт, VLAN, ONU ID. ONU не требуется; для Ethernet не создаётся искусственный ONU ID. Несколько подключений сохраняются раздельно. |
+| `tickets` | `id`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `created_by`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранное подключение должно принадлежать указанному snapshot; при неоднозначности выбор явно подтверждается. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
+| `ticket_comments` | `id`, `ticket_id`, `author_id`, `body`, `created_at`. Записи не подменяют решение или автоматические данные. |
+| `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
+| `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, nullable `recorded_by`. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |
+| `ticket_history` | `id`, `ticket_id`, `event_type`, nullable `actor_id`, `event_data`, `occurred_at`. Append-only история доменных фактов: создание, начало работы, комментарий, решение, закрытие. |
+| `audit_events` | `id`, nullable `ticket_id`, nullable `actor_id`, `action`, `outcome`, `occurred_at`, безопасные метаданные. Append-only след доступа и изменений; полные ФИО, телефон, адрес, секреты и текст жалобы в технический аудит не копируются. |
+
+Содержимое обращения, комментария, решения и snapshot защищено правами доступа и политикой хранения. Поиск Subscriber 360 создаёт snapshot в PostgreSQL; снимки без заявки удаляются по настраиваемой политике хранения, а связанные с заявкой сохраняются согласно её сроку. Конкретный срок для рабочего окружения утверждается до production запуска, но не блокирует mock-based реализацию.
+
+## Таблицы Phase 3 и независимость состояний
+
+- `field_work_handoffs`: `id`, `ticket_id`, `created_by`, проверенный payload, `delivery_state`, `work_state`, nullable `chat_id`/`message_id`, timestamps и поля ручного fallback. `delivery_state` и `work_state` — разные колонки; ни одна не заменяет `tickets.status`.
+- `field_external_messages`: `id`, `handoff_id`, `chat_id`, `message_id`, `update_id`, отправитель при разрешённом хранении, текст, время. Уникальность `(chat_id, message_id)` и `(bot_identity, update_id)` защищает от повторного импорта. Данные хранятся в PostgreSQL.
+- Закрытие заявки требует отдельного решения инженера в `ticket_decisions` и обновления `tickets.status=CLOSED`. Получение сообщения или изменение `work_state` не вызывает закрытия.
+
+## Транзакционные инварианты
+
+1. Создание заявки одновременно записывает `tickets`, `ticket_history` и `audit_events` либо не записывает ничего.
+2. Комментарий, ручное наблюдение, решение и закрытие сопровождаются историей и аудитом в той же транзакции.
+3. `closed_by` — активный инженер OSS; `closed_at` и ссылка на решение обязательны для `CLOSED`. Закрытая заявка в Phase 1 не редактируется без отдельного будущего правила переоткрытия.
+4. Данные billing snapshot, мониторинга и ручной проверки различаются по источнику. `UNKNOWN` не хранится как доказательство `DOWN`.
+5. Значения `chat_id` и `message_id` появляются только после подтверждённой отправки Bot API; ручной fallback не подделывает их.
