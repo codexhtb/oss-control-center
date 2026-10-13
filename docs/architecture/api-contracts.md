@@ -37,14 +37,15 @@ Phase 1.2A использует локальные учётные записи �
 lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 ```
 
-`Subscriber360` содержит `account_no`, доступные ФИО и контакт, договоры, услуги, список подключений и метаданные `source`/`fetched_at`. Подключение содержит тип `ETHERNET | EPON | GPON | UNKNOWN` и только доступные поля устройства, порта, VLAN, ONU ID. Phase 1 поставляет детерминированный mock; Phase 2 заменяет адаптер на read-only NetUP без изменения контрактов заявок. Финансовые поля не участвуют в вычислении технического состояния.
+`Subscriber360` содержит `subscriber_id`, `billing_account`, доступные ФИО или название организации и контакт, договоры, услуги, подключения и метаданные `source`/`fetched_at`. Подключение содержит тип `ETHERNET | EPON | GPON | UNKNOWN` и только доступные адрес, устройство, порт, VLAN, IP-группу, ONU ID. У каждого существенного поля есть `field_meta` с источником, временем наблюдения и качеством `KNOWN | UNKNOWN | STALE | CONFLICT | UNAVAILABLE`. Phase 1 поставляет только синтетический mock; Phase 2 заменяет адаптер на read-only NetUP без изменения Ticket Engine. Финансовые поля не участвуют в вычислении технического состояния.
 
 ## HTTP операции Phase 1
 
 | Метод и путь | Роль | Запрос | Результат и эффект |
 | --- | --- | --- | --- |
-| `POST /subscriber-lookups` | Оператор, инженер | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет snapshot с `source=MOCK`, временем, автором поиска, сроком действия и внутренними ID подключений; аудит чтения |
-| `POST /tickets` | Оператор | `{lookup_id, connection_snapshot_id?, description, client_request_id}` | `201` заявка `OPEN`; snapshot принадлежит lookup; выбор одного из нескольких подключений обязателен; ticket + история + аудит в одной транзакции |
+| `POST /subscriber-lookups` | Оператор, инженер + CSRF | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет immutable snapshot с `source=MOCK`, временем, автором поиска, сроком действия 15 минут и внутренними ID подключений; аудит чтения. Не найдено — `404`, источник недоступен — `503` без успешной карточки |
+| `GET /subscriber-lookups/{lookup_id}` | Автор поиска, оператор или инженер | — | Сохранённая карточка без повторного обращения к провайдеру; истечение срока отражается `is_expired` |
+| `POST /tickets` | Оператор | `{lookup_id, selected_service_id?, connection_snapshot_id?, description, client_request_id}` | `201` заявка `OPEN`; `lookup_id` подтверждает показанный snapshot; при нескольких услугах или подключениях выбор обязателен; ticket + история + аудит в одной транзакции |
 | `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `account_no`; `page`, `size` | Страница сводок; `total`, `page`, `size` |
 | `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка и связанный billing snapshot; комментарии, решения и ручные наблюдения читаются отдельными пагинированными путями |
 | `POST /tickets/{ticket_id}/start` | Инженер | `If-Match` с версией заявки | `OPEN → IN_PROGRESS`, история и аудит; повтор или конфликт версии — `409` |
@@ -60,7 +61,7 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 
 Пути в таблице относительны к `/api/v1`. `lookup_id` равен ID сохранённого subscriber snapshot; создать заявку можно только из ещё действующего snapshot, созданного этим оператором. `connection_snapshot_id` должен принадлежать ему. Закрытие `OPEN` сначала требует явного начала работы; это проверяется сервером. В Phase 1 не предусмотрены API для ServiceDesk Plus, Telegram, NetUP и мониторинга.
 
-Phase 1.2B реализует Ticket Engine на уже сохранённых снимках `subscriber_snapshots`. HTTP `POST /subscriber-lookups` с mock BillingProvider относится к следующему шагу Phase 1. До него заявка создаётся через API только при наличии сохранённого снимка, принадлежащего оператору. Тесты используют синтетические снимки во временных БД. Успешный `GET /tickets/{id}` и изменяющие ответы выставляют `ETag` с `tickets.version`; отсутствующий `If-Match` для операций с версией даёт `428`, устаревший — `409`. Повтор создания с тем же содержимым даёт `200` вместо второго `201`.
+Phase 1.3 вводит `POST /subscriber-lookups` с mock BillingProvider и `GET /subscriber-lookups/{lookup_id}`. Заявка создаётся только из действующего сохранённого снимка, принадлежащего оператору; клиент не отправляет ФИО, телефон, адрес или сетевые идентификаторы в `POST /tickets`. Один доступный сервис/подключение выбирается автоматически, несколько требуют явного ID. Успешный `GET /tickets/{id}` и изменяющие ответы выставляют `ETag` с `tickets.version`; отсутствующий `If-Match` для операций с версией даёт `428`, устаревший — `409`. Повтор создания с тем же содержимым даёт `200` вместо второго `201`.
 
 ## Ответ поиска абонента
 
@@ -69,23 +70,37 @@ Phase 1.2B реализует Ticket Engine на уже сохранённых �
   "lookup_id": "<uuid>",
   "source": "MOCK",
   "fetched_at": "<UTC timestamp>",
-  "subscriber": { "account_no": "<string>", "full_name": "<string or null>", "phone": "<string or null>" },
-  "contracts": [],
-  "services": [],
+  "expires_at": "<UTC timestamp>",
+  "is_expired": false,
+  "subscriber": {
+    "subscriber_id": "<synthetic ID or null>",
+    "billing_account": "<string>",
+    "full_name": "<string or null>",
+    "organization_name": null,
+    "phone": null,
+    "email": null,
+    "field_meta": {"billing_account": {"source": "MOCK", "observed_at": "<UTC timestamp>", "quality": "KNOWN"}}
+  },
+  "contracts": [{"contract_id": "<synthetic ID>", "label": null, "field_meta": {}}],
+  "services": [{"service_id": "<synthetic ID>", "name": null, "field_meta": {}}],
   "connections": [
     {
       "connection_snapshot_id": "<uuid>",
       "access_type": "ETHERNET",
+      "address": null,
       "device": null,
       "port": null,
       "vlan": null,
-      "onu_id": null
+      "ip_group": null,
+      "onu_id": null,
+      "field_meta": {"onu_id": {"source": "MOCK", "observed_at": "<UTC timestamp>", "quality": "UNKNOWN"}}
     }
-  ]
+  ],
+  "technical_state": "UNKNOWN"
 }
 ```
 
-Это форма контракта, не пример реального абонента и не схема NetUP. Если у найденного абонента несколько подключений, `POST /tickets` требует явного `connection_snapshot_id`. При отсутствии подключений он может быть `null`, что отображается как неизвестная привязка. Клиент не отправляет ФИО/телефон повторно: сервер использует сохранённый snapshot.
+Это форма контракта, не пример реального абонента и не схема NetUP. В реальном ответе `field_meta` присутствует для каждого возвращаемого существенного поля, включая поля договора, услуги и подключения. При нескольких услугах или подключениях `POST /tickets` требует явного выбора; если подключения нет, привязка остаётся неизвестной. `UNKNOWN` и `CONFLICT` не заменяются угаданными значениями; `STALE` сохраняет наблюдаемое значение вместе с предупреждением. `UNAVAILABLE` для всего источника означает ошибку `503`, без создания snapshot. Техническое состояние остаётся `UNKNOWN` до независимой диагностики.
 
 ## Повторы и согласованность
 

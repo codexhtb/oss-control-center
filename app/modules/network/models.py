@@ -1,8 +1,10 @@
-"""Provider-neutral connection data; no network lookup is performed."""
+"""Provider-neutral access connection, with nullable observed identifiers."""
 
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.modules.billing.quality import FieldOrigin
 
 
 class AccessType(StrEnum):
@@ -13,8 +15,13 @@ class AccessType(StrEnum):
 
 
 class Connection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     access_type: AccessType
-    device: str | None = None
-    port: str | None = None
-    vlan: str | None = None
-    onu_id: str | None = None
+    address: str | None = Field(default=None, max_length=300)
+    device: str | None = Field(default=None, max_length=200)
+    port: str | None = Field(default=None, max_length=100)
+    vlan: str | None = Field(default=None, max_length=100)
+    ip_group: str | None = Field(default=None, max_length=100)
+    onu_id: str | None = Field(default=None, max_length=100)
+    field_meta: dict[str, FieldOrigin]

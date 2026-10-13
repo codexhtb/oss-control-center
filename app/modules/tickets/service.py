@@ -105,8 +105,18 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
     if snapshot.expires_at <= datetime.now(UTC):
         raise ApiError(409, "lookup_expired", "Subscriber lookup expired")
-    if snapshot.source != "MOCK":
-        raise ApiError(409, "lookup_source_unavailable", "Only mock lookups are supported")
+    service_ids = [item.get("service_id") or item.get("id") for item in snapshot.services]
+    if any(not isinstance(item, str) or not item for item in service_ids):
+        raise ApiError(409, "invalid_snapshot", "Snapshot services are invalid")
+    if len(set(service_ids)) != len(service_ids):
+        raise ApiError(409, "invalid_snapshot", "Snapshot services are ambiguous")
+    selected_service = payload.selected_service_id
+    if len(service_ids) > 1 and selected_service is None:
+        raise ApiError(422, "service_required", "Select a service")
+    if selected_service is not None and selected_service not in service_ids:
+        raise ApiError(422, "invalid_service", "Service does not belong to lookup")
+    if len(service_ids) == 1 and selected_service is None:
+        selected_service = service_ids[0]
     connections = db.scalars(
         select(ConnectionSnapshot).where(ConnectionSnapshot.subscriber_snapshot_id == snapshot.id)
     ).all()
@@ -121,6 +131,7 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         account_no=snapshot.account_no,
         subscriber_snapshot_id=snapshot.id,
         connection_snapshot_id=selected,
+        selected_service_id=selected_service,
         description=payload.description,
         status=TicketStatus.OPEN,
         priority=payload.priority,
@@ -157,9 +168,16 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         ).all()
         if connections == [ticket.connection_snapshot_id]:
             selected = ticket.connection_snapshot_id
+    selected_service = payload.selected_service_id
+    if selected_service is None and ticket.selected_service_id is not None:
+        snapshot = db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
+        service_ids = [item.get("service_id") or item.get("id") for item in snapshot.services]
+        if service_ids == [ticket.selected_service_id]:
+            selected_service = ticket.selected_service_id
     if (
         ticket.subscriber_snapshot_id != payload.lookup_id
         or ticket.connection_snapshot_id != selected
+        or ticket.selected_service_id != selected_service
         or ticket.description != payload.description
         or ticket.priority != payload.priority
     ):
@@ -176,6 +194,10 @@ def ticket_detail(db: Session, ticket_id: UUID) -> TicketDetail:
     subscriber = {
         "id": snapshot.id,
         "account_no": snapshot.account_no,
+        "subscriber_id": snapshot.subscriber_id,
+        "organization_name": snapshot.organization_name,
+        "email": snapshot.email,
+        "field_meta": snapshot.field_meta,
         "source": snapshot.source,
         "fetched_at": snapshot.fetched_at,
         "full_name": snapshot.full_name,

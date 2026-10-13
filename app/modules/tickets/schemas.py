@@ -15,6 +15,7 @@ class StrictModel(BaseModel):
 class CreateTicket(StrictModel):
     lookup_id: UUID
     connection_snapshot_id: UUID | None = None
+    selected_service_id: str | None = Field(default=None, min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=10000)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
@@ -62,12 +63,19 @@ class ConnectionView(BaseModel):
     port: str | None
     vlan: str | None
     onu_id: str | None
+    address: str | None = None
+    ip_group: str | None = None
+    field_meta: dict = Field(default_factory=dict)
 
 
 class SubscriberView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     account_no: str
+    subscriber_id: str | None = None
+    organization_name: str | None = None
+    email: str | None = None
+    field_meta: dict = Field(default_factory=dict)
     source: str
     fetched_at: datetime
     full_name: str | None
@@ -84,6 +92,7 @@ class TicketView(BaseModel):
     account_no: str
     subscriber_snapshot_id: UUID
     connection_snapshot_id: UUID | None
+    selected_service_id: str | None
     description: str
     status: TicketStatus
     priority: TicketPriority

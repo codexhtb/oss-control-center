@@ -1,0 +1,471 @@
+"""Synthetic BillingProvider contract and PostgreSQL Subscriber 360 flow."""
+
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy.engine import URL, Engine
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.api.v1.billing import get_billing_provider
+from app.core.config import get_settings
+from app.db.session import get_session
+from app.main import create_app
+from app.modules.billing.mock import MockBillingProvider
+from app.modules.billing.provider import BillingUnavailable
+from app.modules.billing.quality import DataQuality
+from app.modules.identity.crypto import hash_password
+from app.modules.identity.models import User
+from app.modules.identity.roles import Role
+from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot, Ticket, TicketAudit
+from app.modules.tickets.schemas import CreateTicket
+from app.modules.tickets.service import create_ticket, ticket_detail
+
+ORIGIN = "https://oss.example.test"
+PASSWORD = "Test-password-with-sufficient-length-42!"
+
+
+@pytest.fixture
+def billing_engine(isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "head")
+    engine = create_engine(isolated_postgres_url, connect_args={"connect_timeout": 5})
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def billing_client(billing_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("AUTH_PUBLIC_ORIGIN", ORIGIN)
+    monkeypatch.setenv("AUTH_ALLOW_HTTP_LOOPBACK", "false")
+    monkeypatch.setenv("AUTH_HASH_KEY", "test-only-key-with-at-least-32-bytes")
+    get_settings.cache_clear()
+    app = create_app()
+    factory = sessionmaker(billing_engine, autoflush=False, expire_on_commit=False)
+
+    def test_session() -> Iterator[Session]:
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_session] = test_session
+    try:
+        with TestClient(app, base_url=ORIGIN, headers={"Origin": ORIGIN}) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+
+def seed_user(engine: Engine, name: str, role: Role) -> User:
+    with Session(engine, expire_on_commit=False) as db:
+        user = User(
+            login=name,
+            display_name=name.title(),
+            role=role,
+            password_hash=hash_password(PASSWORD),
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        return user
+
+
+def login(client: TestClient, name: str) -> None:
+    response = client.post("/api/v1/auth/login", json={"login": name, "password": PASSWORD})
+    assert response.status_code == 200, response.text
+
+
+def csrf(client: TestClient) -> dict[str, str]:
+    return {"X-CSRF-Token": client.cookies["oss_csrf"]}
+
+
+def lookup(client: TestClient, account: str):
+    return client.post(
+        "/api/v1/subscriber-lookups", headers=csrf(client), json={"account_no": account}
+    )
+
+
+def ticket_payload(card: dict, *, request_id: UUID | None = None) -> dict:
+    return {
+        "lookup_id": card["lookup_id"],
+        "connection_snapshot_id": card["connections"][0]["connection_snapshot_id"],
+        "selected_service_id": card["services"][0]["service_id"],
+        "description": "Synthetic access issue",
+        "client_request_id": str(request_id or uuid4()),
+    }
+
+
+@pytest.mark.parametrize(
+    ("account", "access_type"),
+    [
+        ("MOCK-ETH-001", "ETHERNET"),
+        ("MOCK-EPON-001", "EPON"),
+        ("MOCK-GPON-001", "GPON"),
+    ],
+)
+def test_mock_access_types_and_field_origins(account: str, access_type: str) -> None:
+    data = MockBillingProvider().lookup_by_account(account)
+    assert data is not None and data.source == "MOCK"
+    assert data.billing_account == account
+    assert data.connections[0].access_type == access_type
+    assert data.field_meta["billing_account"].source == "MOCK"
+    assert data.field_meta["subscriber_id"].observed_at.tzinfo is not None
+    assert data.connections[0].field_meta["access_type"].source == "MOCK"
+    assert data.connections[0].field_meta["device"].observed_at <= data.fetched_at
+    if access_type == "ETHERNET":
+        assert data.connections[0].onu_id is None
+    else:
+        assert data.connections[0].onu_id is not None
+    assert len(data.services) == (2 if access_type == "GPON" else 1)
+
+
+def test_mock_missing_stale_conflict_and_unavailable() -> None:
+    provider = MockBillingProvider()
+    partial = provider.lookup_by_account("MOCK-PARTIAL-001")
+    assert partial.connections[0].port is None
+    assert partial.connections[0].vlan is None
+    assert partial.connections[0].onu_id is None
+    assert partial.connections[0].field_meta["port"].quality == DataQuality.UNKNOWN
+    stale = provider.lookup_by_account("MOCK-STALE-001")
+    assert stale.connections[0].field_meta["device"].quality == DataQuality.STALE
+    assert stale.connections[0].field_meta["device"].observed_at < stale.fetched_at
+    conflict = provider.lookup_by_account("MOCK-CONFLICT-001")
+    assert conflict.connections[0].vlan is None
+    assert conflict.connections[0].field_meta["vlan"].quality == DataQuality.CONFLICT
+    assert provider.lookup_by_account("MOCK-NOT-FOUND-001") is None
+    with pytest.raises(BillingUnavailable):
+        provider.lookup_by_account("MOCK-UNAVAILABLE-001")
+    assert provider.lookup_by_account("MOCK-NO-CONNECTION-001").connections == []
+
+
+def test_lookup_persists_source_and_immutable_snapshot(
+    billing_engine: Engine, billing_client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    seed_user(billing_engine, "operator", Role.OPERATOR)
+    login(billing_client, "operator")
+    response = lookup(billing_client, "MOCK-ETH-001")
+    assert response.status_code == 200, response.text
+    card = response.json()
+    assert card["source"] == "MOCK" and card["technical_state"] == "UNKNOWN"
+    assert card["subscriber"]["subscriber_id"] == "MOCK-SUBSCRIBER-ETH"
+    assert card["subscriber"]["billing_account"] == "MOCK-ETH-001"
+    assert card["subscriber"]["field_meta"]["full_name"]["source"] == "MOCK"
+    assert card["connections"][0]["onu_id"] is None
+    assert card["connections"][0]["field_meta"]["onu_id"]["quality"] == "UNKNOWN"
+    assert card["contracts"][0]["field_meta"]["contract_id"]["source"] == "MOCK"
+    assert card["services"][0]["field_meta"]["service_id"]["observed_at"]
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").json() == card
+    with Session(billing_engine) as db:
+        snapshot = db.get(SubscriberSnapshot, UUID(card["lookup_id"]))
+        assert snapshot.field_meta["billing_account"]["source"] == "MOCK"
+        assert snapshot.fetched_at == datetime.fromisoformat(card["fetched_at"])
+        assert db.scalar(select(func.count()).select_from(ConnectionSnapshot)) == 1
+        assert db.scalar(select(func.count()).select_from(TicketAudit)) == 1
+    with pytest.raises(DBAPIError, match="immutable Service Desk record"):
+        with billing_engine.begin() as connection:
+            connection.execute(
+                text("UPDATE subscriber_snapshots SET field_meta = '{}'::jsonb WHERE id = :id"),
+                {"id": UUID(card["lookup_id"])},
+            )
+    assert "Тестовый абонент" not in caplog.text
+    assert "+0-000-000-0001" not in caplog.text
+
+
+def test_lookup_errors_rbac_and_size_limit(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    seed_user(billing_engine, "operator", Role.OPERATOR)
+    seed_user(billing_engine, "engineer", Role.ENGINEER)
+    seed_user(billing_engine, "admin", Role.ADMIN)
+    assert (
+        billing_client.post(
+            "/api/v1/subscriber-lookups", json={"account_no": "MOCK-ETH-001"}
+        ).status_code
+        == 401
+    )
+    login(billing_client, "operator")
+    assert (
+        billing_client.post(
+            "/api/v1/subscriber-lookups", json={"account_no": "MOCK-ETH-001"}
+        ).status_code
+        == 403
+    )
+    assert lookup(billing_client, "MOCK-NOT-FOUND-001").status_code == 404
+    unavailable = lookup(billing_client, "MOCK-UNAVAILABLE-001")
+    assert unavailable.status_code == 503
+    assert unavailable.json()["code"] == "billing_unavailable"
+    assert lookup(billing_client, "MOCK-ETH-001" * 20).status_code == 422
+    assert (
+        billing_client.post(
+            "/api/v1/subscriber-lookups",
+            headers=csrf(billing_client),
+            json={"account_no": "MOCK-ETH-001", "extra": "x" * 3000},
+        ).status_code
+        == 413
+    )
+    card = lookup(billing_client, "MOCK-ETH-001").json()
+    login(billing_client, "engineer")
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").status_code == 404
+    assert lookup(billing_client, "MOCK-EPON-001").status_code == 200
+    login(billing_client, "admin")
+    assert lookup(billing_client, "MOCK-ETH-001").status_code == 403
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").status_code == 403
+    with Session(billing_engine) as db:
+        assert db.scalar(select(func.count()).select_from(SubscriberSnapshot)) == 2
+
+
+def test_multiple_choices_snapshot_confirmation_and_ticket_flow(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    operator = seed_user(billing_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(billing_engine, "engineer", Role.ENGINEER)
+    login(billing_client, "operator")
+    card = lookup(billing_client, "MOCK-GPON-001").json()
+    assert len(card["connections"]) == 2 and len(card["services"]) == 2
+    assert card["subscriber"]["organization_name"] == "MOCK Организация GPON"
+    payload = ticket_payload(card)
+    without_service = {**payload, "selected_service_id": None}
+    without_connection = {**payload, "connection_snapshot_id": None}
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=without_service
+        ).status_code
+        == 422
+    )
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=without_connection
+        ).status_code
+        == 422
+    )
+    spoof = {**payload, "full_name": "Forged Name"}
+    assert (
+        billing_client.post("/api/v1/tickets", headers=csrf(billing_client), json=spoof).status_code
+        == 422
+    )
+    wrong_service = {**payload, "selected_service_id": "MOCK-SERVICE-OTHER"}
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=wrong_service
+        ).status_code
+        == 422
+    )
+    request_id = uuid4()
+    payload["client_request_id"] = str(request_id)
+    created = billing_client.post("/api/v1/tickets", headers=csrf(billing_client), json=payload)
+    assert created.status_code == 201, created.text
+    ticket_id = created.json()["id"]
+    assert created.json()["selected_service_id"] == payload["selected_service_id"]
+    replay = billing_client.post("/api/v1/tickets", headers=csrf(billing_client), json=payload)
+    assert replay.status_code == 200 and replay.json()["id"] == ticket_id
+    detail = billing_client.get(f"/api/v1/tickets/{ticket_id}").json()
+    assert detail["subscriber"]["organization_name"] == "MOCK Организация GPON"
+    assert len(detail["subscriber"]["services"]) == 2
+    assert detail["technical_state"] == "UNKNOWN"
+    login(billing_client, "engineer")
+    assert (
+        billing_client.post(
+            f"/api/v1/tickets/{ticket_id}/assignment",
+            headers={**csrf(billing_client), "If-Match": '"1"'},
+            json={"engineer_id": str(engineer.id)},
+        ).status_code
+        == 200
+    )
+    assert (
+        billing_client.post(
+            f"/api/v1/tickets/{ticket_id}/start",
+            headers={**csrf(billing_client), "If-Match": '"2"'},
+        ).status_code
+        == 200
+    )
+    decision = billing_client.post(
+        f"/api/v1/tickets/{ticket_id}/decisions",
+        headers=csrf(billing_client),
+        json={"decision_text": "Synthetic decision", "performed_actions": "Synthetic check"},
+    )
+    assert decision.status_code == 201
+    closed = billing_client.post(
+        f"/api/v1/tickets/{ticket_id}/close",
+        headers={**csrf(billing_client), "If-Match": '"4"'},
+        json={"decision_id": decision.json()["id"]},
+    )
+    assert closed.status_code == 200 and closed.json()["status"] == "CLOSED"
+    with Session(billing_engine) as db:
+        ticket = db.get(Ticket, UUID(ticket_id))
+        assert ticket.created_by == operator.id
+        assert ticket.selected_service_id == payload["selected_service_id"]
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(TicketAudit.ticket_id == ticket.id)
+            )
+            == 5
+        )
+
+
+def test_expired_lookup_cannot_create_ticket(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    seed_user(billing_engine, "operator", Role.OPERATOR)
+
+    class StaleProvider:
+        def lookup_by_account(self, account_no: str):
+            data = MockBillingProvider().lookup_by_account(account_no)
+            return data.model_copy(update={"fetched_at": datetime.now(UTC) - timedelta(hours=1)})
+
+    billing_client.app.dependency_overrides[get_billing_provider] = lambda: StaleProvider()
+    login(billing_client, "operator")
+    card = lookup(billing_client, "MOCK-ETH-001").json()
+    assert card["is_expired"] is True
+    response = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+    )
+    assert response.status_code == 409 and response.json()["code"] == "lookup_expired"
+
+
+def test_no_connection_remains_unknown_and_is_not_invented(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    seed_user(billing_engine, "operator", Role.OPERATOR)
+    login(billing_client, "operator")
+    card = lookup(billing_client, "MOCK-NO-CONNECTION-001").json()
+    assert card["connections"] == [] and card["technical_state"] == "UNKNOWN"
+    created = billing_client.post(
+        "/api/v1/tickets",
+        headers=csrf(billing_client),
+        json={
+            "lookup_id": card["lookup_id"],
+            "selected_service_id": card["services"][0]["service_id"],
+            "description": "No known connection",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["connection_snapshot_id"] is None
+
+
+def test_concurrent_create_uses_one_ticket(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    operator = seed_user(billing_engine, "operator", Role.OPERATOR)
+    login(billing_client, "operator")
+    card = lookup(billing_client, "MOCK-ETH-001").json()
+    payload = CreateTicket.model_validate(ticket_payload(card))
+
+    def attempt():
+        with Session(billing_engine) as db:
+            ticket, created = create_ticket(db, operator.id, payload)
+            return ticket.id, created
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: attempt(), range(2)))
+    assert outcomes[0][0] == outcomes[1][0]
+    assert sorted(created for _, created in outcomes) == [False, True]
+    with Session(billing_engine) as db:
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 1
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(TicketAudit.ticket_id.is_not(None))
+            )
+            == 1
+        )
+
+
+def test_upgrade_existing_ticket_from_0003(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "0003_ticket_engine")
+    engine = create_engine(isolated_postgres_url)
+    user_id, snapshot_id, ticket_id = uuid4(), uuid4(), uuid4()
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO app_users "
+                    "(id, login, display_name, role, password_hash, is_active) "
+                    "VALUES (:id, 'legacy', 'Legacy', 'operator', :hash, true)"
+                ),
+                {"id": user_id, "hash": hash_password(PASSWORD)},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO subscriber_snapshots "
+                    "(id, account_no, source, fetched_at, requested_by, "
+                    "expires_at, contracts, services) "
+                    "VALUES (:id, 'MOCK-LEGACY', 'MOCK', now(), :user_id, "
+                    "now() + interval '1 hour', '[]'::jsonb, '[]'::jsonb)"
+                ),
+                {"id": snapshot_id, "user_id": user_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO tickets "
+                    "(id, account_no, subscriber_snapshot_id, description, status, priority, "
+                    "created_by, client_request_id, version) "
+                    "VALUES (:id, 'MOCK-LEGACY', :snapshot_id, 'Old ticket', 'OPEN', 'NORMAL', "
+                    ":user_id, :request_id, 1)"
+                ),
+                {
+                    "id": ticket_id,
+                    "snapshot_id": snapshot_id,
+                    "user_id": user_id,
+                    "request_id": uuid4(),
+                },
+            )
+        command.upgrade(config, "0004_subscriber_360")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                == "0004_subscriber_360"
+            )
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM tickets WHERE id = :id"), {"id": ticket_id}
+                ).scalar_one()
+                == 1
+            )
+            assert {"selected_service_id"} <= {
+                column["name"] for column in inspect(connection).get_columns("tickets")
+            }
+            assert (
+                connection.execute(
+                    text("SELECT selected_service_id FROM tickets WHERE id = :id"),
+                    {"id": ticket_id},
+                ).scalar_one()
+                is None
+            )
+            assert (
+                connection.execute(
+                    text("SELECT field_meta FROM subscriber_snapshots WHERE id = :id"),
+                    {"id": snapshot_id},
+                ).scalar_one()
+                == {}
+            )
+        with Session(engine) as db:
+            detail = ticket_detail(db, ticket_id)
+            assert detail.account_no == "MOCK-LEGACY"
+            assert detail.selected_service_id is None
+            assert detail.subscriber.field_meta == {}
+    finally:
+        engine.dispose()

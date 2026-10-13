@@ -4,7 +4,9 @@ PostgreSQL — единственный source of truth для обращени�
 
 **Граница Phase 1.2A:** ревизия `0001_foundation` создаёт только `alembic_version`; `0002_identity_rbac` вводит четыре таблицы идентификации. Таблицы заявок и Subscriber 360 остаются для следующих шагов Phase 1.
 
-**Phase 1.2B:** ревизия `0003_ticket_engine` вводит восемь таблиц Service Desk из ERD: `subscriber_snapshots`, `connection_snapshots`, `tickets`, `ticket_comments`, `ticket_decisions`, `ticket_history`, `audit_events`, `diagnostic_snapshots`. Снимки и дочерние факты защищены от UPDATE/DELETE триггерами; заявка допускает обновления, но не удаление. HTTP создание снимка через mock BillingProvider будет добавлено следующим шагом Phase 1.
+**Phase 1.2B:** ревизия `0003_ticket_engine` ввела восемь таблиц Service Desk из ERD: `subscriber_snapshots`, `connection_snapshots`, `tickets`, `ticket_comments`, `ticket_decisions`, `ticket_history`, `audit_events`, `diagnostic_snapshots`. Снимки и дочерние факты защищены от UPDATE/DELETE триггерами; заявка допускает обновления, но не удаление. HTTP создание снимка через mock BillingProvider добавлено в Phase 1.3.
+
+**Phase 1.3:** ревизия `0004_subscriber_360` расширяет существующие таблицы без изменения или удаления прежних данных. Новые nullable поля сохраняют совместимость старых заявок; `field_meta` для прежних снимков получает `{}`. Новые снимки создаются только через `POST /subscriber-lookups` из нормализованного mock-ответа, а не из произвольного JSON клиента.
 
 ## ERD
 
@@ -66,12 +68,16 @@ erDiagram
   subscriber_snapshots {
     uuid id PK
     text account_no
+    text subscriber_id_nullable
     text source
     timestamp fetched_at
     uuid requested_by FK
     timestamp expires_at
     text full_name_nullable
+    text organization_name_nullable
     text phone_nullable
+    text email_nullable
+    jsonb field_meta
     jsonb contracts
     jsonb services
   }
@@ -82,13 +88,17 @@ erDiagram
     text device_nullable
     text port_nullable
     text vlan_nullable
+    text address_nullable
+    text ip_group_nullable
     text onu_id_nullable
+    jsonb field_meta
   }
   tickets {
     uuid id PK
     bigint number UK
     uuid subscriber_snapshot_id FK
     uuid connection_snapshot_id FK
+    text selected_service_id_nullable
     text account_no
     text status
     text priority
@@ -165,9 +175,9 @@ erDiagram
 | `auth_sessions` — 1.2A | UUID `id`, `user_id`, SHA-256 хэши случайного токена сессии и CSRF-токена, `created_at`, `expires_at`, nullable `revoked_at`. В cookie не помещаются права или персональные данные. |
 | `auth_login_buckets` — 1.2A | Составной ключ `(kind, key_digest)` для нормализованного логина и прямого адреса источника, счётчик отказов, окно и блокировка. Значения HMAC с секретом окружения, без исходного логина/IP. |
 | `identity_audit_events` — 1.2A | Append-only UUID `id`, nullable актор и цель, действие, результат, HMAC логина/источника при входе, время. Без паролей, токенов и полных персональных данных. |
-| `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, ФИО и контакт если доступны, данные договора и услуг в версионированной структуре. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
-| `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable устройство, порт, VLAN, ONU ID. ONU не требуется; для Ethernet не создаётся искусственный ONU ID. Несколько подключений сохраняются раздельно. |
-| `tickets` | `id`, уникальный `number`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранное подключение должно принадлежать указанному snapshot; при неоднозначности выбор явно подтверждается. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
+| `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, nullable `subscriber_id`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, nullable ФИО, название организации, телефон, email, договоры и услуги в JSONB, `field_meta` с источником, временем и качеством существенных полей. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
+| `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable адрес, устройство, порт, VLAN, IP-группа, ONU ID и `field_meta`. ONU не требуется и не создаётся для Ethernet или неизвестного типа. Несколько подключений сохраняются раздельно. |
+| `tickets` | `id`, уникальный `number`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id` и `selected_service_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранные услуга и подключение проверяются по неизменяемому snapshot; при неоднозначности выбор явный. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
 | `ticket_comments` | `id`, `ticket_id`, `author_id`, `body`, `created_at`. Записи не подменяют решение или автоматические данные. |
 | `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `performed_actions`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
 | `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, обязательный `recorded_by` для ручной проверки. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |

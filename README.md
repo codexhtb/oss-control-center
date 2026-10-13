@@ -1,6 +1,6 @@
-# OSS Control Center — Backend Foundation, Identity и Ticket Engine (Phase 1.2B)
+# OSS Control Center — Service Desk и Subscriber 360 (Phase 1.3)
 
-FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC и Ticket Engine. Заявки, комментарии, решения, история, аудит и ручные наблюдения хранятся в PostgreSQL. HTTP поиск Subscriber 360 через mock BillingProvider будет добавлен следующим шагом Phase 1; до этого создание заявки требует уже сохранённого снимка абонента. Реальные NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются.
+FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC, Ticket Engine и Subscriber 360 через синтетический mock BillingProvider. Заявки, комментарии, решения, история, аудит, снимки биллинга и ручные наблюдения хранятся в PostgreSQL. Реальные NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются.
 
 Приложение использует Python 3.12 внутри контейнера. На Ubuntu 26.04 не требуется устанавливать Python или PostgreSQL для приложения в ОС. Перед запуском нужен доступ текущего пользователя к Docker socket; не обходите отсутствие доступа через изменение групп или прав сокета.
 
@@ -48,11 +48,13 @@ docker compose run --rm api alembic upgrade head
 docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version"'
 ```
 
-Ревизия `0001_foundation` создаёт только служебную таблицу Alembic. Ревизия `0002_identity_rbac` добавляет пользователей, серверные сессии, лимиты входа и аудит identity. Ревизия `0003_ticket_engine` добавляет снимки абонентов/подключений, заявки, комментарии, решения, историю, аудит и ручные диагностические снимки.
+Ревизия `0001_foundation` создаёт только служебную таблицу Alembic. Ревизия `0002_identity_rbac` добавляет пользователей, серверные сессии, лимиты входа и аудит identity. Ревизия `0003_ticket_engine` добавляет снимки абонентов/подключений, заявки, комментарии, решения, историю, аудит и ручные диагностические снимки. Ревизия `0004_subscriber_360` расширяет существующие снимки метаданными происхождения полей и добавляет выбор услуги в заявке, сохраняя прежние записи.
 
 ## Ticket Engine
 
-Оператор создаёт заявку из действующего сохранённого snapshot; инженеры назначают исполнителя, начинают работу, фиксируют причину необходимости выездных работ, ручную диагностику и решение, затем закрывают заявку. Статусы `OPEN → IN_PROGRESS → CLOSED`. Передача монтажникам в этой фазе фиксируется событием, без отправки в Telegram и без автоматического закрытия. Запросы назначения, начала, запроса выездных работ и закрытия требуют `If-Match: "<version>"`; изменяющие запросы также требуют сессию, `Origin` и CSRF. Полные контракты: [API contracts](docs/architecture/api-contracts.md).
+Оператор выполняет `POST /api/v1/subscriber-lookups` с `{account_no}`, видит нормализованную карточку и создаёт заявку из её `lookup_id`. При нескольких услугах или подключениях указывает `selected_service_id` и `connection_snapshot_id`; ФИО, контакты и сетевые поля не присылает повторно. Mock знает только явно синтетические счета `MOCK-ETH-001`, `MOCK-EPON-001`, `MOCK-GPON-001`, `MOCK-PARTIAL-001`, `MOCK-STALE-001`, `MOCK-CONFLICT-001`, `MOCK-NO-CONNECTION-001`; `MOCK-UNAVAILABLE-001` моделирует отказ. `GET /api/v1/subscriber-lookups/{lookup_id}` возвращает сохранённую карточку автору поиска. Изменяющие запросы требуют сессию, `Origin` и CSRF.
+
+Инженеры назначают исполнителя, начинают работу, фиксируют причину необходимости выездных работ, ручную диагностику и решение, затем закрывают заявку. Статусы `OPEN → IN_PROGRESS → CLOSED`. Передача монтажникам фиксируется событием, без Telegram и автоматического закрытия. Запросы назначения, начала, запроса выездных работ и закрытия требуют `If-Match: "<version>"`. Полные контракты: [API contracts](docs/architecture/api-contracts.md).
 
 ## Первоначальный администратор и Identity API
 
@@ -87,7 +89,7 @@ docker compose run --rm api python -m pip check
 docker compose run --rm -e RUN_DB_TESTS=1 api python -m pytest -q
 ```
 
-Тесты PostgreSQL создают собственные временные базы с префиксом `oss_test_` на dev Postgres, проверяют миграции, identity API и Ticket Engine, затем удаляют только эти базы. Основная БД не заполняется тестовыми пользователями или абонентскими данными. Без `RUN_DB_TESTS=1` интеграционные тесты пропускаются; health и configuration тесты продолжают работать. Тесты нельзя запускать против production: fixture требует `APP_ENV=dev` и `POSTGRES_HOST=postgres`.
+Тесты PostgreSQL создают собственные временные базы с префиксом `oss_test_` на dev Postgres, проверяют миграции, identity API, Ticket Engine и Subscriber 360, затем удаляют только эти базы. Основная БД не заполняется тестовыми пользователями или абонентскими данными. Без `RUN_DB_TESTS=1` интеграционные тесты пропускаются; health и configuration тесты продолжают работать. Тесты нельзя запускать против production: fixture требует `APP_ENV=dev` и `POSTGRES_HOST=postgres`.
 
 ## Сохранность данных и резервное копирование
 

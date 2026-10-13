@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
 from app.api.v1.router import router
+from app.core.body_limit import LookupBodyLimit
 from app.core.config import get_settings
 from app.core.errors import ApiError, handle_api_error, handle_validation_error
 from app.core.logging import configure_logging
@@ -27,6 +28,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     configure_logging()
     application = FastAPI(title="OSS Control Center", lifespan=lifespan)
+    application.add_middleware(LookupBodyLimit)
     application.add_exception_handler(ApiError, handle_api_error)
     application.add_exception_handler(RequestValidationError, handle_validation_error)
     application.include_router(router)

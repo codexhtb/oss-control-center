@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -43,6 +44,12 @@ class SubscriberSnapshot(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(50))
+    subscriber_id: Mapped[str | None] = mapped_column(String(100))
+    organization_name: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str | None] = mapped_column(String(200))
+    field_meta: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     contracts: Mapped[list] = mapped_column(JSONB, nullable=False)
     services: Mapped[list] = mapped_column(JSONB, nullable=False)
 
@@ -73,6 +80,11 @@ class ConnectionSnapshot(Base):
     port: Mapped[str | None] = mapped_column(String(100))
     vlan: Mapped[str | None] = mapped_column(String(100))
     onu_id: Mapped[str | None] = mapped_column(String(100))
+    address: Mapped[str | None] = mapped_column(String(300))
+    ip_group: Mapped[str | None] = mapped_column(String(100))
+    field_meta: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
 
 class Ticket(Base):
@@ -100,6 +112,10 @@ class Ticket(Base):
         CheckConstraint("version > 0", name="ck_tickets_version"),
         CheckConstraint("length(description) > 0", name="ck_tickets_description"),
         CheckConstraint(
+            "selected_service_id IS NULL OR length(selected_service_id) > 0",
+            name="ck_tickets_selected_service_id",
+        ),
+        CheckConstraint(
             "(status = 'CLOSED' AND closed_by IS NOT NULL AND closed_at IS NOT NULL "
             "AND closed_decision_id IS NOT NULL) OR "
             "(status <> 'CLOSED' AND closed_by IS NULL AND closed_at IS NULL "
@@ -121,6 +137,7 @@ class Ticket(Base):
         nullable=False,
     )
     connection_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    selected_service_id: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
