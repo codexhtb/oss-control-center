@@ -1,6 +1,6 @@
 # API contracts — Phase 1
 
-Утверждённое дополнение Phase 1.4: [контракт трёх типов создания заявок](phase-1.4-ticket-types.md). Stage 1 разрешает оператору и инженеру `POST /tickets` с прежним `lookup_id`, lookup и чтение разрешённого Subscriber Snapshot; ответы содержат `ticket_type`, а nullable связи не приводят к ошибке чтения. Новые HTTP-формы `MANUAL` и `INTERNAL` пока не реализованы. Таблица ниже описывает прежний subscriber-linked запрос; он остаётся совместимым.
+Утверждённое дополнение Phase 1.4: [контракт трёх типов создания заявок](phase-1.4-ticket-types.md). Stage 2 поддерживает создание `SUBSCRIBER_LINKED`, `MANUAL` и `INTERNAL` через общий `POST /tickets`. Прежний запрос с `lookup_id` без `ticket_type` остаётся совместимым.
 
 Версия HTTP API: `/api/v1`. Это контракт OSS Control Center, а не описание API NetUP. Все записи сохраняются в PostgreSQL. JSON использует UTF-8, идентификаторы ресурсов — UUID, лицевой счёт — строка (ведущие нули сохраняются), время — UTC ISO 8601. Поля без достоверного значения возвращаются как `null` или отсутствуют согласно схеме, а не заполняются догадкой.
 
@@ -47,9 +47,9 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | --- | --- | --- | --- |
 | `POST /subscriber-lookups` | Оператор, инженер + CSRF | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет immutable snapshot с `source=MOCK`, временем, автором поиска, сроком действия 15 минут и внутренними ID подключений; аудит чтения. Не найдено — `404`, источник недоступен — `503` без успешной карточки |
 | `GET /subscriber-lookups/{lookup_id}` | Автор поиска, оператор или инженер | — | Сохранённая карточка без повторного обращения к провайдеру; истечение срока отражается `is_expired` |
-| `POST /tickets` | Оператор, инженер (Stage 1) | `{lookup_id, selected_service_id?, connection_snapshot_id?, description, client_request_id}` | `201` linked заявка `OPEN`; `lookup_id` подтверждает показанный snapshot; при нескольких услугах или подключениях выбор обязателен; ticket + история + аудит в одной транзакции |
-| `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `account_no`; `page`, `size` | Страница сводок; `total`, `page`, `size` |
-| `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка и связанный billing snapshot; комментарии, решения и ручные наблюдения читаются отдельными пагинированными путями |
+| `POST /tickets` | Оператор, инженер | Linked: `{ticket_type?:"SUBSCRIBER_LINKED", lookup_id, selected_service_id?, connection_snapshot_id?, description, client_request_id, priority?}`; manual/internal: `{ticket_type:"MANUAL"|"INTERNAL", description, client_request_id, priority?}` | `201` заявка `OPEN`; повтор идентичного запроса `200`, другой запрос с тем же ID `409`; заявка, история и аудит атомарны. Для linked сохраняются проверки владельца, срока и выбора услуги/подключения |
+| `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `account_no`, `ticket_type`; `page`, `size` | Страница сводок; `total`, `page`, `size` |
+| `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка; для manual/internal `subscriber` и `selected_connection` равны `null`, `technical_state=UNKNOWN`; комментарии, решения и ручные наблюдения читаются отдельно |
 | `POST /tickets/{ticket_id}/start` | Инженер | `If-Match` с версией заявки | `OPEN → IN_PROGRESS`, история и аудит; повтор или конфликт версии — `409` |
 | `POST /tickets/{ticket_id}/assignment` | Инженер | `{engineer_id}` + `If-Match` | Назначение активного инженера, история и аудит; статус не меняется |
 | `POST /tickets/{ticket_id}/field-work-request` | Инженер | `{reason}` + `If-Match` | Событие с причиной из `IN_PROGRESS`; статус не меняется, Telegram не вызывается |
@@ -61,9 +61,9 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `GET /tickets/{ticket_id}/history` | Оператор, инженер | Пагинация | Хронология фактов с источником и временем; внешних Telegram сообщений в Phase 1 нет |
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
 
-Пути в таблице относительны к `/api/v1`. `lookup_id` равен ID сохранённого subscriber snapshot; создать заявку можно только из ещё действующего snapshot, созданного этим оператором. `connection_snapshot_id` должен принадлежать ему. Закрытие `OPEN` сначала требует явного начала работы; это проверяется сервером. В Phase 1 не предусмотрены API для ServiceDesk Plus, Telegram, NetUP и мониторинга.
+Пути в таблице относительны к `/api/v1`. Для linked `lookup_id` равен ID сохранённого subscriber snapshot; создать заявку можно только из ещё действующего snapshot, созданного текущим оператором или инженером. `connection_snapshot_id` должен принадлежать ему. Для manual/internal billing поля запрещены даже при `null`; `account_no` и произвольный клиентский snapshot не принимаются. Закрытие `OPEN` сначала требует явного начала работы; это проверяется сервером. В Phase 1 не предусмотрены API для ServiceDesk Plus, Telegram и мониторинга.
 
-Phase 1.3 вводит `POST /subscriber-lookups` с mock BillingProvider и `GET /subscriber-lookups/{lookup_id}`. Заявка создаётся только из действующего сохранённого снимка, принадлежащего оператору; клиент не отправляет ФИО, телефон, адрес или сетевые идентификаторы в `POST /tickets`. Один доступный сервис/подключение выбирается автоматически, несколько требуют явного ID. Успешный `GET /tickets/{id}` и изменяющие ответы выставляют `ETag` с `tickets.version`; отсутствующий `If-Match` для операций с версией даёт `428`, устаревший — `409`. Повтор создания с тем же содержимым даёт `200` вместо второго `201`.
+Phase 1.3 ввела `POST /subscriber-lookups` и `GET /subscriber-lookups/{lookup_id}`. Только linked заявка создаётся из действующего сохранённого снимка, принадлежащего автору запроса; клиент не отправляет ФИО, телефон, адрес или сетевые идентификаторы в `POST /tickets`. Один доступный сервис/подключение выбирается автоматически, несколько требуют явного ID. Успешный `GET /tickets/{id}` и изменяющие ответы выставляют `ETag` с `tickets.version`; отсутствующий `If-Match` для операций с версией даёт `428`, устаревший — `409`. Повтор создания с тем же содержимым даёт `200` вместо второго `201`.
 
 ## Ответ поиска абонента
 
