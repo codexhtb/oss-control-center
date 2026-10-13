@@ -32,6 +32,7 @@ class SubscriberSnapshot(Base):
         CheckConstraint("length(account_no) > 0", name="ck_subscriber_snapshots_account"),
         CheckConstraint("expires_at > fetched_at", name="ck_subscriber_snapshots_expiry"),
         Index("ix_subscriber_snapshots_account_fetched", "account_no", "fetched_at"),
+        Index("ix_subscriber_snapshots_fetched", "fetched_at", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -134,6 +135,7 @@ class Ticket(Base):
         Index("ix_tickets_priority_created", "priority", "created_at"),
         Index("ix_tickets_assignee_status", "assigned_engineer_id", "status", "created_at"),
         Index("ix_tickets_account_created", "account_no", "created_at"),
+        Index("ix_tickets_subscriber_snapshot", "subscriber_snapshot_id"),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -252,6 +254,20 @@ class TicketAudit(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class LookupCleanupAudit(Base):
+    """Aggregate maintenance fact; never stores a lookup ID or subscriber details."""
+
+    __tablename__ = "lookup_cleanup_audit"
+    __table_args__ = (CheckConstraint("deleted_count >= 0", name="ck_lookup_cleanup_count"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ran_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    cutoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class DiagnosticSnapshot(Base):
