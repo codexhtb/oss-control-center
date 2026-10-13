@@ -32,6 +32,7 @@ from app.modules.billing.provider import (
     BillingUnavailable,
 )
 from app.modules.billing.quality import DataQuality
+from app.modules.billing.service import validate_snapshot_structure
 from app.modules.identity.crypto import hash_password
 from app.modules.network.models import AccessType
 from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot
@@ -198,6 +199,11 @@ def test_multiple_phones_are_explicit_conflict() -> None:
     raw = NetupSubscriber(**{**raw.__dict__, "work_phone": "111-111"})
     card = normalize_netup(raw)
     assert card.phone is None and card.field_meta["phone"].quality == DataQuality.CONFLICT
+    assert [item.type for item in card.contacts] == ["mobile", "work"]
+    assert [item.value for item in card.contacts] == ["000-000", "111-111"]
+    assert all(item.quality == DataQuality.CONFLICT for item in card.contacts)
+    assert all(item.source.startswith("NETUP.users.") for item in card.contacts)
+    assert all(item.observed_at == raw.fetched_at for item in card.contacts)
 
 
 def test_repeated_identical_phone_is_not_a_conflict() -> None:
@@ -206,6 +212,18 @@ def test_repeated_identical_phone_is_not_a_conflict() -> None:
     card = normalize_netup(raw)
     assert card.phone == "000-000"
     assert card.field_meta["phone"].quality == DataQuality.KNOWN
+    assert len(card.contacts) == 2
+    assert all(item.quality == DataQuality.KNOWN for item in card.contacts)
+
+
+def test_long_phone_is_preserved_in_contacts_without_flat_truncation() -> None:
+    raw = synthetic_subscriber()
+    raw = NetupSubscriber(**{**raw.__dict__, "mobile_phone": "S" * 55})
+    card = normalize_netup(raw)
+    assert card.phone is None and card.field_meta["phone"].quality == DataQuality.CONFLICT
+    assert card.contacts[0].value == "S" * 55
+    with pytest.raises(BillingIncomplete):
+        normalize_netup(NetupSubscriber(**{**raw.__dict__, "mobile_phone": "S" * 256}))
 
 
 def test_historical_lab_observation_is_stale_without_changing_read_time() -> None:
@@ -216,6 +234,7 @@ def test_historical_lab_observation_is_stale_without_changing_read_time() -> Non
     assert card.fetched_at == raw.fetched_at
     assert card.field_meta["billing_account"].observed_at == observed
     assert card.field_meta["billing_account"].quality == DataQuality.STALE
+    assert card.contacts[0].quality == DataQuality.STALE
     assert card.connections[0].ip_groups[0].rows[1].field_meta["ip_raw"].quality == (
         DataQuality.UNKNOWN
     )
@@ -225,7 +244,21 @@ def test_existing_mock_provider_contract_remains_valid() -> None:
     card = MockBillingProvider().lookup_by_account("MOCK-ETH-001")
     assert card is not None and card.billing_account == "MOCK-ETH-001"
     assert card.accounts == [] and card.connections[0].ip_groups == []
+    assert card.contacts == []
     assert card.connections[0].service_id is None
+    validate_snapshot_structure(card)
+
+
+def test_snapshot_writer_rejects_cross_service_and_duplicate_groups() -> None:
+    card = normalize_netup(synthetic_subscriber())
+    validate_snapshot_structure(card)
+    card.connections[0].service_id = "absent-service"
+    with pytest.raises(ValueError, match="absent service"):
+        validate_snapshot_structure(card)
+    card.connections[0].service_id = card.services[0].service_id
+    card.connections[0].ip_groups.append(card.connections[0].ip_groups[0].model_copy(deep=True))
+    with pytest.raises(ValueError, match="duplicate group"):
+        validate_snapshot_structure(card)
 
 
 class FakeCursor:
@@ -768,7 +801,7 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             assert "ip_groups" not in {
                 column["name"] for column in inspect(connection).get_columns("connection_snapshots")
             }
-        # Only raw SQL is valid at 0004; use the current ORM after 0005.
+        # Only raw SQL is valid at 0004; the current ORM requires 0007.
         command.upgrade(config, "0005_netup_groups")
         with engine.connect() as connection:
             row = connection.execute(
@@ -783,11 +816,13 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one() == ("0005_netup_groups")
+        command.upgrade(config, "head")
         with Session(engine) as db:
             snapshot = db.get(SubscriberSnapshot, snapshot_id)
             stored_connection = db.get(ConnectionSnapshot, connection_id)
             assert snapshot is not None and stored_connection is not None
             assert snapshot.actual_address is None and snapshot.accounts == []
+            assert snapshot.contacts == []
             assert stored_connection.service_id is None and stored_connection.ip_groups == []
 
             raw = synthetic_subscriber(conflict=True)
@@ -811,6 +846,7 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
                 expires_at=card.fetched_at + timedelta(hours=1),
                 requested_by=user_id,
                 actual_address=card.actual_address,
+                contacts=[item.model_dump(mode="json") for item in card.contacts],
                 accounts=[account.model_dump(mode="json") for account in card.accounts],
                 contracts=[],
                 services=[service.model_dump(mode="json") for service in card.services],
@@ -839,6 +875,7 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             reloaded_connection = db.get(ConnectionSnapshot, new_connection.id)
             assert reloaded_snapshot is not None and reloaded_connection is not None
             assert len(reloaded_snapshot.accounts) == 2
+            assert len(reloaded_snapshot.contacts) == 1
             assert reloaded_connection.service_id == "301"
             assert reloaded_connection.ip_groups == expected_groups
             assert [group["group_id"] for group in reloaded_connection.ip_groups] == ["9", "10"]

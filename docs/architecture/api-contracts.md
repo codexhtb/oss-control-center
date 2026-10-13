@@ -78,6 +78,7 @@ Phase 1.3 вводит `POST /subscriber-lookups` с mock BillingProvider и `GE
     "full_name": "<string or null>",
     "organization_name": null,
     "phone": null,
+    "contacts": [],
     "email": null,
     "field_meta": {"billing_account": {"source": "MOCK", "observed_at": "<UTC timestamp>", "quality": "KNOWN"}}
   },

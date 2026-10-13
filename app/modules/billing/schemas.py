@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.billing.provider import BillingAccount, Contract, Service
+from app.modules.billing.provider import BillingAccount, Contact, Contract, Service
 from app.modules.billing.quality import FieldOrigin
 from app.modules.network.models import Connection
 
@@ -34,6 +34,7 @@ class SubscriberInfo(BaseModel):
     full_name: str | None
     organization_name: str | None
     phone: str | None
+    contacts: list[Contact] = Field(default_factory=list)
     email: str | None
     actual_address: str | None = None
     field_meta: dict[str, FieldOrigin]

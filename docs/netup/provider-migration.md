@@ -5,6 +5,16 @@
 `accounts JSONB NOT NULL DEFAULT []`; `connection_snapshots.service_id`
 nullable, `ip_groups JSONB NOT NULL DEFAULT []`. Индексы UTM5 не создаются.
 
+Provider 1.1 добавляет `0006_lookup_cleanup` (обезличенный аудит, индексы
+по `fetched_at` и ссылке ticket, строго ограниченная процедура очистки) и
+`0007_contacts` (`subscriber_snapshots.contacts JSONB NOT NULL DEFAULT []`).
+Старые миграции не редактируются. Старые snapshots после `head` читаются с
+`contacts=[]`; текущую ORM-модель нельзя применять к схеме до `0007`.
+Применение к рабочей базе требует отдельного deployment review, резервной
+копии и проверки разделения DB-ролей: runtime API не должен владеть таблицами
+snapshots, иметь `DELETE` или `EXECUTE` на процедуру очистки. Доступ к
+`purge_expired_lookup_snapshots(integer)` выдаётся только maintenance-роли.
+
 Порядок: резервная копия PostgreSQL штатным способом → проверка `alembic
 current` (ожидается 0004) → `alembic upgrade head` → проверка 0005 и чтения
 существующих snapshots → тест создания/чтения mock lookup → отдельные lab

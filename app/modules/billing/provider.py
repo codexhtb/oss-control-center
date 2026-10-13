@@ -5,7 +5,7 @@ from typing import Literal, Protocol
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.billing.quality import FieldOrigin
+from app.modules.billing.quality import DataQuality, FieldOrigin
 from app.modules.network.models import Connection
 
 
@@ -38,6 +38,25 @@ class BillingAccount(BaseModel):
     field_meta: dict[str, FieldOrigin] = Field(default_factory=dict)
 
 
+class Contact(BaseModel):
+    """A source-specific phone observation; never a preferred-number decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mobile", "work", "home"]
+    value: str = Field(min_length=1, max_length=255)
+    source: str = Field(min_length=1, max_length=100)
+    observed_at: datetime
+    quality: DataQuality
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_contact_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Contact observation requires a timezone")
+        return value.astimezone(UTC)
+
+
 class Subscriber360(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,6 +65,7 @@ class Subscriber360(BaseModel):
     full_name: str | None = Field(default=None, max_length=200)
     organization_name: str | None = Field(default=None, max_length=200)
     phone: str | None = Field(default=None, max_length=50)
+    contacts: list[Contact] = Field(default_factory=list, max_length=10)
     email: str | None = Field(default=None, max_length=200)
     actual_address: str | None = Field(default=None, max_length=300)
     accounts: list[BillingAccount] = Field(default_factory=list)

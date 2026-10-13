@@ -28,6 +28,28 @@ MAX_TOTAL_RANGES = 5000
 MAX_SERIALIZED_BYTES = 2_000_000
 
 
+def validate_snapshot_structure(data: Subscriber360) -> None:
+    """Shared writer invariant for normalized provider data before any DB insert."""
+    account_ids = [item.account_id for item in data.accounts]
+    service_ids = [item.service_id for item in data.services]
+    if len(set(account_ids)) != len(account_ids) or len(set(service_ids)) != len(service_ids):
+        raise ValueError("Duplicate account or service identity")
+    if any(
+        item.account_id is not None and item.account_id not in account_ids for item in data.services
+    ):
+        raise ValueError("Service references an absent account")
+    for connection in data.connections:
+        if connection.service_id is not None and connection.service_id not in service_ids:
+            raise ValueError("Connection references an absent service")
+        group_ids = [group.group_id for group in connection.ip_groups]
+        if len(set(group_ids)) != len(group_ids):
+            raise ValueError("Connection has duplicate group identity")
+        for group in connection.ip_groups:
+            row_ids = [row.row_id for row in group.rows]
+            if not row_ids or len(set(row_ids)) != len(row_ids):
+                raise ValueError("Group has no rows or duplicate row identity")
+
+
 def _actor(db: Session, actor_id: UUID) -> None:
     user = db.execute(
         select(User)
@@ -96,9 +118,18 @@ def create_lookup(
         _audit(db, actor_id, "invalid")
         db.commit()
         raise ApiError(503, "billing_invalid_response", "Billing source returned invalid data")
+    try:
+        validate_snapshot_structure(data)
+    except ValueError:
+        _audit(db, actor_id, "invalid")
+        db.commit()
+        raise ApiError(
+            503, "billing_invalid_response", "Billing source returned invalid structure"
+        ) from None
     if (
         len(data.contracts) > MAX_ITEMS
         or len(data.accounts) > MAX_ITEMS
+        or len(data.contacts) > 10
         or len(data.services) > MAX_ITEMS
         or len(data.connections) > MAX_ITEMS
         or sum(len(connection.ip_groups) for connection in data.connections) > MAX_TOTAL_GROUPS
@@ -136,6 +167,7 @@ def create_lookup(
         full_name=data.full_name,
         organization_name=data.organization_name,
         phone=data.phone,
+        contacts=[item.model_dump(mode="json") for item in data.contacts],
         email=data.email,
         actual_address=data.actual_address,
         accounts=[item.model_dump(mode="json") for item in data.accounts],
@@ -190,6 +222,7 @@ def stored_card(db: Session, actor_id: UUID, lookup_id: UUID) -> SubscriberCard:
             full_name=snapshot.full_name,
             organization_name=snapshot.organization_name,
             phone=snapshot.phone,
+            contacts=snapshot.contacts,
             email=snapshot.email,
             actual_address=snapshot.actual_address,
             field_meta=snapshot.field_meta,

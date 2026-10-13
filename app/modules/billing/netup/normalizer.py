@@ -3,7 +3,13 @@
 from datetime import UTC, datetime
 
 from app.modules.billing.netup.dto import NetupGroup, NetupSubscriber
-from app.modules.billing.provider import BillingAccount, BillingIncomplete, Service, Subscriber360
+from app.modules.billing.provider import (
+    BillingAccount,
+    BillingIncomplete,
+    Contact,
+    Service,
+    Subscriber360,
+)
 from app.modules.billing.quality import DataQuality, FieldOrigin
 from app.modules.network.models import AccessType, Connection, DhcpRange, IpGroup, IpGroupRow
 
@@ -31,14 +37,31 @@ def field(value: object, when: datetime, *, semantic_known: bool = True) -> Fiel
     )
 
 
-def _phone(raw: NetupSubscriber, when: datetime) -> tuple[str | None, FieldOrigin]:
-    candidates = {
-        item.strip() for item in (raw.mobile_phone, raw.work_phone, raw.home_phone) if present(item)
-    }
-    if len(candidates) > 1 or any(len(item) > 50 for item in candidates):
-        return None, origin(when, DataQuality.CONFLICT)
-    value = next(iter(candidates)) if candidates else None
-    return value, field(value, when)
+def _phone(raw: NetupSubscriber, when: datetime) -> tuple[str | None, FieldOrigin, list[Contact]]:
+    raw_values = (
+        ("mobile", "mobile_telephone", raw.mobile_phone),
+        ("work", "work_telephone", raw.work_phone),
+        ("home", "home_telephone", raw.home_phone),
+    )
+    values = [(kind, column, item.strip()) for kind, column, item in raw_values if present(item)]
+    if any(len(item) > 255 for _, _, item in values):
+        raise BillingIncomplete from None
+    distinct = {item for _, _, item in values}
+    conflict = len(distinct) > 1
+    contacts = [
+        Contact(
+            type=kind,
+            value=item,
+            source=f"NETUP.users.{column}",
+            observed_at=when,
+            quality=DataQuality.CONFLICT if conflict else DataQuality.KNOWN,
+        )
+        for kind, column, item in values
+    ]
+    if conflict or any(len(item) > 50 for item in distinct):
+        return None, origin(when, DataQuality.CONFLICT), contacts
+    value = next(iter(distinct)) if distinct else None
+    return value, field(value, when), contacts
 
 
 def _group(group: NetupGroup, when: datetime) -> IpGroup:
@@ -167,7 +190,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
     when = raw.source_as_of or raw.fetched_at
     if when.tzinfo is None or when.utcoffset() is None:
         raise BillingIncomplete from None
-    phone, phone_origin = _phone(raw, when)
+    phone, phone_origin, contacts = _phone(raw, when)
     full_name = bounded(raw.full_name, 200)
     email = bounded(raw.email, 200)
     actual_address = bounded(raw.actual_address, 300)
@@ -193,6 +216,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
         full_name=full_name,
         organization_name=None,
         phone=phone,
+        contacts=contacts,
         email=email,
         actual_address=actual_address,
         accounts=[
@@ -215,6 +239,14 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
             "full_name": field(full_name, when),
             "organization_name": origin(when, DataQuality.UNKNOWN),
             "phone": phone_origin,
+            "contacts": origin(
+                when,
+                DataQuality.CONFLICT
+                if len({item.value for item in contacts}) > 1
+                else DataQuality.KNOWN
+                if contacts
+                else DataQuality.UNKNOWN,
+            ),
             "email": field(email, when),
             "actual_address": field(actual_address, when),
             "contracts": origin(when, DataQuality.UNKNOWN),
@@ -235,4 +267,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
             for item in metadata.values():
                 if item.quality == DataQuality.KNOWN:
                     item.quality = DataQuality.STALE
+        for contact in card.contacts:
+            if contact.quality == DataQuality.KNOWN:
+                contact.quality = DataQuality.STALE
     return card

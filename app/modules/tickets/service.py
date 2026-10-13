@@ -221,6 +221,7 @@ def ticket_detail(db: Session, ticket_id: UUID) -> TicketDetail:
         "fetched_at": snapshot.fetched_at,
         "full_name": snapshot.full_name,
         "phone": snapshot.phone,
+        "contacts": snapshot.contacts,
         "contracts": snapshot.contracts,
         "services": snapshot.services,
         "connections": connections,

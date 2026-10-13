@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.billing.provider import Contact
 from app.modules.tickets.status import TicketPriority, TicketStatus
 
 
@@ -84,6 +85,7 @@ class SubscriberView(BaseModel):
     fetched_at: datetime
     full_name: str | None
     phone: str | None
+    contacts: list[Contact] = Field(default_factory=list)
     contracts: list
     services: list
     connections: list[ConnectionView]

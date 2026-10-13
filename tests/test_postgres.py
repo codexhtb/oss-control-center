@@ -66,7 +66,7 @@ def test_fresh_database_reaches_head_before_current_orm(
         command.upgrade(config, "head")
         with engine.connect() as connection:
             assert MigrationContext.configure(connection).get_current_revision() == (
-                "0005_netup_groups"
+                "0007_contacts"
             )
         # Query compilation and execution detect any ORM column missing from head.
         with Session(engine) as db:
