@@ -32,6 +32,7 @@ from app.modules.billing.provider import (
     BillingUnavailable,
 )
 from app.modules.billing.quality import DataQuality
+from app.modules.identity.crypto import hash_password
 from app.modules.network.models import AccessType
 from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot
 
@@ -719,9 +720,9 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             connection.execute(
                 text(
                     "INSERT INTO app_users (id,login,display_name,role,password_hash,is_active) "
-                    "VALUES (:id,'legacy-netup-test','Legacy','operator','synthetic-hash',true)"
+                    "VALUES (:id,'legacy-netup-test','Legacy','operator',:hash,true)"
                 ),
-                {"id": user_id},
+                {"id": user_id, "hash": hash_password(uuid4().hex)},
             )
             connection.execute(
                 text(
