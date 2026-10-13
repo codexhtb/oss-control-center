@@ -67,3 +67,21 @@
 временной PostgreSQL базе с существующим snapshot. Интеграционные проверки
 UTM5 требуют отдельного lab read-only канала и не используют
 исследовательский wrapper как runtime API.
+
+### NetUP Provider 1.1 — дополнительные регрессии
+
+- `APP_ENV=production` отклоняет lab/plaintext; настоящий локальный Uvicorn
+  access log не содержит query string с синтетическим ЛС. Авторизованные
+  ответы API и ошибки содержат `Cache-Control: no-store`.
+- `0005 → 0006 → 0007` на временной PostgreSQL БД сохраняет старый ticket
+  snapshot. Контролируемая очистка удаляет лишь lookup без заявки спустя
+  24 часа от `fetched_at`, пишет обезличенный аудит и пропускает строку,
+  занятую конкурентной транзакцией. Прямой DELETE остаётся запрещён.
+- Повторная проверка роли после медленного provider запрещает сохранение
+  lookup для деактивированного/перероленного пользователя без удержания
+  PostgreSQL row lock во время ожидания NetUP.
+- Синтетический NetUP DTO проходит HTTP lookup → immutable PostgreSQL
+  snapshot → создание ticket → повторное чтение; контакты, связи service/group
+  и все строки IP-групп совпадают. Mock и исторические snapshots читаются.
+- Лабораторные read-only UTM5 tests, Ruff, `pip check` и полный pytest с
+  изолированными PostgreSQL БД — обязательные gates до Web UI с NetUP.

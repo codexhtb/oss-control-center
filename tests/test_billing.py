@@ -22,6 +22,14 @@ from app.core.errors import ApiError
 from app.db.session import get_session
 from app.main import create_app
 from app.modules.billing.mock import MockBillingProvider
+from app.modules.billing.netup.dto import (
+    NetupAccount,
+    NetupGroup,
+    NetupGroupRow,
+    NetupService,
+    NetupSubscriber,
+)
+from app.modules.billing.netup.provider import NetUPBillingProvider
 from app.modules.billing.provider import BillingUnavailable
 from app.modules.billing.quality import DataQuality
 from app.modules.billing.service import create_lookup
@@ -427,6 +435,108 @@ def test_lookup_rechecks_role_after_remote_wait_without_holding_actor_lock(
         assert db.scalar(select(func.count()).select_from(SubscriberSnapshot)) == 0
 
 
+def test_synthetic_netup_http_snapshot_ticket_round_trip(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    seed_user(billing_engine, "netup_operator", Role.OPERATOR)
+    seed_user(billing_engine, "netup_engineer", Role.ENGINEER)
+    seed_user(billing_engine, "netup_admin", Role.ADMIN)
+    when = datetime.now(UTC)
+
+    def row(row_id: int, switch_id: int) -> NetupGroupRow:
+        return NetupGroupRow(
+            row_id=row_id,
+            ip_type=0,
+            ip=0,
+            mask=0,
+            ip_ext=0,
+            mask_ext=0,
+            pool_id=0,
+            switch_id=switch_id,
+            switch_name=f"synthetic-{switch_id}",
+            port_id=2,
+            vlan_id=100,
+            ranges=(),
+        )
+
+    raw = NetupSubscriber(
+        user_id=101,
+        requested_account_id=202,
+        full_name="Synthetic Person",
+        is_juridical=False,
+        mobile_phone="000-000",
+        work_phone="111-111",
+        home_phone="",
+        email="",
+        actual_address="Synthetic address",
+        accounts=(NetupAccount(202, True),),
+        services=(
+            NetupService(
+                301,
+                202,
+                "Synthetic Internet",
+                3,
+                (NetupGroup(9, (row(11, 7), row(12, 8))), NetupGroup(10, (row(13, 7),))),
+            ),
+            NetupService(302, 202, "Synthetic extra", 2, ()),
+        ),
+        fetched_at=when,
+    )
+
+    class SyntheticRepository:
+        def lookup_by_account(self, account_no: str) -> NetupSubscriber:
+            assert account_no == "202"
+            return raw
+
+    billing_client.app.dependency_overrides[get_billing_provider] = lambda: NetUPBillingProvider(
+        SyntheticRepository()
+    )
+    login(billing_client, "netup_operator")
+    response = lookup(billing_client, "202")
+    assert response.status_code == 200, response.text
+    assert response.headers["Cache-Control"] == "no-store"
+    card = response.json()
+    assert card["source"] == "NETUP"
+    assert card["subscriber"]["phone"] is None
+    assert len(card["subscriber"]["contacts"]) == 2
+    assert card["connections"][0]["service_id"] == "301"
+    assert [group["group_id"] for group in card["connections"][0]["ip_groups"]] == ["9", "10"]
+    assert len(card["connections"][0]["ip_groups"][0]["rows"]) == 2
+    assert card["connections"][0]["field_meta"]["device"]["quality"] == "CONFLICT"
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").json() == card
+    with Session(billing_engine) as db:
+        snapshot = db.get(SubscriberSnapshot, UUID(card["lookup_id"]))
+        assert snapshot is not None and len(snapshot.contacts) == 2
+        stored_group = db.scalar(
+            select(ConnectionSnapshot).where(
+                ConnectionSnapshot.subscriber_snapshot_id == snapshot.id
+            )
+        )
+        assert stored_group is not None
+        assert [group["group_id"] for group in stored_group.ip_groups] == ["9", "10"]
+    created = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["selected_service_id"] == "301"
+    detail = billing_client.get(f"/api/v1/tickets/{created.json()['id']}")
+    assert detail.status_code == 200
+    for protected_response in (
+        billing_client.get("/api/v1/auth/me"),
+        billing_client.get("/api/v1/tickets"),
+        billing_client.get(f"/api/v1/tickets/{created.json()['id']}/comments"),
+        detail,
+    ):
+        assert protected_response.status_code == 200
+        assert protected_response.headers["Cache-Control"] == "no-store"
+    assert detail.json()["subscriber"]["contacts"] == card["subscriber"]["contacts"]
+    assert detail.json()["selected_connection"]["ip_groups"] == card["connections"][0]["ip_groups"]
+    login(billing_client, "netup_engineer")
+    assert len(lookup(billing_client, "202").json()["subscriber"]["contacts"]) == 2
+    login(billing_client, "netup_admin")
+    assert lookup(billing_client, "202").status_code == 403
+
+
 def test_upgrade_existing_ticket_from_0003(
     isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -504,13 +614,14 @@ def test_upgrade_existing_ticket_from_0003(
             assert "actual_address" not in {
                 column["name"] for column in inspect(connection).get_columns("subscriber_snapshots")
             }
-        # The current ORM includes 0005 columns; inspect 0004 only with raw SQL.
+        # The current ORM includes 0007 columns; inspect 0004/0005 only with raw SQL.
         command.upgrade(config, "0005_netup_groups")
         with engine.connect() as connection:
             assert (
                 connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
                 == "0005_netup_groups"
             )
+        command.upgrade(config, "head")
         with Session(engine) as db:
             detail = ticket_detail(db, ticket_id)
             assert detail.account_no == "MOCK-LEGACY"
@@ -518,5 +629,6 @@ def test_upgrade_existing_ticket_from_0003(
             assert detail.subscriber.field_meta == {}
             assert detail.subscriber.actual_address is None
             assert detail.subscriber.accounts == []
+            assert detail.subscriber.contacts == []
     finally:
         engine.dispose()

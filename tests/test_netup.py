@@ -333,7 +333,9 @@ def test_repository_distinguishes_missing_deleted_and_ambiguous(
     assert "is_deleted=0" in cursor.calls[3][0]
 
 
-def test_repository_loads_multiple_accounts_links_and_group_rows() -> None:
+def test_repository_loads_multiple_accounts_links_and_group_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class CompleteCursor(FakeCursor):
         def execute(self, sql: str, params: tuple | None = None) -> None:
             self.calls.append((sql, params))
@@ -432,6 +434,11 @@ def test_repository_loads_multiple_accounts_links_and_group_rows() -> None:
         for sql, _ in cursor.calls
         if sql.startswith("SELECT") and not sql.startswith("SELECT id,first_ip")
     )
+    from app.modules.billing.netup import repository as netup_repository
+
+    monkeypatch.setattr(netup_repository, "MAX_EXPANDED_RANGES", 0)
+    with pytest.raises(BillingIncomplete):
+        NetupRepository(lambda: FakeConnection(CompleteCursor([]))).lookup_by_account("202")
 
 
 def test_provider_hides_db_failure_and_secrets(caplog: pytest.LogCaptureFixture) -> None:

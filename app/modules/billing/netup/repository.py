@@ -29,6 +29,7 @@ MAX_GROUPS_PER_SERVICE = 20
 MAX_ROWS_PER_GROUP = 100
 MAX_TOTAL_GROUPS = 200
 MAX_TOTAL_GROUP_ROWS = 2000
+MAX_EXPANDED_RANGES = 5000
 MAX_RANGES_PER_POOL = 50
 MAX_POOLS = 100
 LOOKUP_DEADLINE_SECONDS = 15
@@ -243,7 +244,7 @@ class NetupRepository:
                 raise BillingIncomplete from None
             range_cache = {item: tuple(ranges[item]) for item in pool_ids}
         services: list[NetupService] = []
-        total_groups = total_group_rows = 0
+        total_groups = total_group_rows = total_ranges = 0
         for row in service_rows:
             groups = tuple(
                 NetupGroup(
@@ -270,7 +271,12 @@ class NetupRepository:
             )
             total_groups += len(groups)
             total_group_rows += sum(len(group.rows) for group in groups)
-            if total_groups > MAX_TOTAL_GROUPS or total_group_rows > MAX_TOTAL_GROUP_ROWS:
+            total_ranges += sum(len(item.ranges) for group in groups for item in group.rows)
+            if (
+                total_groups > MAX_TOTAL_GROUPS
+                or total_group_rows > MAX_TOTAL_GROUP_ROWS
+                or total_ranges > MAX_EXPANDED_RANGES
+            ):
                 raise BillingIncomplete from None
             services.append(
                 NetupService(

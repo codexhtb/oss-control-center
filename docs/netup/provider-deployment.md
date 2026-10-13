@@ -45,11 +45,21 @@ fixtures. Исследовательский wrapper не используетс
 `fetched_at` фиксирует фактическое время чтения. Production режим не
 принимает исторический `as_of`.
 
-Порядок будущего включения: проверить миграцию 0005 на копии PostgreSQL,
+Порядок будущего включения: проверить миграции до 0007 на копии PostgreSQL,
 grants/TLS/EXPLAIN для production канала, повторить lab тесты
 и тесты без вывода PII, затем согласовать production реквизиты и трафик.
 Никакого автоматического fallback на mock для недоступного NetUP нет:
 выдаётся `503`, чтобы не создать ложную карточку.
+
+Для Provider 1.1 необходимо отдельно проверить `0006_lookup_cleanup` и
+`0007_contacts` на временной PostgreSQL БД, затем провести deployment review
+с backup и разделением ролей DB owner, runtime API и maintenance. Текущий
+dev Compose использует одну роль PostgreSQL и **не является образцом**
+production-разделения привилегий; процедуру очистки в рабочей `oss_control`
+до ревью не вызывать. В production `APP_ENV=production` отклоняет lab/plaintext
+даже при private IP. Реальный NetUP режим требует отдельной передачи NETUP
+переменных в runtime окружение: текущий `compose.yaml` передаёт только
+настройки PostgreSQL и Identity и не включает NetUP автоматически.
 
 Повторяемые планы чтения: [`80_provider_explain.sql`](sql/80_provider_explain.sql).
 На копии `accounts.id` использует `PRIMARY/const`, услуги — индекс

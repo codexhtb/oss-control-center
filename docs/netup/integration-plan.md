@@ -1,5 +1,12 @@
 # План read-only NetUPBillingProvider после discovery
 
+> Исторический план Discovery до реализации Provider 1.0/1.1. SQL ниже —
+> первоначальный проект; фактический пакетный query port находится в
+> `app/modules/billing/netup/repository.py`. Актуальные API, ограничения и
+> включение описаны в `provider-api-contract.md`, `provider-data-limitations.md`
+> и `provider-deployment.md`. Утверждённое решение о телефонах — `contacts[]`
+> с provenance, без эвристического выбора плоского `phone`.
+
 **Статус:** проект, интеграция не начата. Discovery проводился на отдельной
 восстановленной копии, не на production NetUP. Нет изменений приложения,
 миграций, конфигурации MariaDB, SSH или сети.
