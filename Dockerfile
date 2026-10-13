@@ -12,7 +12,7 @@ COPY app ./app
 COPY alembic.ini ./
 COPY tests ./tests
 
-RUN python -m pip install --no-cache-dir ".[dev]" \
+RUN python -m pip install --no-cache-dir ".[dev,netup]" \
     && groupadd --gid 10001 ossapp \
     && useradd --uid 10001 --gid ossapp --no-create-home --shell /usr/sbin/nologin ossapp
 

@@ -1,4 +1,4 @@
-"""Subscriber 360 lookup routes. All Phase 1 values come from the synthetic provider."""
+"""Subscriber 360 routes; mock by default, NetUP only by explicit configuration."""
 
 from typing import Annotated
 from uuid import UUID
@@ -6,9 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response
 
 from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
+from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.modules.billing.mock import MockBillingProvider
-from app.modules.billing.provider import BillingProvider
+from app.modules.billing.netup.config import NetupConfig
+from app.modules.billing.netup.provider import NetUPBillingProvider
+from app.modules.billing.provider import BillingProvider, UnavailableBillingProvider
 from app.modules.billing.schemas import LookupRequest, SubscriberCard
 from app.modules.billing.service import create_lookup, stored_card
 from app.modules.identity.roles import Permission, Role, permissions_for
@@ -18,6 +21,11 @@ router = APIRouter(prefix="/subscriber-lookups", tags=["billing"])
 
 
 def get_billing_provider() -> BillingProvider:
+    if get_settings().billing_provider == "NETUP":
+        try:
+            return NetUPBillingProvider.from_config(NetupConfig.from_env())
+        except ValueError:
+            return UnavailableBillingProvider()
     return MockBillingProvider()
 
 

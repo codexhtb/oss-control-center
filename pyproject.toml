@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+netup = [
+  "PyMySQL>=1.2,<1.3",
+]
 dev = [
   "httpx>=0.28,<1",
   "pytest>=9.1,<10",
@@ -30,6 +33,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -p no:cacheprovider"
+markers = ["integration: requires a separately provisioned read-only lab channel"]
 
 [tool.ruff]
 target-version = "py312"

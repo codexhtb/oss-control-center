@@ -47,6 +47,10 @@ class SubscriberSnapshot(Base):
     subscriber_id: Mapped[str | None] = mapped_column(String(100))
     organization_name: Mapped[str | None] = mapped_column(String(200))
     email: Mapped[str | None] = mapped_column(String(200))
+    actual_address: Mapped[str | None] = mapped_column(String(300))
+    accounts: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     field_meta: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
@@ -82,6 +86,10 @@ class ConnectionSnapshot(Base):
     onu_id: Mapped[str | None] = mapped_column(String(100))
     address: Mapped[str | None] = mapped_column(String(300))
     ip_group: Mapped[str | None] = mapped_column(String(100))
+    service_id: Mapped[str | None] = mapped_column(String(100))
+    ip_groups: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     field_meta: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

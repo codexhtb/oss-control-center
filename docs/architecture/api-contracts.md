@@ -112,3 +112,16 @@ Phase 1.3 вводит `POST /subscriber-lookups` с mock BillingProvider и `GE
 ## Будущие границы API
 
 Phase 3 добавит операции `field_dispatch`, Phase 4 — автоматические диагностические snapshots. Их точные HTTP контракты утверждаются перед соответствующей фазой; Phase 1 не содержит заглушек, вызывающих реальные внешние системы.
+
+## NetUP provider 1.0 — добавочный контракт
+
+`BILLING_PROVIDER=MOCK` остаётся dev-поведением по умолчанию. Для явно
+сконфигурированного read-only NetUP provider ответ lookup дополняется
+`accounts[]`, `services[].account_id`, `connections[].service_id`,
+`connections[].ip_groups[]` с отдельными исходными строками и
+`subscriber.actual_address`. Старые ключи и mock snapshots сохраняются.
+Новые ошибки: `422 account_format_unsupported`, `409 billing_ambiguous`,
+`409 billing_incomplete`; `404` и `503` сохраняют прежнюю семантику.
+Выбранные услуга и подключение должны относиться к запрошенному ЛС и друг
+к другу. Полная спецификация —
+[`provider-api-contract.md`](../netup/provider-api-contract.md).

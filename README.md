@@ -113,3 +113,16 @@ docker compose down
 ## Если Docker socket недоступен
 
 Не запускайте команды через `sudo` и не меняйте права сокета или группы ради проверки. Передайте перечисленные выше команды администратору либо пользователю с уже утверждённым доступом к Docker. Файлы проекта и `docker compose config --quiet` можно проверить без доступа к daemon.
+
+## NetUP provider 1.0 (отдельное лабораторное включение)
+
+API по умолчанию использует только `BILLING_PROVIDER=MOCK`. Подготовленный
+read-only `NetUPBillingProvider` не обращается к UTM5 без явной настройки.
+Контракт, лабораторное подключение, безопасность, миграция и восстановление
+описаны в [ADR](docs/netup/adr-001-provider-boundary.md),
+[API contract](docs/netup/provider-api-contract.md),
+[deployment guide](docs/netup/provider-deployment.md),
+[security model](docs/netup/provider-security.md),
+[migration plan](docs/netup/provider-migration.md) и
+[runbook](docs/netup/provider-runbook.md). Для лаборатории нужен отдельный
+SQL-канал; исследовательский `netup-sql` не подключается к runtime API.

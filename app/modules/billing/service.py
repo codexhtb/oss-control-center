@@ -7,7 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.modules.billing.provider import BillingProvider, BillingUnavailable, Subscriber360
+from app.modules.billing.provider import (
+    BillingAmbiguous,
+    BillingIncomplete,
+    BillingInvalidAccount,
+    BillingProvider,
+    BillingUnavailable,
+    Subscriber360,
+)
 from app.modules.billing.schemas import ConnectionCard, SubscriberCard, SubscriberInfo
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role, permissions_for
@@ -15,6 +22,8 @@ from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot, T
 
 LOOKUP_LIFETIME = timedelta(minutes=15)
 MAX_ITEMS = 50
+MAX_TOTAL_GROUPS = 200
+MAX_TOTAL_GROUP_ROWS = 2000
 
 
 def _actor(db: Session, actor_id: UUID) -> None:
@@ -44,6 +53,18 @@ def create_lookup(
     _actor(db, actor_id)
     try:
         data = provider.lookup_by_account(account_no)
+    except BillingInvalidAccount:
+        _audit(db, actor_id, "invalid")
+        db.commit()
+        raise ApiError(422, "account_format_unsupported", "Unsupported account format") from None
+    except BillingAmbiguous:
+        _audit(db, actor_id, "ambiguous")
+        db.commit()
+        raise ApiError(409, "billing_ambiguous", "Billing account is ambiguous") from None
+    except BillingIncomplete:
+        _audit(db, actor_id, "incomplete")
+        db.commit()
+        raise ApiError(409, "billing_incomplete", "Billing account data is incomplete") from None
     except BillingUnavailable:
         _audit(db, actor_id, "unavailable")
         db.commit()
@@ -72,8 +93,17 @@ def create_lookup(
         raise ApiError(503, "billing_invalid_response", "Billing source returned invalid data")
     if (
         len(data.contracts) > MAX_ITEMS
+        or len(data.accounts) > MAX_ITEMS
         or len(data.services) > MAX_ITEMS
         or len(data.connections) > MAX_ITEMS
+        or sum(len(connection.ip_groups) for connection in data.connections) > MAX_TOTAL_GROUPS
+        or sum(len(group.rows) for connection in data.connections for group in connection.ip_groups)
+        > MAX_TOTAL_GROUP_ROWS
+        or any(
+            len(connection.ip_groups) > MAX_ITEMS
+            or any(len(group.rows) > 100 for group in connection.ip_groups)
+            for connection in data.connections
+        )
     ):
         _audit(db, actor_id, "invalid")
         db.commit()
@@ -89,6 +119,8 @@ def create_lookup(
         organization_name=data.organization_name,
         phone=data.phone,
         email=data.email,
+        actual_address=data.actual_address,
+        accounts=[item.model_dump(mode="json") for item in data.accounts],
         contracts=[item.model_dump(mode="json") for item in data.contracts],
         services=[item.model_dump(mode="json") for item in data.services],
         field_meta={key: value.model_dump(mode="json") for key, value in data.field_meta.items()},
@@ -104,6 +136,8 @@ def create_lookup(
             port=item.port,
             vlan=item.vlan,
             ip_group=item.ip_group,
+            service_id=item.service_id,
+            ip_groups=[group.model_dump(mode="json") for group in item.ip_groups],
             onu_id=item.onu_id,
             field_meta={
                 key: value.model_dump(mode="json") for key, value in item.field_meta.items()
@@ -139,9 +173,11 @@ def stored_card(db: Session, actor_id: UUID, lookup_id: UUID) -> SubscriberCard:
             organization_name=snapshot.organization_name,
             phone=snapshot.phone,
             email=snapshot.email,
+            actual_address=snapshot.actual_address,
             field_meta=snapshot.field_meta,
         ),
         contracts=snapshot.contracts,
+        accounts=snapshot.accounts,
         services=snapshot.services,
         connections=[
             ConnectionCard(
@@ -152,6 +188,8 @@ def stored_card(db: Session, actor_id: UUID, lookup_id: UUID) -> SubscriberCard:
                 port=item.port,
                 vlan=item.vlan,
                 ip_group=item.ip_group,
+                service_id=item.service_id,
+                ip_groups=item.ip_groups,
                 onu_id=item.onu_id,
                 field_meta=item.field_meta,
             )

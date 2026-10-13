@@ -12,6 +12,7 @@ from sqlalchemy.engine import URL
 
 class Settings(BaseModel):
     app_env: Literal["dev", "test", "production"] = "dev"
+    billing_provider: Literal["MOCK", "NETUP"] = "MOCK"
     postgres_host: str = Field(default="postgres", min_length=1)
     postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_db: str = Field(default="oss_control", min_length=1)
@@ -86,6 +87,7 @@ class Settings(BaseModel):
         return cls.model_validate(
             {
                 "app_env": values.get("APP_ENV", "dev"),
+                "billing_provider": values.get("BILLING_PROVIDER", "MOCK"),
                 "postgres_host": values.get("POSTGRES_HOST", "postgres"),
                 "postgres_port": values.get("POSTGRES_PORT", "5432"),
                 "postgres_db": values.get("POSTGRES_DB", "oss_control"),

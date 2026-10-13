@@ -199,3 +199,14 @@ erDiagram
 3. `closed_by` — активный инженер OSS; `closed_at` и ссылка на решение обязательны для `CLOSED`. Закрытая заявка в Phase 1 не редактируется без отдельного будущего правила переоткрытия.
 4. Данные billing snapshot, мониторинга и ручной проверки различаются по источнику. `UNKNOWN` не хранится как доказательство `DOWN`.
 5. Значения `chat_id` и `message_id` появляются только после подтверждённой отправки Bot API; ручной fallback не подделывает их.
+
+## Добавочные snapshots NetUP provider 1.0
+
+Миграция `0005_netup_groups` расширяет immutable `subscriber_snapshots`
+полями `accounts JSONB DEFAULT []` и nullable `actual_address`, а
+`connection_snapshots` — nullable `service_id` и `ip_groups JSONB DEFAULT []`.
+Новый JSON сохраняет `ServiceLink → IpGroupKey → IpGroupRow[]` без смешения
+назначенной IP-адресации, DHCP-пула и заявленной биллинговой топологии.
+Старые snapshots читаются с пустыми списками; PostgreSQL остаётся source of
+truth для зафиксированного в заявке наблюдения. См.
+[`ADR-001`](../netup/adr-001-provider-boundary.md).

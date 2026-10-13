@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.billing.provider import Contract, Service
+from app.modules.billing.provider import BillingAccount, Contract, Service
 from app.modules.billing.quality import FieldOrigin
 from app.modules.network.models import Connection
 
@@ -18,10 +18,14 @@ class LookupRequest(BaseModel):
     @field_validator("account_no")
     @classmethod
     def validate_account(cls, value: str) -> str:
-        canonical = value.strip()
-        if not canonical or len(canonical) > 100 or any(ord(char) < 32 for char in canonical):
+        if (
+            value != value.strip()
+            or not value
+            or len(value) > 100
+            or any(ord(char) < 32 for char in value)
+        ):
             raise ValueError("Invalid billing account")
-        return canonical
+        return value
 
 
 class SubscriberInfo(BaseModel):
@@ -31,6 +35,7 @@ class SubscriberInfo(BaseModel):
     organization_name: str | None
     phone: str | None
     email: str | None
+    actual_address: str | None = None
     field_meta: dict[str, FieldOrigin]
 
 
@@ -47,6 +52,7 @@ class SubscriberCard(BaseModel):
     expires_at: datetime
     is_expired: bool
     subscriber: SubscriberInfo
+    accounts: list[BillingAccount] = Field(default_factory=list)
     contracts: list[Contract]
     services: list[Service]
     connections: list[ConnectionCard]

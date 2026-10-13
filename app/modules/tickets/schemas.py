@@ -65,6 +65,8 @@ class ConnectionView(BaseModel):
     onu_id: str | None
     address: str | None = None
     ip_group: str | None = None
+    service_id: str | None = None
+    ip_groups: list = Field(default_factory=list)
     field_meta: dict = Field(default_factory=dict)
 
 
@@ -75,6 +77,8 @@ class SubscriberView(BaseModel):
     subscriber_id: str | None = None
     organization_name: str | None = None
     email: str | None = None
+    actual_address: str | None = None
+    accounts: list = Field(default_factory=list)
     field_meta: dict = Field(default_factory=dict)
     source: str
     fetched_at: datetime

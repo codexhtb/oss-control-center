@@ -117,6 +117,16 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         raise ApiError(422, "invalid_service", "Service does not belong to lookup")
     if len(service_ids) == 1 and selected_service is None:
         selected_service = service_ids[0]
+    selected_service_account = next(
+        (
+            item.get("account_id")
+            for item in snapshot.services
+            if (item.get("service_id") or item.get("id")) == selected_service
+        ),
+        None,
+    )
+    if selected_service_account is not None and selected_service_account != snapshot.account_no:
+        raise ApiError(422, "service_account_mismatch", "Search the service account first")
     connections = db.scalars(
         select(ConnectionSnapshot).where(ConnectionSnapshot.subscriber_snapshot_id == snapshot.id)
     ).all()
@@ -127,6 +137,13 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         raise ApiError(422, "invalid_connection", "Connection does not belong to lookup")
     if len(connections) == 1 and selected is None:
         selected = connections[0].id
+    selected_connection = next((item for item in connections if item.id == selected), None)
+    if (
+        selected_connection is not None
+        and selected_connection.service_id is not None
+        and selected_connection.service_id != selected_service
+    ):
+        raise ApiError(422, "service_connection_mismatch", "Connection belongs to another service")
     ticket = Ticket(
         account_no=snapshot.account_no,
         subscriber_snapshot_id=snapshot.id,
@@ -197,6 +214,8 @@ def ticket_detail(db: Session, ticket_id: UUID) -> TicketDetail:
         "subscriber_id": snapshot.subscriber_id,
         "organization_name": snapshot.organization_name,
         "email": snapshot.email,
+        "actual_address": snapshot.actual_address,
+        "accounts": snapshot.accounts,
         "field_meta": snapshot.field_meta,
         "source": snapshot.source,
         "fetched_at": snapshot.fetched_at,

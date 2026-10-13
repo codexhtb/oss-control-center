@@ -1,0 +1,17 @@
+# Copy to a local, ignored .env.netup-lab only after lab access is provisioned.
+# Never source this file in the production API environment.
+RUN_NETUP_LAB_TESTS=1
+NETUP_LAB_HOST=172.17.7.1
+NETUP_LAB_PORT=3306
+NETUP_LAB_DATABASE=UTM5
+NETUP_LAB_USER=
+NETUP_LAB_PASSWORD=
+NETUP_LAB_TLS_CA=
+NETUP_LAB_ALLOW_PLAINTEXT=true
+NETUP_LAB_AS_OF_UTC=2026-10-10T12:00:00+00:00
+NETUP_LAB_ACCOUNT_NO=
+# Optional scenario keys are selected in the lab and never committed with values.
+NETUP_LAB_MISSING_ACCOUNT=
+NETUP_LAB_DELETED_ACCOUNT=
+NETUP_LAB_CONFLICT_ACCOUNT=
+NETUP_LAB_MULTILINK_ACCOUNT=
