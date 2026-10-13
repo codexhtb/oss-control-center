@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,11 +18,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.v1.billing import get_billing_provider
 from app.core.config import get_settings
+from app.core.errors import ApiError
 from app.db.session import get_session
 from app.main import create_app
 from app.modules.billing.mock import MockBillingProvider
 from app.modules.billing.provider import BillingUnavailable
 from app.modules.billing.quality import DataQuality
+from app.modules.billing.service import create_lookup
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User
 from app.modules.identity.roles import Role
@@ -386,6 +389,42 @@ def test_concurrent_create_uses_one_ticket(
             )
             == 1
         )
+
+
+def test_lookup_rechecks_role_after_remote_wait_without_holding_actor_lock(
+    billing_engine: Engine,
+) -> None:
+    operator = seed_user(billing_engine, "lookup_operator", Role.OPERATOR)
+    started, release = Event(), Event()
+
+    class SlowProvider:
+        def lookup_by_account(self, account_no: str):
+            started.set()
+            assert release.wait(timeout=5)
+            return MockBillingProvider().lookup_by_account(account_no)
+
+    def attempt() -> None:
+        with Session(billing_engine) as db:
+            create_lookup(db, operator.id, "MOCK-ETH-001", SlowProvider())
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(attempt)
+        assert started.wait(timeout=5)
+        try:
+            # If lookup still owns FOR UPDATE, PostgreSQL lock_timeout fails here.
+            with Session(billing_engine) as db:
+                db.execute(text("SET LOCAL lock_timeout = '1000ms'"))
+                current = db.get(User, operator.id, with_for_update=True)
+                assert current is not None
+                current.role = Role.ADMIN
+                db.commit()
+        finally:
+            release.set()
+        with pytest.raises(ApiError) as error:
+            future.result(timeout=5)
+        assert error.value.status_code == 403
+    with Session(billing_engine) as db:
+        assert db.scalar(select(func.count()).select_from(SubscriberSnapshot)) == 0
 
 
 def test_upgrade_existing_ticket_from_0003(

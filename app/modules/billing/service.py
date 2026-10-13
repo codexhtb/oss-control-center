@@ -24,6 +24,8 @@ LOOKUP_LIFETIME = timedelta(minutes=15)
 MAX_ITEMS = 50
 MAX_TOTAL_GROUPS = 200
 MAX_TOTAL_GROUP_ROWS = 2000
+MAX_TOTAL_RANGES = 5000
+MAX_SERIALIZED_BYTES = 2_000_000
 
 
 def _actor(db: Session, actor_id: UUID) -> None:
@@ -51,6 +53,9 @@ def create_lookup(
     db: Session, actor_id: UUID, account_no: str, provider: BillingProvider
 ) -> SubscriberSnapshot:
     _actor(db, actor_id)
+    # Release identity/session reads and the row lock before remote I/O. No PostgreSQL
+    # transaction or pooled connection is held while the external source responds.
+    db.rollback()
     try:
         data = provider.lookup_by_account(account_no)
     except BillingInvalidAccount:
@@ -99,6 +104,13 @@ def create_lookup(
         or sum(len(connection.ip_groups) for connection in data.connections) > MAX_TOTAL_GROUPS
         or sum(len(group.rows) for connection in data.connections for group in connection.ip_groups)
         > MAX_TOTAL_GROUP_ROWS
+        or sum(
+            len(row.dhcp_ranges)
+            for connection in data.connections
+            for group in connection.ip_groups
+            for row in group.rows
+        )
+        > MAX_TOTAL_RANGES
         or any(
             len(connection.ip_groups) > MAX_ITEMS
             or any(len(group.rows) > 100 for group in connection.ip_groups)
@@ -108,6 +120,12 @@ def create_lookup(
         _audit(db, actor_id, "invalid")
         db.commit()
         raise ApiError(503, "billing_invalid_response", "Billing source returned too many items")
+    if len(data.model_dump_json().encode("utf-8")) > MAX_SERIALIZED_BYTES:
+        _audit(db, actor_id, "invalid")
+        db.commit()
+        raise ApiError(503, "billing_invalid_response", "Billing source response is too large")
+    # Identity may have been deactivated or re-roled while NetUP was queried.
+    _actor(db, actor_id)
     snapshot = SubscriberSnapshot(
         account_no=data.billing_account,
         source=data.source,

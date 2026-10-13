@@ -327,31 +327,28 @@ def test_repository_loads_multiple_accounts_links_and_group_rows() -> None:
             elif sql.startswith("SELECT DISTINCT a.id FROM users_accounts"):
                 self.rows = [{"id": 202}, {"id": 203}]
             elif sql.startswith("SELECT sl.id"):
-                self.rows = (
-                    [
-                        {
-                            "id": 301,
-                            "account_id": 202,
-                            "service_name": "Synthetic Internet",
-                            "service_type": 3,
-                        }
-                    ]
-                    if params[1] == 202
-                    else [
-                        {
-                            "id": 302,
-                            "account_id": 203,
-                            "service_name": "Synthetic ancillary",
-                            "service_type": 2,
-                        }
-                    ]
-                )
-            elif sql.startswith("SELECT ip_group_id"):
-                self.rows = [{"ip_group_id": 9}]
+                assert params[1:3] == (202, 203)
+                self.rows = [
+                    {
+                        "id": 301,
+                        "account_id": 202,
+                        "service_name": "Synthetic Internet",
+                        "service_type": 3,
+                    },
+                    {
+                        "id": 302,
+                        "account_id": 203,
+                        "service_name": "Synthetic ancillary",
+                        "service_type": 2,
+                    },
+                ]
+            elif sql.startswith("SELECT id,ip_group_id"):
+                self.rows = [{"id": 301, "ip_group_id": 9}]
             elif sql.startswith("SELECT g.id"):
                 self.rows = [
                     {
                         "id": 11,
+                        "ip_group_id": 9,
                         "ip_type": 0,
                         "ip": 0,
                         "mask": 0,
@@ -365,6 +362,7 @@ def test_repository_loads_multiple_accounts_links_and_group_rows() -> None:
                     },
                     {
                         "id": 12,
+                        "ip_group_id": 9,
                         "ip_type": 4,
                         "ip": 123456,
                         "mask": 654321,
@@ -379,8 +377,8 @@ def test_repository_loads_multiple_accounts_links_and_group_rows() -> None:
                 ]
             elif sql.startswith("SELECT id FROM dhcp_pool_info"):
                 self.rows = [{"id": 3}]
-            elif sql.startswith("SELECT id,first_ip,last_ip"):
-                self.rows = [{"id": 5, "first_ip": 1000, "last_ip": 2000}]
+            elif sql.startswith("SELECT id,pool_id,first_ip,last_ip"):
+                self.rows = [{"id": 5, "pool_id": 3, "first_ip": 1000, "last_ip": 2000}]
             else:
                 raise AssertionError("Unexpected query")
 
@@ -393,6 +391,7 @@ def test_repository_loads_multiple_accounts_links_and_group_rows() -> None:
     assert len(raw.services[0].groups[0].rows) == 2
     assert raw.services[0].groups[0].rows[0].ranges[0].range_id == 5
     assert connection.rolled_back and connection.closed
+    assert len(cursor.calls) == 12  # 3 transaction commands and 9 bounded data queries
     assert all("%s" in sql for sql, _ in cursor.calls if sql.startswith("SELECT"))
     assert all("202" not in sql for sql, _ in cursor.calls)
     assert all(
@@ -412,6 +411,28 @@ def test_provider_hides_db_failure_and_secrets(caplog: pytest.LogCaptureFixture)
         provider.lookup_by_account("202")
     assert str(error.value) == ""
     assert "synthetic-secret-not-for-logs" not in caplog.text
+
+
+def test_repository_overload_and_deadline_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.billing.netup import repository as netup_repository
+
+    class NoSlots:
+        def acquire(self, timeout: int) -> bool:
+            assert timeout == 1
+            return False
+
+        def release(self) -> None:
+            raise AssertionError("No slot was acquired")
+
+    monkeypatch.setattr(netup_repository, "LOOKUP_SLOTS", NoSlots())
+    with pytest.raises(BillingUnavailable):
+        NetupRepository(
+            lambda: pytest.fail("overloaded lookup opened a connection")
+        ).lookup_by_account("202")
+    cursor = FakeCursor([])
+    with pytest.raises(TimeoutError):
+        NetupRepository._select(cursor, "SELECT 1", (), 0)
+    assert cursor.calls == []
 
 
 def test_config_masks_secret_and_requires_tls(tmp_path: Path) -> None:

@@ -1,8 +1,10 @@
 """Bounded, parameterized UTM5 reads within one consistent read-only snapshot."""
 
 import re
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
+from threading import BoundedSemaphore
 from time import monotonic
 from typing import Any
 
@@ -14,7 +16,12 @@ from app.modules.billing.netup.dto import (
     NetupService,
     NetupSubscriber,
 )
-from app.modules.billing.provider import BillingAmbiguous, BillingIncomplete, BillingInvalidAccount
+from app.modules.billing.provider import (
+    BillingAmbiguous,
+    BillingIncomplete,
+    BillingInvalidAccount,
+    BillingUnavailable,
+)
 
 MAX_ACCOUNTS = 50
 MAX_SERVICES = 50
@@ -23,7 +30,9 @@ MAX_ROWS_PER_GROUP = 100
 MAX_TOTAL_GROUPS = 200
 MAX_TOTAL_GROUP_ROWS = 2000
 MAX_RANGES_PER_POOL = 50
+MAX_POOLS = 100
 LOOKUP_DEADLINE_SECONDS = 15
+LOOKUP_SLOTS = BoundedSemaphore(8)
 CANONICAL_ACCOUNT = re.compile(r"[1-9][0-9]*\Z", re.ASCII)
 
 
@@ -50,22 +59,26 @@ class NetupRepository:
 
     def lookup_by_account(self, account_no: str) -> NetupSubscriber | None:
         account_id = parse_account_no(account_no)
-        connection = self._connection_factory()
         deadline = monotonic() + LOOKUP_DEADLINE_SECONDS
+        if not LOOKUP_SLOTS.acquire(timeout=1):
+            raise BillingUnavailable from None
         try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SET SESSION max_statement_time=%s", (self._max_statement_ms / 1000,)
-                )
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-                cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
-                result = self._load(cursor, account_id, deadline)
-            return result
-        finally:
+            connection = self._connection_factory()
             try:
-                connection.rollback()
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SET SESSION max_statement_time=%s", (self._max_statement_ms / 1000,)
+                    )
+                    cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                    cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                    return self._load(cursor, account_id, deadline)
             finally:
-                connection.close()
+                try:
+                    connection.rollback()
+                finally:
+                    connection.close()
+        finally:
+            LOOKUP_SLOTS.release()
 
     @staticmethod
     def _select(cursor: Any, sql: str, params: tuple[Any, ...], deadline: float) -> list[dict]:
@@ -73,6 +86,12 @@ class NetupRepository:
             raise TimeoutError("NetUP lookup deadline exceeded")
         cursor.execute(sql, params)
         return list(cursor.fetchall())
+
+    @staticmethod
+    def _placeholders(values: list[int]) -> str:
+        if not values:
+            raise BillingIncomplete from None
+        return ",".join(["%s"] * len(values))
 
     def _load(self, cursor: Any, account_id: int, deadline: float) -> NetupSubscriber | None:
         select = self._select
@@ -126,44 +145,142 @@ class NetupRepository:
         if sum(item.is_primary for item in accounts) != 1:
             raise BillingIncomplete from None
         as_of = int((self._lab_as_of_utc or datetime.now(UTC)).timestamp())
-        services: list[NetupService] = []
-        total_groups = total_group_rows = 0
-        range_cache: dict[int, tuple[NetupRange, ...]] = {}
-        for item in accounts:
-            rows = select(
+        account_ids = [item.account_id for item in accounts]
+        service_rows = select(
+            cursor,
+            "SELECT sl.id,sl.account_id,sd.service_name,sd.service_type "
+            "FROM service_links sl "
+            "JOIN services_data sd ON sd.id=sl.service_id AND sd.is_deleted=0 "
+            "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+            f"WHERE sl.user_id=%s AND sl.account_id IN ({self._placeholders(account_ids)}) "
+            "AND sl.is_deleted=0 AND sd.service_type IN (2,3) "
+            "AND psl.is_planned=0 AND psl.need_del=0 "
+            "AND psl.start_date<=%s AND psl.expire_date>%s "
+            "ORDER BY sl.id LIMIT 51",
+            (user_id, *account_ids, as_of, as_of),
+            deadline,
+        )
+        if len(service_rows) > MAX_SERVICES:
+            raise BillingIncomplete from None
+        ip_services = [row["id"] for row in service_rows if row["service_type"] == 3]
+        references: dict[int, list[int]] = defaultdict(list)
+        if ip_services:
+            reference_rows = select(
                 cursor,
-                "SELECT sl.id,sl.account_id,sd.service_name,sd.service_type "
-                "FROM service_links sl "
-                "JOIN services_data sd ON sd.id=sl.service_id AND sd.is_deleted=0 "
-                "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
-                "WHERE sl.user_id=%s AND sl.account_id=%s AND sl.is_deleted=0 "
-                "AND sd.service_type IN (2,3) AND psl.is_planned=0 AND psl.need_del=0 "
-                "AND psl.start_date<=%s AND psl.expire_date>%s "
-                "ORDER BY sl.id LIMIT 51",
-                (user_id, item.account_id, as_of, as_of),
+                "SELECT id,ip_group_id FROM iptraffic_service_links "
+                f"WHERE id IN ({self._placeholders(ip_services)}) AND is_deleted=0 "
+                "ORDER BY id,ip_group_id LIMIT 1001",
+                tuple(ip_services),
                 deadline,
             )
-            if len(rows) > MAX_SERVICES or len(services) + len(rows) > MAX_SERVICES:
+            if len(reference_rows) > MAX_SERVICES * MAX_GROUPS_PER_SERVICE:
                 raise BillingIncomplete from None
-            for row in rows:
-                groups = (
-                    self._groups(cursor, row["id"], range_cache, deadline)
-                    if row["service_type"] == 3
-                    else ()
+            for row in reference_rows:
+                references[row["id"]].append(row["ip_group_id"])
+            if any(
+                not references[item] or len(references[item]) > MAX_GROUPS_PER_SERVICE
+                for item in ip_services
+            ):
+                raise BillingIncomplete from None
+        group_ids = sorted({group for values in references.values() for group in values})
+        if len(group_ids) > MAX_TOTAL_GROUPS:
+            raise BillingIncomplete from None
+        group_rows: dict[int, list[dict]] = defaultdict(list)
+        if group_ids:
+            raw_rows = select(
+                cursor,
+                "SELECT g.id,g.ip_group_id,g.ip_type,g.ip,g.mask,g.ip_ext,g.mask_ext,g.pool_id,"
+                "g.switch_id,g.port_id,g.vlan_id,s.name AS switch_name "
+                "FROM ip_groups g LEFT JOIN switches s ON s.id=g.switch_id AND s.is_deleted=0 "
+                f"WHERE g.ip_group_id IN ({self._placeholders(group_ids)}) "
+                "AND g.is_deleted=0 ORDER BY g.ip_group_id,g.id LIMIT 2001",
+                tuple(group_ids),
+                deadline,
+            )
+            if len(raw_rows) > MAX_TOTAL_GROUP_ROWS:
+                raise BillingIncomplete from None
+            for row in raw_rows:
+                group_rows[row["ip_group_id"]].append(row)
+            if any(
+                not group_rows[item] or len(group_rows[item]) > MAX_ROWS_PER_GROUP
+                for item in group_ids
+            ):
+                raise BillingIncomplete from None
+        pool_ids = (
+            sorted({row["pool_id"] for row in raw_rows if row["pool_id"] > 0}) if group_ids else []
+        )
+        if len(pool_ids) > MAX_POOLS:
+            raise BillingIncomplete from None
+        range_cache: dict[int, tuple[NetupRange, ...]] = {}
+        if pool_ids:
+            pools = select(
+                cursor,
+                "SELECT id FROM dhcp_pool_info "
+                f"WHERE id IN ({self._placeholders(pool_ids)}) AND is_deleted=0 LIMIT 101",
+                tuple(pool_ids),
+                deadline,
+            )
+            if len(pools) != len(pool_ids):
+                raise BillingIncomplete from None
+            range_rows = select(
+                cursor,
+                "SELECT id,pool_id,first_ip,last_ip FROM dhcp_pool_ranges "
+                f"WHERE pool_id IN ({self._placeholders(pool_ids)}) AND is_deleted=0 "
+                "ORDER BY pool_id,id LIMIT 5001",
+                tuple(pool_ids),
+                deadline,
+            )
+            if len(range_rows) > MAX_POOLS * MAX_RANGES_PER_POOL:
+                raise BillingIncomplete from None
+            ranges: dict[int, list[NetupRange]] = defaultdict(list)
+            for row in range_rows:
+                ranges[row["pool_id"]].append(
+                    NetupRange(row["id"], row["first_ip"], row["last_ip"])
                 )
-                total_groups += len(groups)
-                total_group_rows += sum(len(group.rows) for group in groups)
-                if total_groups > MAX_TOTAL_GROUPS or total_group_rows > MAX_TOTAL_GROUP_ROWS:
-                    raise BillingIncomplete from None
-                services.append(
-                    NetupService(
-                        link_id=row["id"],
-                        account_id=item.account_id,
-                        name=row["service_name"],
-                        service_type=row["service_type"],
-                        groups=groups,
-                    )
+            if any(
+                not ranges[item] or len(ranges[item]) > MAX_RANGES_PER_POOL for item in pool_ids
+            ):
+                raise BillingIncomplete from None
+            range_cache = {item: tuple(ranges[item]) for item in pool_ids}
+        services: list[NetupService] = []
+        total_groups = total_group_rows = 0
+        for row in service_rows:
+            groups = tuple(
+                NetupGroup(
+                    group_id,
+                    tuple(
+                        NetupGroupRow(
+                            row_id=item["id"],
+                            ip_type=item["ip_type"],
+                            ip=item["ip"],
+                            mask=item["mask"],
+                            ip_ext=item["ip_ext"],
+                            mask_ext=item["mask_ext"],
+                            pool_id=item["pool_id"],
+                            switch_id=item["switch_id"],
+                            switch_name=item["switch_name"],
+                            port_id=item["port_id"],
+                            vlan_id=item["vlan_id"],
+                            ranges=range_cache.get(item["pool_id"], ()),
+                        )
+                        for item in group_rows[group_id]
+                    ),
                 )
+                for group_id in references[row["id"]]
+            )
+            total_groups += len(groups)
+            total_group_rows += sum(len(group.rows) for group in groups)
+            if total_groups > MAX_TOTAL_GROUPS or total_group_rows > MAX_TOTAL_GROUP_ROWS:
+                raise BillingIncomplete from None
+            services.append(
+                NetupService(
+                    link_id=row["id"],
+                    account_id=row["account_id"],
+                    name=row["service_name"],
+                    service_type=row["service_type"],
+                    groups=groups,
+                )
+            )
         return NetupSubscriber(
             user_id=user_id,
             requested_account_id=account_id,
@@ -179,79 +296,3 @@ class NetupRepository:
             fetched_at=datetime.now(UTC),
             source_as_of=self._lab_as_of_utc,
         )
-
-    def _groups(
-        self,
-        cursor: Any,
-        link_id: int,
-        range_cache: dict[int, tuple[NetupRange, ...]],
-        deadline: float,
-    ) -> tuple[NetupGroup, ...]:
-        select = self._select
-        references = select(
-            cursor,
-            "SELECT ip_group_id FROM iptraffic_service_links WHERE id=%s AND is_deleted=0 LIMIT 21",
-            (link_id,),
-            deadline,
-        )
-        if not references or len(references) > MAX_GROUPS_PER_SERVICE:
-            raise BillingIncomplete from None
-        groups = []
-        for reference in references:
-            group_id = reference["ip_group_id"]
-            rows = select(
-                cursor,
-                "SELECT g.id,g.ip_type,g.ip,g.mask,g.ip_ext,g.mask_ext,g.pool_id,"
-                "g.switch_id,g.port_id,g.vlan_id,s.name AS switch_name "
-                "FROM ip_groups g LEFT JOIN switches s ON s.id=g.switch_id AND s.is_deleted=0 "
-                "WHERE g.ip_group_id=%s AND g.is_deleted=0 ORDER BY g.id LIMIT 101",
-                (group_id,),
-                deadline,
-            )
-            if not rows or len(rows) > MAX_ROWS_PER_GROUP:
-                raise BillingIncomplete from None
-            group_rows = []
-            for row in rows:
-                pool_id = row["pool_id"]
-                ranges = ()
-                if pool_id > 0:
-                    if pool_id not in range_cache:
-                        pool = select(
-                            cursor,
-                            "SELECT id FROM dhcp_pool_info WHERE id=%s AND is_deleted=0",
-                            (pool_id,),
-                            deadline,
-                        )
-                        if len(pool) != 1:
-                            raise BillingIncomplete from None
-                        raw_ranges = select(
-                            cursor,
-                            "SELECT id,first_ip,last_ip FROM dhcp_pool_ranges "
-                            "WHERE pool_id=%s AND is_deleted=0 ORDER BY id LIMIT 51",
-                            (pool_id,),
-                            deadline,
-                        )
-                        if not raw_ranges or len(raw_ranges) > MAX_RANGES_PER_POOL:
-                            raise BillingIncomplete from None
-                        range_cache[pool_id] = tuple(
-                            NetupRange(r["id"], r["first_ip"], r["last_ip"]) for r in raw_ranges
-                        )
-                    ranges = range_cache[pool_id]
-                group_rows.append(
-                    NetupGroupRow(
-                        row_id=row["id"],
-                        ip_type=row["ip_type"],
-                        ip=row["ip"],
-                        mask=row["mask"],
-                        ip_ext=row["ip_ext"],
-                        mask_ext=row["mask_ext"],
-                        pool_id=pool_id,
-                        switch_id=row["switch_id"],
-                        switch_name=row["switch_name"],
-                        port_id=row["port_id"],
-                        vlan_id=row["vlan_id"],
-                        ranges=ranges,
-                    )
-                )
-            groups.append(NetupGroup(group_id, tuple(group_rows)))
-        return tuple(groups)
