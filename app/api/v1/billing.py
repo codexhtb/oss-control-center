@@ -23,7 +23,9 @@ router = APIRouter(prefix="/subscriber-lookups", tags=["billing"])
 def get_billing_provider() -> BillingProvider:
     if get_settings().billing_provider == "NETUP":
         try:
-            return NetUPBillingProvider.from_config(NetupConfig.from_env())
+            return NetUPBillingProvider.from_config(
+                NetupConfig.from_env(app_env=get_settings().app_env)
+            )
         except ValueError:
             return UnavailableBillingProvider()
     return MockBillingProvider()

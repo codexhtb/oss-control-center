@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, SecretStr, field_validator, model_validat
 
 
 class NetupConfig(BaseModel):
+    app_env: Literal["dev", "test", "production"] = "dev"
     purpose: Literal["production", "lab"] = "production"
     host: str = Field(min_length=1)
     port: int = Field(default=3306, ge=1, le=65535)
@@ -33,6 +34,8 @@ class NetupConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_transport(self) -> "NetupConfig":
+        if self.app_env == "production" and (self.purpose == "lab" or self.allow_plaintext_lab):
+            raise ValueError("Lab NetUP transport is unavailable in production APP_ENV")
         if self.lab_as_of_utc is not None:
             if self.purpose != "lab":
                 raise ValueError("Historical as_of is lab-only")
@@ -52,10 +55,13 @@ class NetupConfig(BaseModel):
         return self
 
     @classmethod
-    def from_env(cls, environment: Mapping[str, str] | None = None) -> "NetupConfig":
+    def from_env(
+        cls, environment: Mapping[str, str] | None = None, *, app_env: str | None = None
+    ) -> "NetupConfig":
         values = os.environ if environment is None else environment
         return cls.model_validate(
             {
+                "app_env": app_env if app_env is not None else values.get("APP_ENV", "dev"),
                 "purpose": values.get("NETUP_PURPOSE", "production"),
                 "host": values.get("NETUP_HOST"),
                 "port": values.get("NETUP_PORT", "3306"),

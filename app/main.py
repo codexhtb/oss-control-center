@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 
 from app.api.v1.router import router
@@ -28,6 +28,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     configure_logging()
     application = FastAPI(title="OSS Control Center", lifespan=lifespan)
+
+    @application.middleware("http")
+    async def private_api_cache(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/v1/") and not request.url.path.startswith(
+            "/api/v1/health/"
+        ):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     application.add_middleware(LookupBodyLimit)
     application.add_exception_handler(ApiError, handle_api_error)
     application.add_exception_handler(RequestValidationError, handle_validation_error)
