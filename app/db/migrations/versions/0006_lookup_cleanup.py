@@ -73,7 +73,7 @@ def upgrade() -> None:
             removed integer := 0;
             cutoff timestamptz := clock_timestamp() - interval '24 hours';
         BEGIN
-            IF p_limit < 1 OR p_limit > 500 THEN
+            IF p_limit IS NULL OR p_limit < 1 OR p_limit > 500 THEN
                 RAISE EXCEPTION USING MESSAGE = 'invalid cleanup batch limit', ERRCODE = '22023';
             END IF;
             SELECT array_agg(candidate.id) INTO ids FROM (

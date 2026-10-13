@@ -87,6 +87,13 @@ def test_cleanup_migration_preserves_ticket_and_limits_deletion(
             )
 
         command.upgrade(config, "head")
+        for invalid_limit in (None, 0, 501):
+            with pytest.raises(DBAPIError):
+                with engine.begin() as connection:
+                    connection.scalar(
+                        text("SELECT purge_expired_lookup_snapshots(:limit)"),
+                        {"limit": invalid_limit},
+                    )
         with engine.begin() as connection:
             connection.execute(
                 text("SELECT id FROM subscriber_snapshots WHERE id=:id FOR KEY SHARE"),
