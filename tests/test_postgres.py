@@ -7,11 +7,13 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import URL
+from sqlalchemy.orm import Session
 
 from app.api.v1 import health
 from app.main import create_app
+from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot
 
 
 def test_postgres_connection(isolated_postgres_url: URL) -> None:
@@ -45,6 +47,31 @@ def test_baseline_migration_applies_to_empty_database(
             tables = inspect(connection).get_table_names()
         assert revision == "0001_foundation"
         assert tables == ["alembic_version"]
+    finally:
+        engine.dispose()
+
+
+def test_fresh_database_reaches_head_before_current_orm(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    engine = create_engine(isolated_postgres_url, connect_args={"connect_timeout": 5})
+    try:
+        with engine.connect() as connection:
+            assert inspect(connection).get_table_names() == []
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            assert MigrationContext.configure(connection).get_current_revision() == (
+                "0005_netup_groups"
+            )
+        # Query compilation and execution detect any ORM column missing from head.
+        with Session(engine) as db:
+            assert db.scalars(select(SubscriberSnapshot).limit(1)).all() == []
+            assert db.scalars(select(ConnectionSnapshot).limit(1)).all() == []
     finally:
         engine.dispose()
 

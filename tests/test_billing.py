@@ -462,10 +462,22 @@ def test_upgrade_existing_ticket_from_0003(
                 ).scalar_one()
                 == {}
             )
+            assert "actual_address" not in {
+                column["name"] for column in inspect(connection).get_columns("subscriber_snapshots")
+            }
+        # The current ORM includes 0005 columns; inspect 0004 only with raw SQL.
+        command.upgrade(config, "0005_netup_groups")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                == "0005_netup_groups"
+            )
         with Session(engine) as db:
             detail = ticket_detail(db, ticket_id)
             assert detail.account_no == "MOCK-LEGACY"
             assert detail.selected_service_id is None
             assert detail.subscriber.field_meta == {}
+            assert detail.subscriber.actual_address is None
+            assert detail.subscriber.accounts == []
     finally:
         engine.dispose()

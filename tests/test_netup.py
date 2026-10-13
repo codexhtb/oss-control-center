@@ -8,8 +8,9 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL
+from sqlalchemy.orm import Session
 
 from app.modules.billing.mock import MockBillingProvider
 from app.modules.billing.netup.config import NetupConfig
@@ -32,6 +33,7 @@ from app.modules.billing.provider import (
 )
 from app.modules.billing.quality import DataQuality
 from app.modules.network.models import AccessType
+from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot
 
 
 def synthetic_group(*, conflict: bool = False) -> NetupGroup:
@@ -737,7 +739,15 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
                 ),
                 {"id": connection_id, "parent": snapshot_id},
             )
-        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            assert "actual_address" not in {
+                column["name"] for column in inspect(connection).get_columns("subscriber_snapshots")
+            }
+            assert "ip_groups" not in {
+                column["name"] for column in inspect(connection).get_columns("connection_snapshots")
+            }
+        # Only raw SQL is valid at 0004; use the current ORM after 0005.
+        command.upgrade(config, "0005_netup_groups")
         with engine.connect() as connection:
             row = connection.execute(
                 text(
@@ -751,5 +761,64 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one() == ("0005_netup_groups")
+        with Session(engine) as db:
+            snapshot = db.get(SubscriberSnapshot, snapshot_id)
+            stored_connection = db.get(ConnectionSnapshot, connection_id)
+            assert snapshot is not None and stored_connection is not None
+            assert snapshot.actual_address is None and snapshot.accounts == []
+            assert stored_connection.service_id is None and stored_connection.ip_groups == []
+
+            raw = synthetic_subscriber(conflict=True)
+            first_service, second_service = raw.services
+            extra_group = NetupGroup(10, synthetic_group().rows)
+            first_service = NetupService(
+                first_service.link_id,
+                first_service.account_id,
+                first_service.name,
+                first_service.service_type,
+                (*first_service.groups, extra_group),
+            )
+            card = normalize_netup(
+                NetupSubscriber(**{**raw.__dict__, "services": (first_service, second_service)})
+            )
+            new_snapshot = SubscriberSnapshot(
+                id=uuid4(),
+                account_no=card.billing_account,
+                source=card.source,
+                fetched_at=card.fetched_at,
+                expires_at=card.fetched_at + timedelta(hours=1),
+                requested_by=user_id,
+                actual_address=card.actual_address,
+                accounts=[account.model_dump(mode="json") for account in card.accounts],
+                contracts=[],
+                services=[service.model_dump(mode="json") for service in card.services],
+            )
+            expected_groups = [
+                group.model_dump(mode="json") for group in card.connections[0].ip_groups
+            ]
+            expected_meta = {
+                key: origin.model_dump(mode="json")
+                for key, origin in card.connections[0].field_meta.items()
+            }
+            new_connection = ConnectionSnapshot(
+                id=uuid4(),
+                subscriber_snapshot_id=new_snapshot.id,
+                access_type=card.connections[0].access_type,
+                service_id=card.connections[0].service_id,
+                ip_groups=expected_groups,
+                field_meta=expected_meta,
+            )
+            db.add_all([new_snapshot, new_connection])
+            db.commit()
+            db.expire_all()
+            reloaded_snapshot = db.get(SubscriberSnapshot, new_snapshot.id)
+            reloaded_connection = db.get(ConnectionSnapshot, new_connection.id)
+            assert reloaded_snapshot is not None and reloaded_connection is not None
+            assert len(reloaded_snapshot.accounts) == 2
+            assert reloaded_connection.service_id == "301"
+            assert reloaded_connection.ip_groups == expected_groups
+            assert [group["group_id"] for group in reloaded_connection.ip_groups] == ["9", "10"]
+            assert len(reloaded_connection.ip_groups[0]["rows"]) == 3
+            assert reloaded_connection.field_meta["device"]["quality"] == "CONFLICT"
     finally:
         engine.dispose()
