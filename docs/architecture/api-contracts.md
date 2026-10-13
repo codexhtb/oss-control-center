@@ -1,5 +1,7 @@
 # API contracts — Phase 1
 
+Утверждённое дополнение Phase 1.4: [контракт трёх типов создания заявок](phase-1.4-ticket-types.md). После реализации `POST /tickets` принимает `SUBSCRIBER_LINKED`, `MANUAL` и `INTERNAL` от `operator` и `engineer`; обе роли могут выполнить lookup и прочитать разрешённый Subscriber Snapshot для linked варианта. Таблица HTTP операций ниже описывает действующий subscriber-linked API до Phase 1.4; варианты `MANUAL` и `INTERNAL` пока не реализованы. Прежний запрос с `lookup_id` останется совместимым.
+
 Версия HTTP API: `/api/v1`. Это контракт OSS Control Center, а не описание API NetUP. Все записи сохраняются в PostgreSQL. JSON использует UTF-8, идентификаторы ресурсов — UUID, лицевой счёт — строка (ведущие нули сохраняются), время — UTC ISO 8601. Поля без достоверного значения возвращаются как `null` или отсутствуют согласно схеме, а не заполняются догадкой.
 
 ## Phase 1.1 — служебные health endpoints
