@@ -11,6 +11,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.engine import URL, Engine
@@ -105,11 +106,9 @@ def test_upgrade_from_existing_foundation(
     engine = create_engine(isolated_postgres_url)
     try:
         command.upgrade(config, "head")
+        expected_head = ScriptDirectory.from_config(config).get_current_head()
         with engine.connect() as connection:
-            assert (
-                MigrationContext.configure(connection).get_current_revision()
-                == "0004_subscriber_360"
-            )
+            assert MigrationContext.configure(connection).get_current_revision() == expected_head
             assert {
                 "app_users",
                 "auth_sessions",
