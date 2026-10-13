@@ -47,7 +47,7 @@ from app.modules.tickets.service import (
     start_ticket,
     ticket_detail,
 )
-from app.modules.tickets.status import TicketPriority, TicketStatus
+from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 PageNumber = Annotated[int, Query(ge=1)]
@@ -163,6 +163,7 @@ def listing(
     number: Annotated[int | None, Query(ge=1)] = None,
     assignee: UUID | None = None,
     account_no: str | None = None,
+    ticket_type: TicketType | None = None,
 ):
     items, total = list_tickets(
         db,
@@ -173,6 +174,7 @@ def listing(
         number=number,
         assignee=assignee,
         account_no=account_no,
+        ticket_type=ticket_type,
     )
     return {"items": items, "page": page, "size": size, "total": total}
 

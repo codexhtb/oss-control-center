@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -24,12 +24,15 @@ from app.modules.identity.models import User
 from app.modules.identity.roles import Role
 from app.modules.tickets.models import (
     ConnectionSnapshot,
+    DiagnosticSnapshot,
     SubscriberSnapshot,
     Ticket,
     TicketAudit,
     TicketEvent,
 )
-from app.modules.tickets.service import start_ticket
+from app.modules.tickets.schemas import CreateTicket
+from app.modules.tickets.service import create_ticket, start_ticket
+from app.modules.tickets.status import TicketType
 
 ORIGIN = "https://oss.example.test"
 PASSWORD = "Test-password-with-sufficient-length-42!"
@@ -448,6 +451,16 @@ def test_failed_audit_rolls_back_ticket(ticket_engine: Engine, ticket_client: Te
         )
     with pytest.raises(Exception, match="blocked"):
         create(ticket_client, snapshot)
+    with pytest.raises(Exception, match="blocked"):
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": "INTERNAL",
+                "description": "Synthetic task",
+                "client_request_id": str(uuid4()),
+            },
+        )
     with Session(ticket_engine) as db:
         assert db.scalar(select(func.count()).select_from(Ticket)) == 0
         assert db.scalar(select(func.count()).select_from(TicketEvent)) == 0
@@ -472,3 +485,292 @@ def test_snapshot_and_history_are_immutable(
             connection.execute(
                 text("DELETE FROM ticket_history WHERE ticket_id = :id"), {"id": ticket_id}
             )
+
+
+def test_three_types_http_creation_rbac_and_filters(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "engineer", Role.ENGINEER)
+    seed_user(ticket_engine, "admin", Role.ADMIN)
+    created_ids = []
+    for actor in (operator, engineer):
+        snapshot, _ = seed_snapshot(ticket_engine, actor)
+        login(ticket_client, actor.login)
+        for kind in TicketType:
+            payload = {
+                "ticket_type": kind.value,
+                "description": f"Synthetic {kind.value} request",
+                "client_request_id": str(uuid4()),
+            }
+            if kind == TicketType.SUBSCRIBER_LINKED:
+                payload["lookup_id"] = str(snapshot.id)
+            response = ticket_client.post(
+                "/api/v1/tickets", headers=csrf(ticket_client), json=payload
+            )
+            assert response.status_code == 201, response.text
+            body = response.json()
+            created_ids.append(body["id"])
+            assert body["ticket_type"] == kind.value
+            assert body["status"] == "OPEN"
+            detail = ticket_client.get(f"/api/v1/tickets/{body['id']}")
+            assert detail.status_code == 200
+            assert detail.json()["technical_state"] == "UNKNOWN"
+            if kind == TicketType.SUBSCRIBER_LINKED:
+                assert detail.json()["subscriber"]["account_no"] == "000123"
+            else:
+                assert body["account_no"] is None
+                assert body["subscriber_snapshot_id"] is None
+                assert detail.json()["subscriber"] is None
+                assert detail.json()["selected_connection"] is None
+            listing = ticket_client.get("/api/v1/tickets", params={"ticket_type": kind.value})
+            assert listing.status_code == 200
+            assert all(item["ticket_type"] == kind.value for item in listing.json()["items"])
+    assert len(set(created_ids)) == 6
+    assert (
+        ticket_client.get("/api/v1/tickets", params={"account_no": "000123"}).json()["total"] == 2
+    )
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 6
+        assert db.scalar(select(func.count()).select_from(TicketEvent)) == 6
+        assert db.scalar(select(func.count()).select_from(TicketAudit)) == 6
+    login(ticket_client, "admin")
+    assert ticket_client.get("/api/v1/tickets").status_code == 403
+    for kind in TicketType:
+        assert (
+            ticket_client.post(
+                "/api/v1/tickets",
+                headers=csrf(ticket_client),
+                json={
+                    "ticket_type": kind.value,
+                    "description": "Denied",
+                    "client_request_id": str(uuid4()),
+                },
+            ).status_code
+            == 403
+        )
+
+
+def test_manual_internal_lifecycle_without_billing(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "engineer", Role.ENGINEER)
+    login(ticket_client, operator.login)
+    unavailable = ticket_client.post(
+        "/api/v1/subscriber-lookups",
+        headers=csrf(ticket_client),
+        json={"account_no": "MOCK-UNAVAILABLE-001"},
+    )
+    assert unavailable.status_code == 503
+    for kind in (TicketType.MANUAL, TicketType.INTERNAL):
+        created = ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": kind.value,
+                "description": "Synthetic task without billing",
+                "client_request_id": str(uuid4()),
+            },
+        )
+        assert created.status_code == 201, created.text
+        ticket_id = created.json()["id"]
+        assert (
+            ticket_client.post(
+                f"/api/v1/tickets/{ticket_id}/start",
+                headers={**csrf(ticket_client), "If-Match": '"1"'},
+            ).status_code
+            == 403
+        )
+        comment = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/comments",
+            headers=csrf(ticket_client),
+            json={"body": "Additional synthetic detail"},
+        )
+        assert comment.status_code == 201
+        login(ticket_client, engineer.login)
+        version = ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()["version"]
+        assigned = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/assignment",
+            headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+            json={"engineer_id": str(engineer.id)},
+        )
+        assert assigned.status_code == 200, assigned.text
+        started = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/start",
+            headers={**csrf(ticket_client), "If-Match": f'"{assigned.json()["version"]}"'},
+        )
+        assert started.status_code == 200, started.text
+        assert (
+            ticket_client.post(
+                f"/api/v1/tickets/{ticket_id}/close",
+                headers={**csrf(ticket_client), "If-Match": f'"{started.json()["version"]}"'},
+                json={"decision_id": str(uuid4())},
+            ).status_code
+            == 422
+        )
+        diagnostic = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/manual-diagnostics",
+            headers=csrf(ticket_client),
+            json={"finding": "Observed manually", "observed_at": datetime.now(UTC).isoformat()},
+        )
+        assert diagnostic.status_code == 201, diagnostic.text
+        assert diagnostic.json()["connection_snapshot_id"] is None
+        decision = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/decisions",
+            headers=csrf(ticket_client),
+            json={"decision_text": "Finished", "performed_actions": "Checked manually"},
+        )
+        assert decision.status_code == 201, decision.text
+        current = ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()
+        assert (
+            ticket_client.post(
+                f"/api/v1/tickets/{ticket_id}/close",
+                headers={**csrf(ticket_client), "If-Match": f'"{current["version"] - 1}"'},
+                json={"decision_id": decision.json()["id"]},
+            ).status_code
+            == 409
+        )
+        closed = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/close",
+            headers={**csrf(ticket_client), "If-Match": f'"{current["version"]}"'},
+            json={"decision_id": decision.json()["id"]},
+        )
+        assert closed.status_code == 200, closed.text
+        assert closed.json()["status"] == "CLOSED"
+        assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/history").json()["total"] == 7
+        assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/audit").json()["total"] == 7
+        with Session(ticket_engine) as db:
+            item = db.get(Ticket, UUID(ticket_id))
+            assert item.ticket_type == kind
+            assert item.subscriber_snapshot_id is None
+            assert db.scalar(select(func.count()).select_from(SubscriberSnapshot)) == 0
+            assert (
+                db.scalar(
+                    select(func.count())
+                    .select_from(DiagnosticSnapshot)
+                    .where(DiagnosticSnapshot.ticket_id == UUID(ticket_id))
+                )
+                == 1
+            )
+        login(ticket_client, operator.login)
+
+
+def test_ticket_type_validation_replay_and_legacy_client(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    snapshot, _ = seed_snapshot(ticket_engine, operator)
+    login(ticket_client, operator.login)
+    for kind in ("MANUAL", "INTERNAL"):
+        request_id = str(uuid4())
+        payload = {
+            "ticket_type": kind,
+            "description": "Synthetic request",
+            "client_request_id": request_id,
+        }
+        first = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+        assert first.status_code == 201, first.text
+        repeat = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+        assert repeat.status_code == 200
+        assert repeat.json()["id"] == first.json()["id"]
+        assert (
+            ticket_client.post(
+                "/api/v1/tickets",
+                headers=csrf(ticket_client),
+                json={**payload, "description": "Other"},
+            ).status_code
+            == 409
+        )
+        other_kind = "INTERNAL" if kind == "MANUAL" else "MANUAL"
+        assert (
+            ticket_client.post(
+                "/api/v1/tickets",
+                headers=csrf(ticket_client),
+                json={**payload, "ticket_type": other_kind},
+            ).status_code
+            == 409
+        )
+        for field, value in (
+            ("lookup_id", str(snapshot.id)),
+            ("lookup_id", None),
+            ("connection_snapshot_id", None),
+            ("selected_service_id", "test"),
+            ("account_no", "000123"),
+        ):
+            assert (
+                ticket_client.post(
+                    "/api/v1/tickets", headers=csrf(ticket_client), json={**payload, field: value}
+                ).status_code
+                == 422
+            )
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={"description": "No type or lookup", "client_request_id": str(uuid4())},
+        ).status_code
+        == 422
+    )
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={"ticket_type": "INTERNAL", "description": "x", "client_request_id": "bad"},
+        ).status_code
+        == 422
+    )
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": "INTERNAL",
+                "description": "x" * 10001,
+                "client_request_id": str(uuid4()),
+            },
+        ).status_code
+        == 422
+    )
+    legacy_id = uuid4()
+    legacy = create(ticket_client, snapshot, request_id=legacy_id)
+    assert legacy.status_code == 201, legacy.text
+    assert legacy.json()["ticket_type"] == "SUBSCRIBER_LINKED"
+    assert create(ticket_client, snapshot, request_id=legacy_id).status_code == 200
+
+
+def test_concurrent_manual_idempotency_and_version_conflict(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    actor = seed_user(ticket_engine, "engineer", Role.ENGINEER)
+    payload = CreateTicket.model_validate(
+        {
+            "ticket_type": "MANUAL",
+            "description": "Concurrent synthetic request",
+            "client_request_id": str(uuid4()),
+        }
+    )
+
+    def create_once() -> tuple[str, bool]:
+        with Session(ticket_engine) as db:
+            ticket, created = create_ticket(db, actor.id, payload)
+            return str(ticket.id), created
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: create_once(), range(2)))
+    assert results[0][0] == results[1][0]
+    assert sorted(created for _, created in results) == [False, True]
+
+    def start_once() -> str:
+        with Session(ticket_engine) as db:
+            try:
+                start_ticket(db, actor.id, UUID(results[0][0]), 1)
+                return "success"
+            except ApiError as exc:
+                return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(lambda _: start_once(), range(2))) == ["success", "version_conflict"]
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 1
+        assert db.scalar(select(func.count()).select_from(TicketEvent)) == 2

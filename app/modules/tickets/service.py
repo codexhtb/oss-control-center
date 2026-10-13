@@ -28,7 +28,7 @@ from app.modules.tickets.schemas import (
     ManualDiagnostic,
     TicketDetail,
 )
-from app.modules.tickets.status import TicketStatus
+from app.modules.tickets.status import TicketStatus, TicketType
 
 
 def _actor(db: Session, actor_id: UUID, permission: Permission) -> User:
@@ -100,6 +100,50 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
     )
     if existing:
         return _replayed(db, existing, payload)
+    account_no = None
+    snapshot_id = None
+    selected_service = None
+    selected = None
+    if payload.ticket_type == TicketType.SUBSCRIBER_LINKED:
+        account_no, snapshot_id, selected_service, selected = _linked_source(db, actor_id, payload)
+    ticket = Ticket(
+        ticket_type=payload.ticket_type,
+        account_no=account_no,
+        subscriber_snapshot_id=snapshot_id,
+        connection_snapshot_id=selected,
+        selected_service_id=selected_service,
+        description=payload.description,
+        status=TicketStatus.OPEN,
+        priority=payload.priority,
+        created_by=actor_id,
+        client_request_id=payload.client_request_id,
+        version=1,
+    )
+    db.add(ticket)
+    try:
+        db.flush()
+        _fact(db, ticket, actor_id, "ticket_created", {"status": TicketStatus.OPEN})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(
+            select(Ticket).where(
+                Ticket.created_by == actor_id, Ticket.client_request_id == payload.client_request_id
+            )
+        )
+        if existing:
+            return _replayed(db, existing, payload)
+        raise ApiError(409, "ticket_conflict", "Ticket could not be created") from None
+    db.refresh(ticket)
+    return ticket, True
+
+
+def _linked_source(
+    db: Session, actor_id: UUID, payload: CreateTicket
+) -> tuple[str, UUID, str | None, UUID | None]:
+    # The schema requires a lookup for linked tickets; keep the check at the service boundary.
+    if payload.lookup_id is None:
+        raise ApiError(422, "lookup_required", "Subscriber lookup is required")
     snapshot = db.get(SubscriberSnapshot, payload.lookup_id)
     if snapshot is None or snapshot.requested_by != actor_id:
         raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
@@ -144,38 +188,18 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         and selected_connection.service_id != selected_service
     ):
         raise ApiError(422, "service_connection_mismatch", "Connection belongs to another service")
-    ticket = Ticket(
-        account_no=snapshot.account_no,
-        subscriber_snapshot_id=snapshot.id,
-        connection_snapshot_id=selected,
-        selected_service_id=selected_service,
-        description=payload.description,
-        status=TicketStatus.OPEN,
-        priority=payload.priority,
-        created_by=actor_id,
-        client_request_id=payload.client_request_id,
-        version=1,
-    )
-    db.add(ticket)
-    try:
-        db.flush()
-        _fact(db, ticket, actor_id, "ticket_created", {"status": TicketStatus.OPEN})
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        existing = db.scalar(
-            select(Ticket).where(
-                Ticket.created_by == actor_id, Ticket.client_request_id == payload.client_request_id
-            )
-        )
-        if existing:
-            return _replayed(db, existing, payload)
-        raise ApiError(409, "ticket_conflict", "Ticket could not be created") from None
-    db.refresh(ticket)
-    return ticket, True
+    return snapshot.account_no, snapshot.id, selected_service, selected
 
 
 def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticket, bool]:
+    if (
+        ticket.ticket_type != payload.ticket_type
+        or ticket.description != payload.description
+        or ticket.priority != payload.priority
+    ):
+        raise ApiError(409, "request_id_conflict", "Request ID was used for different content")
+    if payload.ticket_type != TicketType.SUBSCRIBER_LINKED:
+        return ticket, False
     selected = payload.connection_snapshot_id
     if selected is None and ticket.connection_snapshot_id is not None:
         connections = db.scalars(
@@ -195,8 +219,6 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         ticket.subscriber_snapshot_id != payload.lookup_id
         or ticket.connection_snapshot_id != selected
         or ticket.selected_service_id != selected_service
-        or ticket.description != payload.description
-        or ticket.priority != payload.priority
     ):
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")
     return ticket, False
@@ -267,6 +289,7 @@ def list_tickets(
     number: int | None,
     assignee: UUID | None,
     account_no: str | None,
+    ticket_type: TicketType | None = None,
 ) -> tuple[list[Ticket], int]:
     conditions = []
     if status is not None:
@@ -279,6 +302,8 @@ def list_tickets(
         conditions.append(Ticket.assigned_engineer_id == assignee)
     if account_no is not None:
         conditions.append(Ticket.account_no == account_no)
+    if ticket_type is not None:
+        conditions.append(Ticket.ticket_type == ticket_type)
     total = db.scalar(select(func.count()).select_from(Ticket).where(*conditions)) or 0
     items = db.scalars(
         select(Ticket)

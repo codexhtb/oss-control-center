@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.billing.provider import Contact
 from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
@@ -14,12 +14,26 @@ class StrictModel(BaseModel):
 
 
 class CreateTicket(StrictModel):
-    lookup_id: UUID
+    ticket_type: TicketType = TicketType.SUBSCRIBER_LINKED
+    lookup_id: UUID | None = None
     connection_snapshot_id: UUID | None = None
     selected_service_id: str | None = Field(default=None, min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=10000)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "CreateTicket":
+        if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
+            if self.lookup_id is None:
+                raise ValueError("lookup_id is required for SUBSCRIBER_LINKED")
+        else:
+            if "ticket_type" not in self.model_fields_set:
+                raise ValueError("ticket_type is required without lookup_id")
+            forbidden = {"lookup_id", "connection_snapshot_id", "selected_service_id"}
+            if forbidden & self.model_fields_set:
+                raise ValueError("billing fields are forbidden for MANUAL and INTERNAL")
+        return self
 
 
 class AssignEngineer(StrictModel):
