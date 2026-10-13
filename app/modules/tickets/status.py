@@ -3,6 +3,12 @@
 from enum import StrEnum
 
 
+class TicketType(StrEnum):
+    SUBSCRIBER_LINKED = "SUBSCRIBER_LINKED"
+    MANUAL = "MANUAL"
+    INTERNAL = "INTERNAL"
+
+
 class TicketStatus(StrEnum):
     OPEN = "OPEN"
     IN_PROGRESS = "IN_PROGRESS"

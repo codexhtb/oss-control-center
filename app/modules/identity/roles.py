@@ -38,6 +38,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
         {
             Permission.SUBSCRIBER_READ,
             Permission.TICKET_READ,
+            Permission.TICKET_CREATE,
             Permission.TICKET_COMMENT,
             Permission.TICKET_START,
             Permission.TICKET_ASSIGN,

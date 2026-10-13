@@ -11,4 +11,4 @@
 
 Границы Phase 1 указаны в [плане реализации](phase-1-plan.md). Поздние фазы не блокируют разработку mock-based MVP.
 
-Подэтап [Phase 1.4](phase-1.4-ticket-types.md) расширяет Service Desk тремя путями создания (`SUBSCRIBER_LINKED`, `MANUAL`, `INTERNAL`) для оператора и инженера и простой формой Web UI. Архитектурный план и RBAC утверждены; реализация начнётся по отдельному заданию.
+Подэтап [Phase 1.4](phase-1.4-ticket-types.md) расширяет Service Desk тремя путями создания (`SUBSCRIBER_LINKED`, `MANUAL`, `INTERNAL`) для оператора и инженера и простой формой Web UI. Stage 1 вводит RBAC и схему; HTTP формы manual/internal и Web UI остаются следующими этапами.

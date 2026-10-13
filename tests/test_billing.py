@@ -120,6 +120,26 @@ def ticket_payload(card: dict, *, request_id: UUID | None = None) -> dict:
     }
 
 
+def test_engineer_can_lookup_and_create_linked_ticket_via_existing_api(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    engineer = seed_user(billing_engine, "linked_engineer", Role.ENGINEER)
+    login(billing_client, engineer.login)
+    card_response = lookup(billing_client, "MOCK-ETH-001")
+    assert card_response.status_code == 200
+    card = card_response.json()
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").status_code == 200
+    created = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+    )
+    assert created.status_code == 201, created.text
+    with Session(billing_engine) as db:
+        ticket = db.get(Ticket, UUID(created.json()["id"]))
+        assert ticket is not None
+        assert ticket.created_by == engineer.id
+        assert ticket.ticket_type == "SUBSCRIBER_LINKED"
+
+
 @pytest.mark.parametrize(
     ("account", "access_type"),
     [

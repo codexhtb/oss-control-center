@@ -28,6 +28,7 @@ from app.db.base import Base
 class SubscriberSnapshot(Base):
     __tablename__ = "subscriber_snapshots"
     __table_args__ = (
+        UniqueConstraint("id", "account_no", name="uq_subscriber_snapshots_id_account"),
         CheckConstraint("source IN ('MOCK', 'NETUP')", name="ck_subscriber_snapshots_source"),
         CheckConstraint("length(account_no) > 0", name="ck_subscriber_snapshots_account"),
         CheckConstraint("expires_at > fetched_at", name="ck_subscriber_snapshots_expiry"),
@@ -104,6 +105,12 @@ class Ticket(Base):
     __table_args__ = (
         UniqueConstraint("id", "subscriber_snapshot_id", name="uq_tickets_snapshot"),
         ForeignKeyConstraint(
+            ["subscriber_snapshot_id", "account_no"],
+            ["subscriber_snapshots.id", "subscriber_snapshots.account_no"],
+            ondelete="RESTRICT",
+            name="fk_tickets_confirmed_account",
+        ),
+        ForeignKeyConstraint(
             ["connection_snapshot_id", "subscriber_snapshot_id"],
             ["connection_snapshots.id", "connection_snapshots.subscriber_snapshot_id"],
             ondelete="RESTRICT",
@@ -124,6 +131,14 @@ class Ticket(Base):
         CheckConstraint("version > 0", name="ck_tickets_version"),
         CheckConstraint("length(description) > 0", name="ck_tickets_description"),
         CheckConstraint(
+            "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
+            "AND account_no IS NOT NULL AND length(account_no) > 0) OR "
+            "(ticket_type IN ('MANUAL', 'INTERNAL') AND subscriber_snapshot_id IS NULL "
+            "AND account_no IS NULL AND connection_snapshot_id IS NULL "
+            "AND selected_service_id IS NULL)",
+            name="ck_tickets_type_snapshot",
+        ),
+        CheckConstraint(
             "selected_service_id IS NULL OR length(selected_service_id) > 0",
             name="ck_tickets_selected_service_id",
         ),
@@ -143,11 +158,14 @@ class Ticket(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     number: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True, nullable=False)
-    account_no: Mapped[str] = mapped_column(String(100), nullable=False)
-    subscriber_snapshot_id: Mapped[UUID] = mapped_column(
+    ticket_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'SUBSCRIBER_LINKED'")
+    )
+    account_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    subscriber_snapshot_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("subscriber_snapshots.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     connection_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     selected_service_id: Mapped[str | None] = mapped_column(String(100))
@@ -277,6 +295,9 @@ class DiagnosticSnapshot(Base):
     __tablename__ = "diagnostic_snapshots"
     __table_args__ = (
         ForeignKeyConstraint(
+            ["ticket_id"], ["tickets.id"], ondelete="RESTRICT", name="fk_diagnostics_ticket"
+        ),
+        ForeignKeyConstraint(
             ["ticket_id", "subscriber_snapshot_id"],
             ["tickets.id", "tickets.subscriber_snapshot_id"],
             ondelete="RESTRICT",
@@ -290,12 +311,16 @@ class DiagnosticSnapshot(Base):
         ),
         CheckConstraint("source_kind = 'MANUAL'", name="ck_diagnostics_phase1_source"),
         CheckConstraint("availability IN ('KNOWN', 'UNKNOWN')", name="ck_diagnostics_availability"),
+        CheckConstraint(
+            "connection_snapshot_id IS NULL OR subscriber_snapshot_id IS NOT NULL",
+            name="ck_diagnostics_connection_parent_required",
+        ),
         Index("ix_diagnostics_ticket_recorded", "ticket_id", "recorded_at", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     ticket_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    subscriber_snapshot_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    subscriber_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     connection_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     source_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
     availability: Mapped[str] = mapped_column(String(16), nullable=False)

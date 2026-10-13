@@ -204,28 +204,42 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
 
 def ticket_detail(db: Session, ticket_id: UUID) -> TicketDetail:
     ticket = _ticket(db, ticket_id)
-    snapshot = db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
-    connections = db.scalars(
-        select(ConnectionSnapshot).where(ConnectionSnapshot.subscriber_snapshot_id == snapshot.id)
-    ).all()
-    subscriber = {
-        "id": snapshot.id,
-        "account_no": snapshot.account_no,
-        "subscriber_id": snapshot.subscriber_id,
-        "organization_name": snapshot.organization_name,
-        "email": snapshot.email,
-        "actual_address": snapshot.actual_address,
-        "accounts": snapshot.accounts,
-        "field_meta": snapshot.field_meta,
-        "source": snapshot.source,
-        "fetched_at": snapshot.fetched_at,
-        "full_name": snapshot.full_name,
-        "phone": snapshot.phone,
-        "contacts": snapshot.contacts,
-        "contracts": snapshot.contracts,
-        "services": snapshot.services,
-        "connections": connections,
-    }
+    snapshot = (
+        db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
+        if ticket.subscriber_snapshot_id is not None
+        else None
+    )
+    connections = (
+        db.scalars(
+            select(ConnectionSnapshot).where(
+                ConnectionSnapshot.subscriber_snapshot_id == snapshot.id
+            )
+        ).all()
+        if snapshot is not None
+        else []
+    )
+    subscriber = (
+        {
+            "id": snapshot.id,
+            "account_no": snapshot.account_no,
+            "subscriber_id": snapshot.subscriber_id,
+            "organization_name": snapshot.organization_name,
+            "email": snapshot.email,
+            "actual_address": snapshot.actual_address,
+            "accounts": snapshot.accounts,
+            "field_meta": snapshot.field_meta,
+            "source": snapshot.source,
+            "fetched_at": snapshot.fetched_at,
+            "full_name": snapshot.full_name,
+            "phone": snapshot.phone,
+            "contacts": snapshot.contacts,
+            "contracts": snapshot.contracts,
+            "services": snapshot.services,
+            "connections": connections,
+        }
+        if snapshot is not None
+        else None
+    )
     selected = next(
         (item for item in connections if item.id == ticket.connection_snapshot_id), None
     )

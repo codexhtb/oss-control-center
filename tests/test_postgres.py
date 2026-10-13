@@ -6,6 +6,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import URL
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1 import health
 from app.main import create_app
-from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot
+from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot, Ticket
 
 
 def test_postgres_connection(isolated_postgres_url: URL) -> None:
@@ -66,12 +67,13 @@ def test_fresh_database_reaches_head_before_current_orm(
         command.upgrade(config, "head")
         with engine.connect() as connection:
             assert MigrationContext.configure(connection).get_current_revision() == (
-                "0007_contacts"
+                ScriptDirectory.from_config(config).get_current_head()
             )
         # Query compilation and execution detect any ORM column missing from head.
         with Session(engine) as db:
             assert db.scalars(select(SubscriberSnapshot).limit(1)).all() == []
             assert db.scalars(select(ConnectionSnapshot).limit(1)).all() == []
+            assert db.scalars(select(Ticket).limit(1)).all() == []
     finally:
         engine.dispose()
 

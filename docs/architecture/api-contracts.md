@@ -1,6 +1,6 @@
 # API contracts — Phase 1
 
-Утверждённое дополнение Phase 1.4: [контракт трёх типов создания заявок](phase-1.4-ticket-types.md). После реализации `POST /tickets` принимает `SUBSCRIBER_LINKED`, `MANUAL` и `INTERNAL` от `operator` и `engineer`; обе роли могут выполнить lookup и прочитать разрешённый Subscriber Snapshot для linked варианта. Таблица HTTP операций ниже описывает действующий subscriber-linked API до Phase 1.4; варианты `MANUAL` и `INTERNAL` пока не реализованы. Прежний запрос с `lookup_id` останется совместимым.
+Утверждённое дополнение Phase 1.4: [контракт трёх типов создания заявок](phase-1.4-ticket-types.md). Stage 1 разрешает оператору и инженеру `POST /tickets` с прежним `lookup_id`, lookup и чтение разрешённого Subscriber Snapshot; ответы содержат `ticket_type`, а nullable связи не приводят к ошибке чтения. Новые HTTP-формы `MANUAL` и `INTERNAL` пока не реализованы. Таблица ниже описывает прежний subscriber-linked запрос; он остаётся совместимым.
 
 Версия HTTP API: `/api/v1`. Это контракт OSS Control Center, а не описание API NetUP. Все записи сохраняются в PostgreSQL. JSON использует UTF-8, идентификаторы ресурсов — UUID, лицевой счёт — строка (ведущие нули сохраняются), время — UTC ISO 8601. Поля без достоверного значения возвращаются как `null` или отсутствуют согласно схеме, а не заполняются догадкой.
 
@@ -47,7 +47,7 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | --- | --- | --- | --- |
 | `POST /subscriber-lookups` | Оператор, инженер + CSRF | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет immutable snapshot с `source=MOCK`, временем, автором поиска, сроком действия 15 минут и внутренними ID подключений; аудит чтения. Не найдено — `404`, источник недоступен — `503` без успешной карточки |
 | `GET /subscriber-lookups/{lookup_id}` | Автор поиска, оператор или инженер | — | Сохранённая карточка без повторного обращения к провайдеру; истечение срока отражается `is_expired` |
-| `POST /tickets` | Оператор | `{lookup_id, selected_service_id?, connection_snapshot_id?, description, client_request_id}` | `201` заявка `OPEN`; `lookup_id` подтверждает показанный snapshot; при нескольких услугах или подключениях выбор обязателен; ticket + история + аудит в одной транзакции |
+| `POST /tickets` | Оператор, инженер (Stage 1) | `{lookup_id, selected_service_id?, connection_snapshot_id?, description, client_request_id}` | `201` linked заявка `OPEN`; `lookup_id` подтверждает показанный snapshot; при нескольких услугах или подключениях выбор обязателен; ticket + история + аудит в одной транзакции |
 | `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `account_no`; `page`, `size` | Страница сводок; `total`, `page`, `size` |
 | `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка и связанный billing snapshot; комментарии, решения и ручные наблюдения читаются отдельными пагинированными путями |
 | `POST /tickets/{ticket_id}/start` | Инженер | `If-Match` с версией заявки | `OPEN → IN_PROGRESS`, история и аудит; повтор или конфликт версии — `409` |

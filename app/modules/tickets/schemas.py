@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.billing.provider import Contact
-from app.modules.tickets.status import TicketPriority, TicketStatus
+from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
 
 
 class StrictModel(BaseModel):
@@ -95,8 +95,9 @@ class TicketView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     number: int
-    account_no: str
-    subscriber_snapshot_id: UUID
+    ticket_type: TicketType
+    account_no: str | None
+    subscriber_snapshot_id: UUID | None
     connection_snapshot_id: UUID | None
     selected_service_id: str | None
     description: str
@@ -113,7 +114,7 @@ class TicketView(BaseModel):
 
 
 class TicketDetail(TicketView):
-    subscriber: SubscriberView
+    subscriber: SubscriberView | None
     selected_connection: ConnectionView | None
     technical_state: str = "UNKNOWN"
 

@@ -196,8 +196,19 @@ def test_logout_revokes_session(identity_engine: Engine, identity_client: TestCl
 @pytest.mark.parametrize(
     ("role", "expected"),
     [
-        (Role.OPERATOR, {Permission.TICKET_CREATE, Permission.TICKET_READ}),
-        (Role.ENGINEER, {Permission.TICKET_CLOSE, Permission.TICKET_READ}),
+        (
+            Role.OPERATOR,
+            {Permission.SUBSCRIBER_READ, Permission.TICKET_CREATE, Permission.TICKET_READ},
+        ),
+        (
+            Role.ENGINEER,
+            {
+                Permission.SUBSCRIBER_READ,
+                Permission.TICKET_CREATE,
+                Permission.TICKET_CLOSE,
+                Permission.TICKET_READ,
+            },
+        ),
         (Role.ADMIN, {Permission.IDENTITY_MANAGE}),
     ],
 )
@@ -210,6 +221,8 @@ def test_permissions_by_role(
     assert expected <= permissions
     assert (Permission.IDENTITY_MANAGE in permissions) == (role == Role.ADMIN)
     assert (Permission.TICKET_CLOSE in permissions) == (role == Role.ENGINEER)
+    assert (Permission.TICKET_CREATE in permissions) == (role != Role.ADMIN)
+    assert (Permission.SUBSCRIBER_READ in permissions) == (role != Role.ADMIN)
 
 
 @pytest.mark.parametrize("role", [Role.OPERATOR, Role.ENGINEER])
