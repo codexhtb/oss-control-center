@@ -108,7 +108,7 @@ def test_upgrade_from_existing_foundation(
         with engine.connect() as connection:
             assert (
                 MigrationContext.configure(connection).get_current_revision()
-                == "0002_identity_rbac"
+                == "0003_ticket_engine"
             )
             assert {
                 "app_users",

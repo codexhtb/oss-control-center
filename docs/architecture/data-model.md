@@ -4,6 +4,8 @@ PostgreSQL — единственный source of truth для обращени�
 
 **Граница Phase 1.2A:** ревизия `0001_foundation` создаёт только `alembic_version`; `0002_identity_rbac` вводит четыре таблицы идентификации. Таблицы заявок и Subscriber 360 остаются для следующих шагов Phase 1.
 
+**Phase 1.2B:** ревизия `0003_ticket_engine` вводит восемь таблиц Service Desk из ERD: `subscriber_snapshots`, `connection_snapshots`, `tickets`, `ticket_comments`, `ticket_decisions`, `ticket_history`, `audit_events`, `diagnostic_snapshots`. Снимки и дочерние факты защищены от UPDATE/DELETE триггерами; заявка допускает обновления, но не удаление. HTTP создание снимка через mock BillingProvider будет добавлено следующим шагом Phase 1.
+
 ## ERD
 
 ```mermaid
@@ -77,24 +79,28 @@ erDiagram
     uuid id PK
     uuid subscriber_snapshot_id FK
     text access_type
-    text device_identifier_nullable
-    text port_identifier_nullable
+    text device_nullable
+    text port_nullable
     text vlan_nullable
-    text onu_identifier_nullable
+    text onu_id_nullable
   }
   tickets {
     uuid id PK
+    bigint number UK
     uuid subscriber_snapshot_id FK
     uuid connection_snapshot_id FK
     text account_no
     text status
+    text priority
     text description
     uuid created_by FK
+    uuid assigned_engineer_id FK
     uuid closed_by FK
     uuid closed_decision_id FK
     uuid client_request_id
     int version
     timestamp created_at
+    timestamp updated_at
     timestamp closed_at_nullable
   }
   ticket_comments {
@@ -108,6 +114,7 @@ erDiagram
     uuid ticket_id FK
     uuid engineer_id FK
     text decision_text
+    text performed_actions
   }
   diagnostic_snapshots {
     uuid id PK
@@ -127,6 +134,7 @@ erDiagram
     uuid ticket_id FK
     text action
     text outcome
+    text origin
   }
   field_work_handoffs {
     uuid id PK
@@ -159,12 +167,12 @@ erDiagram
 | `identity_audit_events` — 1.2A | Append-only UUID `id`, nullable актор и цель, действие, результат, HMAC логина/источника при входе, время. Без паролей, токенов и полных персональных данных. |
 | `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, ФИО и контакт если доступны, данные договора и услуг в версионированной структуре. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
 | `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable устройство, порт, VLAN, ONU ID. ONU не требуется; для Ethernet не создаётся искусственный ONU ID. Несколько подключений сохраняются раздельно. |
-| `tickets` | `id`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `created_by`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранное подключение должно принадлежать указанному snapshot; при неоднозначности выбор явно подтверждается. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
+| `tickets` | `id`, уникальный `number`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранное подключение должно принадлежать указанному snapshot; при неоднозначности выбор явно подтверждается. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
 | `ticket_comments` | `id`, `ticket_id`, `author_id`, `body`, `created_at`. Записи не подменяют решение или автоматические данные. |
-| `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
-| `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, nullable `recorded_by`. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |
+| `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `performed_actions`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
+| `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, обязательный `recorded_by` для ручной проверки. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |
 | `ticket_history` | `id`, `ticket_id`, `event_type`, nullable `actor_id`, `event_data`, `occurred_at`. Append-only история доменных фактов: создание, начало работы, комментарий, решение, закрытие. |
-| `audit_events` | `id`, nullable `ticket_id`, nullable `actor_id`, `action`, `outcome`, `occurred_at`, безопасные метаданные. Append-only след доступа и изменений; полные ФИО, телефон, адрес, секреты и текст жалобы в технический аудит не копируются. |
+| `audit_events` | `id`, nullable `ticket_id`, nullable `actor_id`, `action`, `outcome`, `origin`, `occurred_at`. Append-only след изменений; полные ФИО, телефон, адрес, секреты и текст жалобы в технический аудит не копируются. Отказы доступа также отражаются в `identity_audit_events` по существующему механизму identity. |
 
 Содержимое обращения, комментария, решения и snapshot защищено правами доступа и политикой хранения. Поиск Subscriber 360 создаёт snapshot в PostgreSQL; снимки без заявки удаляются по настраиваемой политике хранения, а связанные с заявкой сохраняются согласно её сроку. Конкретный срок для рабочего окружения утверждается до production запуска, но не блокирует mock-based реализацию.
 

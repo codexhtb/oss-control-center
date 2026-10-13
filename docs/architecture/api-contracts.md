@@ -45,17 +45,22 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | --- | --- | --- | --- |
 | `POST /subscriber-lookups` | Оператор, инженер | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет snapshot с `source=MOCK`, временем, автором поиска, сроком действия и внутренними ID подключений; аудит чтения |
 | `POST /tickets` | Оператор | `{lookup_id, connection_snapshot_id?, description, client_request_id}` | `201` заявка `OPEN`; snapshot принадлежит lookup; выбор одного из нескольких подключений обязателен; ticket + история + аудит в одной транзакции |
-| `GET /tickets` | Оператор, инженер | Фильтры `status`, `account_no`, пагинация | Список без скрытых расширенных данных; серверная проверка прав и аудит чтения |
-| `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка, связанный billing snapshot, доступные комментарии, решение и ручные наблюдения |
+| `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `account_no`; `page`, `size` | Страница сводок; `total`, `page`, `size` |
+| `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка и связанный billing snapshot; комментарии, решения и ручные наблюдения читаются отдельными пагинированными путями |
 | `POST /tickets/{ticket_id}/start` | Инженер | `If-Match` с версией заявки | `OPEN → IN_PROGRESS`, история и аудит; повтор или конфликт версии — `409` |
+| `POST /tickets/{ticket_id}/assignment` | Инженер | `{engineer_id}` + `If-Match` | Назначение активного инженера, история и аудит; статус не меняется |
+| `POST /tickets/{ticket_id}/field-work-request` | Инженер | `{reason}` + `If-Match` | Событие с причиной из `IN_PROGRESS`; статус не меняется, Telegram не вызывается |
 | `POST /tickets/{ticket_id}/comments` | Оператор, инженер | `{body}` | `201` комментарий, история и аудит; закрытая заявка в Phase 1 не изменяется |
-| `POST /tickets/{ticket_id}/manual-diagnostics` | Инженер | `{finding, observed_at, connection_snapshot_id?}` | `201` snapshot с `source_kind=MANUAL`, история и аудит |
-| `POST /tickets/{ticket_id}/decisions` | Инженер | `{decision_text}` | `201` новая неизменяемая версия решения, история и аудит |
+| `GET /tickets/{ticket_id}/comments`, `/manual-diagnostics`, `/decisions` | Оператор, инженер | `page`, `size` | Страницы сохранённых записей |
+| `POST /tickets/{ticket_id}/manual-diagnostics` | Инженер | `{finding, observed_at, connection_snapshot_id?}` | `201` snapshot с `source_kind=MANUAL`, история и аудит; требуется `IN_PROGRESS` |
+| `POST /tickets/{ticket_id}/decisions` | Инженер | `{decision_text, performed_actions}` | `201` новая неизменяемая версия решения, история и аудит; требуется `IN_PROGRESS` |
 | `POST /tickets/{ticket_id}/close` | Инженер | `{decision_id}` + `If-Match` | `IN_PROGRESS → CLOSED` только с решением той же заявки; `closed_by`, `closed_at`, история и аудит в транзакции |
 | `GET /tickets/{ticket_id}/history` | Оператор, инженер | Пагинация | Хронология фактов с источником и временем; внешних Telegram сообщений в Phase 1 нет |
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
 
 Пути в таблице относительны к `/api/v1`. `lookup_id` равен ID сохранённого subscriber snapshot; создать заявку можно только из ещё действующего snapshot, созданного этим оператором. `connection_snapshot_id` должен принадлежать ему. Закрытие `OPEN` сначала требует явного начала работы; это проверяется сервером. В Phase 1 не предусмотрены API для ServiceDesk Plus, Telegram, NetUP и мониторинга.
+
+Phase 1.2B реализует Ticket Engine на уже сохранённых снимках `subscriber_snapshots`. HTTP `POST /subscriber-lookups` с mock BillingProvider относится к следующему шагу Phase 1. До него заявка создаётся через API только при наличии сохранённого снимка, принадлежащего оператору. Тесты используют синтетические снимки во временных БД. Успешный `GET /tickets/{id}` и изменяющие ответы выставляют `ETag` с `tickets.version`; отсутствующий `If-Match` для операций с версией даёт `428`, устаревший — `409`. Повтор создания с тем же содержимым даёт `200` вместо второго `201`.
 
 ## Ответ поиска абонента
 

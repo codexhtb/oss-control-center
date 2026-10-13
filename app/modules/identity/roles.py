@@ -15,6 +15,8 @@ class Permission(StrEnum):
     TICKET_CREATE = "ticket.create"
     TICKET_COMMENT = "ticket.comment"
     TICKET_START = "ticket.start"
+    TICKET_ASSIGN = "ticket.assign"
+    TICKET_FIELD_WORK = "ticket.field_work"
     TICKET_MANUAL_DIAGNOSTIC = "ticket.manual_diagnostic"
     TICKET_DECISION = "ticket.decision"
     TICKET_CLOSE = "ticket.close"
@@ -38,6 +40,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.TICKET_READ,
             Permission.TICKET_COMMENT,
             Permission.TICKET_START,
+            Permission.TICKET_ASSIGN,
+            Permission.TICKET_FIELD_WORK,
             Permission.TICKET_MANUAL_DIAGNOSTIC,
             Permission.TICKET_DECISION,
             Permission.TICKET_CLOSE,

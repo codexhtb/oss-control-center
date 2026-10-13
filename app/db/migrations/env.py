@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, pool
 from app.core.config import get_settings
 from app.db.base import Base
 from app.modules.identity import models as identity_models  # noqa: F401 - register ORM metadata
+from app.modules.tickets import models as ticket_models  # noqa: F401 - register ORM metadata
 
 config = context.config
 if config.config_file_name is not None:
