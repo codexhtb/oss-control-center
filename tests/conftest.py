@@ -11,7 +11,7 @@ from sqlalchemy.engine import URL
 from app.core.config import Settings
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def isolated_postgres_url() -> Iterator[URL]:
     if os.environ.get("RUN_DB_TESTS") != "1":
         pytest.skip("set RUN_DB_TESTS=1 inside the Compose api container")

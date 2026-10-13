@@ -37,8 +37,8 @@ def test_baseline_migration_applies_to_empty_database(
         with engine.connect() as connection:
             assert inspect(connection).get_table_names() == []
 
-        command.upgrade(config, "head")
-        command.upgrade(config, "head")
+        command.upgrade(config, "0001_foundation")
+        command.upgrade(config, "0001_foundation")
 
         with engine.connect() as connection:
             revision = MigrationContext.configure(connection).get_current_revision()

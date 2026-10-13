@@ -17,6 +17,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("POSTGRES_USER", "test")
     monkeypatch.setenv("POSTGRES_PASSWORD", "test-only")
+    monkeypatch.setenv("AUTH_PUBLIC_ORIGIN", "https://oss.example.test")
+    monkeypatch.setenv("AUTH_ALLOW_HTTP_LOOPBACK", "false")
+    monkeypatch.setenv("AUTH_HASH_KEY", "test-only-key-with-at-least-32-bytes")
     get_settings.cache_clear()
     with TestClient(create_app()) as test_client:
         yield test_client

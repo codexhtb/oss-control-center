@@ -2,7 +2,7 @@
 
 PostgreSQL — единственный source of truth для обращений, комментариев, решений, истории, аудита и диагностических snapshots. Данные BillingProvider сохраняются как исторический снимок, увиденный при создании заявки; актуальным источником биллинга остаётся сам провайдер. Схема ниже логическая: имена таблиц и ключи фиксируют контракт, конкретные SQL-типы и индексы оформляются версионированной миграцией Phase 1.
 
-**Граница Phase 1.1:** health endpoints не требуют доменных таблиц. Начальная пустая ревизия Alembic создаёт только `alembic_version`; таблицы ниже вводятся в следующих шагах Phase 1 контролируемыми миграциями.
+**Граница Phase 1.2A:** ревизия `0001_foundation` создаёт только `alembic_version`; `0002_identity_rbac` вводит четыре таблицы идентификации. Таблицы заявок и Subscriber 360 остаются для следующих шагов Phase 1.
 
 ## ERD
 
@@ -10,6 +10,7 @@ PostgreSQL — единственный source of truth для обращени�
 erDiagram
   app_users ||--o{ tickets : creates
   app_users ||--o{ auth_sessions : opens
+  app_users ||--o{ identity_audit_events : acts
   app_users ||--o{ subscriber_snapshots : requests
   subscriber_snapshots ||--o{ connection_snapshots : contains
   subscriber_snapshots ||--o{ tickets : captured_for
@@ -27,15 +28,38 @@ erDiagram
   app_users {
     uuid id PK
     text login UK
+    text display_name
     text role
-    boolean active
-    text credential_hash
+    boolean is_active
+    text password_hash
+    timestamp created_at
+    timestamp updated_at
   }
   auth_sessions {
     uuid id PK
     uuid user_id FK
+    text token_hash UK
+    text csrf_hash
+    timestamp created_at
     timestamp expires_at
     timestamp revoked_at_nullable
+  }
+  auth_login_buckets {
+    text kind PK
+    text key_digest PK
+    int failures
+    timestamp window_started_at
+    timestamp blocked_until_nullable
+  }
+  identity_audit_events {
+    uuid id PK
+    uuid actor_user_id FK
+    uuid target_user_id FK
+    text action
+    text outcome
+    text login_digest_nullable
+    text source_digest_nullable
+    timestamp occurred_at
   }
   subscriber_snapshots {
     uuid id PK
@@ -129,8 +153,10 @@ erDiagram
 
 | Таблица | Обязательные поля и правила |
 | --- | --- |
-| `app_users` | `id`, уникальный `login`, `role ∈ {CALL_CENTER_OPERATOR, OSS_ENGINEER}`, `active`, хэш учётного секрета. Оба инженера OSS имеют одну роль; аккаунты заранее создаются без продуктовой роли администратора. |
-| `auth_sessions` | `id`, `user_id`, срок действия и время отзыва; серверная сессия хранится в PostgreSQL. В cookie не помещаются права или персональные данные. |
+| `app_users` — 1.2A | UUID `id`, уникальный канонический `login`, `display_name`, `role ∈ {operator, engineer, admin}`, `is_active`, Argon2id `password_hash`, `created_at`, `updated_at`. `admin` управляет идентификацией, без прав на заявки. Первый администратор создаётся только интерактивной CLI-командой на пустой таблице. |
+| `auth_sessions` — 1.2A | UUID `id`, `user_id`, SHA-256 хэши случайного токена сессии и CSRF-токена, `created_at`, `expires_at`, nullable `revoked_at`. В cookie не помещаются права или персональные данные. |
+| `auth_login_buckets` — 1.2A | Составной ключ `(kind, key_digest)` для нормализованного логина и прямого адреса источника, счётчик отказов, окно и блокировка. Значения HMAC с секретом окружения, без исходного логина/IP. |
+| `identity_audit_events` — 1.2A | Append-only UUID `id`, nullable актор и цель, действие, результат, HMAC логина/источника при входе, время. Без паролей, токенов и полных персональных данных. |
 | `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, ФИО и контакт если доступны, данные договора и услуг в версионированной структуре. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
 | `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable устройство, порт, VLAN, ONU ID. ONU не требуется; для Ethernet не создаётся искусственный ONU ID. Несколько подключений сохраняются раздельно. |
 | `tickets` | `id`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `created_by`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранное подключение должно принадлежать указанному snapshot; при неоднозначности выбор явно подтверждается. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |

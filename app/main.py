@@ -4,8 +4,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
 from app.api.v1.router import router
+from app.core.config import get_settings
+from app.core.errors import ApiError, handle_api_error, handle_validation_error
 from app.core.logging import configure_logging
 from app.core.security import ensure_non_root_runtime
 from app.db.engine import dispose_engine
@@ -14,6 +17,7 @@ from app.db.engine import dispose_engine
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     ensure_non_root_runtime()
+    get_settings()
     try:
         yield
     finally:
@@ -23,6 +27,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     configure_logging()
     application = FastAPI(title="OSS Control Center", lifespan=lifespan)
+    application.add_exception_handler(ApiError, handle_api_error)
+    application.add_exception_handler(RequestValidationError, handle_validation_error)
     application.include_router(router)
     return application
 
