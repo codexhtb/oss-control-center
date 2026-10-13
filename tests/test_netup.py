@@ -801,6 +801,8 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
                 key: origin.model_dump(mode="json")
                 for key, origin in card.connections[0].field_meta.items()
             }
+            db.add(new_snapshot)
+            db.flush()
             new_connection = ConnectionSnapshot(
                 id=uuid4(),
                 subscriber_snapshot_id=new_snapshot.id,
@@ -809,7 +811,7 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
                 ip_groups=expected_groups,
                 field_meta=expected_meta,
             )
-            db.add_all([new_snapshot, new_connection])
+            db.add(new_connection)
             db.commit()
             db.expire_all()
             reloaded_snapshot = db.get(SubscriberSnapshot, new_snapshot.id)
