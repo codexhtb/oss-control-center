@@ -1,9 +1,12 @@
 # Действия администратора для отдельного lab runtime-канала
 
-Текущее состояние на `oss-control-dev`: TCP `172.17.7.1:3306` закрыт,
-`codexdev` не имеет доступа к Docker socket. Эти ограничения агент не
-обходит. Ниже команды относятся **только** к `netup-db-lab`, восстановленной
-копии UTM5. Production NetUP не затрагивать.
+Текущее состояние на `oss-control-dev`: TCP `172.17.7.1:3306` доступен,
+файл `.env.netup-lab` имеет режим `0600`, подключение Python-драйвера от
+`codexdev` проверено без TLS. У лабораторного пользователя `oss_netup_lab`
+права `SELECT, SHOW VIEW`; код использует только `SELECT` и транзакцию
+`READ ONLY`. Docker socket остаётся недоступен `codexdev`. Ниже — пример
+повторного развёртывания **только** `netup-db-lab`; текущую учётную запись
+повторно создавать не нужно. Production NetUP не затрагивать.
 
 ## Диагностика на `netup-db-lab`
 
@@ -33,7 +36,7 @@ read-only SQL user, хотя владелец разрешил отдельны�
 
 ## Отдельный lab user
 
-Открыть `sudo mariadb` интерактивно и создать отдельную учётную запись
+При восстановлении лаборатории открыть `sudo mariadb` интерактивно и создать отдельную учётную запись
 `'oss_lab_ro'@'172.17.7.2'` с уникальным секретом, переданным через
 защищённый канал. Секрет не записывать в Git, shell history или этот файл.
 Дать только **column-level SELECT** на поля, используемые SQL repository:
@@ -82,7 +85,11 @@ chmod 600 .env.netup-lab
 set -a
 . ./.env.netup-lab
 set +a
-.venv/bin/pytest -q tests/test_netup.py -m integration
+NETUP_LAB_ALLOW_PLAINTEXT=true \
+NETUP_LAB_AS_OF_UTC=2026-10-10T12:00:00+00:00 \
+RUN_NETUP_LAB_TESTS=1 .venv/bin/pytest -q tests/test_netup.py -m integration
 ```
 
 Файл `.env.netup-lab` игнорируется Git; команда не печатает его содержимое.
+Тесты находят контрольные ЛС внутри восстановленной копии и не выводят их
+в pytest-отчёт. Указанное историческое время относится только к этой копии.

@@ -454,14 +454,45 @@ def test_config_masks_secret_and_requires_tls(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.integration
-def test_restored_utm5_via_separate_lab_channel() -> None:
+def test_driver_disables_tls_only_for_explicit_lab(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pymysql = pytest.importorskip("pymysql")
+    calls = []
+    monkeypatch.setattr(pymysql, "connect", lambda **kwargs: calls.append(kwargs))
+    lab = NetupConfig.model_validate(
+        {
+            "purpose": "lab",
+            "host": "172.17.7.1",
+            "user": "synthetic_lab",
+            "password": "synthetic-secret",
+            "allow_plaintext_lab": True,
+        }
+    )
+    lab.connect()
+    assert "ssl_ca" not in calls[-1]
+    assert "ssl_verify_cert" not in calls[-1]
+    ca = tmp_path / "synthetic-ca.pem"
+    ca.write_text("synthetic CA placeholder")
+    production = NetupConfig.model_validate(
+        {
+            "purpose": "production",
+            "host": "netup.example.invalid",
+            "user": "synthetic_ro",
+            "password": "synthetic-secret",
+            "tls_ca": ca,
+        }
+    )
+    production.connect()
+    assert calls[-1]["ssl_ca"] == str(ca)
+    assert calls[-1]["ssl_verify_cert"] is True
+    assert calls[-1]["ssl_verify_identity"] is True
+
+
+def _lab_config() -> NetupConfig:
     if os.environ.get("RUN_NETUP_LAB_TESTS") != "1":
         pytest.skip("separate NetUP lab read-only channel is not configured")
-    account_no = os.environ.get("NETUP_LAB_ACCOUNT_NO")
-    if not account_no:
-        pytest.skip("NETUP_LAB_ACCOUNT_NO is required for this opt-in test")
-    config = NetupConfig.model_validate(
+    return NetupConfig.model_validate(
         {
             "purpose": "lab",
             "host": os.environ.get("NETUP_LAB_HOST"),
@@ -474,41 +505,176 @@ def test_restored_utm5_via_separate_lab_channel() -> None:
             "lab_as_of_utc": os.environ.get("NETUP_LAB_AS_OF_UTC") or None,
         }
     )
+
+
+def _lab_scenario_account(config: NetupConfig, scenario: str) -> str:
+    """Find an account inside the lab without printing or storing its identifier."""
+    as_of = int((config.lab_as_of_utc or datetime.now(UTC)).timestamp())
+    if scenario == "missing":
+        query, params = "SELECT MAX(id)+1 AS account_id FROM accounts", ()
+    elif scenario == "deleted":
+        query, params = (
+            "SELECT id AS account_id FROM accounts WHERE is_deleted<>0 ORDER BY id LIMIT 1",
+            (),
+        )
+    elif scenario == "conflict":
+        query = (
+            "SELECT sl.account_id FROM (SELECT ip_group_id FROM ip_groups "
+            "WHERE is_deleted=0 GROUP BY ip_group_id HAVING COUNT(DISTINCT "
+            "CASE WHEN switch_id>0 AND port_id>0 AND vlan_id>0 "
+            "THEN CONCAT(switch_id,'/',port_id,'/',vlan_id) END)>1) ck "
+            "JOIN iptraffic_service_links isl ON isl.ip_group_id=ck.ip_group_id "
+            "AND isl.is_deleted=0 JOIN service_links sl ON sl.id=isl.id AND sl.is_deleted=0 "
+            "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+            "AND psl.is_planned=0 AND psl.need_del=0 AND psl.start_date<=%s "
+            "AND psl.expire_date>%s JOIN accounts a ON a.id=sl.account_id "
+            "AND a.is_deleted=0 ORDER BY sl.account_id LIMIT 10"
+        )
+        params = (as_of, as_of)
+    elif scenario == "multiple_links":
+        query = (
+            "SELECT sl.account_id FROM service_links sl "
+            "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+            "AND psl.is_planned=0 AND psl.need_del=0 AND psl.start_date<=%s "
+            "AND psl.expire_date>%s JOIN accounts a ON a.id=sl.account_id "
+            "AND a.is_deleted=0 JOIN services_data sd ON sd.id=sl.service_id "
+            "AND sd.is_deleted=0 AND sd.service_type IN (2,3) WHERE sl.is_deleted=0 "
+            "GROUP BY sl.account_id HAVING COUNT(DISTINCT sl.id)>1 "
+            "ORDER BY sl.account_id LIMIT 10"
+        )
+        params = (as_of, as_of)
+    else:
+        query = (
+            "SELECT sl.account_id FROM service_links sl "
+            "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+            "AND psl.is_planned=0 AND psl.need_del=0 AND psl.start_date<=%s "
+            "AND psl.expire_date>%s JOIN iptraffic_service_links isl "
+            "ON isl.id=sl.id AND isl.is_deleted=0 JOIN ip_groups g "
+            "ON g.ip_group_id=isl.ip_group_id AND g.is_deleted=0 "
+            "WHERE sl.is_deleted=0 GROUP BY sl.account_id,isl.ip_group_id "
+            "HAVING COUNT(g.id)>1 ORDER BY sl.account_id LIMIT 10"
+        )
+        params = (as_of, as_of)
+    try:
+        connection = config.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET SESSION max_statement_time=%s", (3.0,))
+                cursor.execute(query, params)
+                candidates = [str(row["account_id"]) for row in cursor.fetchall()]
+        finally:
+            connection.close()
+    except Exception as exc:
+        pytest.fail(f"lab scenario query failed: {type(exc).__name__}", pytrace=False)
+    provider = NetUPBillingProvider.from_config(config)
+    for account_no in candidates:
+        card = provider.lookup_by_account(account_no)
+        if scenario in {"missing", "deleted"} and card is None:
+            return account_no
+        if card is None:
+            continue
+        if scenario == "conflict" and any(
+            item.field_meta["port"].quality == DataQuality.CONFLICT for item in card.connections
+        ):
+            return account_no
+        if scenario == "multiple_links" and len(card.services) > 1:
+            return account_no
+        if scenario == "multirow" and any(
+            len(group.rows) > 1 for item in card.connections for group in item.ip_groups
+        ):
+            return account_no
+    pytest.fail(f"restored lab has no usable {scenario} scenario", pytrace=False)
+
+
+@pytest.mark.integration
+def test_restored_utm5_via_separate_lab_channel() -> None:
+    config = _lab_config()
+    account_no = os.environ.get("NETUP_LAB_ACCOUNT_NO") or _lab_scenario_account(config, "multirow")
     card = NetUPBillingProvider.from_config(config).lookup_by_account(account_no)
-    assert card is not None and card.source == "NETUP"
+    assert card is not None
+    assert card.source == "NETUP"
     assert bool(card.billing_account == account_no)
     assert all(connection.access_type == AccessType.UNKNOWN for connection in card.connections)
+    assert any(len(group.rows) > 1 for item in card.connections for group in item.ip_groups)
+    if config.lab_as_of_utc is not None:
+        assert card.field_meta["billing_account"].quality == DataQuality.STALE
+        assert card.field_meta["billing_account"].observed_at == config.lab_as_of_utc
+
+
+@pytest.mark.integration
+def test_restored_utm5_service_links_and_group_rows_match_source() -> None:
+    config = _lab_config()
+    account_no = _lab_scenario_account(config, "multirow")
+    card = NetUPBillingProvider.from_config(config).lookup_by_account(account_no)
+    assert card is not None
+    as_of = int((config.lab_as_of_utc or datetime.now(UTC)).timestamp())
+    try:
+        connection = config.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                cursor.execute(
+                    "SELECT sl.id,sd.service_type FROM service_links sl "
+                    "JOIN services_data sd ON sd.id=sl.service_id AND sd.is_deleted=0 "
+                    "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+                    "WHERE sl.account_id=%s AND sl.user_id=%s AND sl.is_deleted=0 "
+                    "AND sd.service_type IN (2,3) AND psl.is_planned=0 AND psl.need_del=0 "
+                    "AND psl.start_date<=%s AND psl.expire_date>%s",
+                    (int(account_no), int(card.subscriber_id), as_of, as_of),
+                )
+                source_services = cursor.fetchall()
+                assert bool(
+                    {str(row["id"]) for row in source_services}
+                    == {item.service_id for item in card.services if item.account_id == account_no}
+                )
+                source_ip_ids = {
+                    str(row["id"]) for row in source_services if row["service_type"] == 3
+                }
+                card_connections = [
+                    item for item in card.connections if item.service_id in source_ip_ids
+                ]
+                assert len(card_connections) == len(source_ip_ids)
+                for item in card_connections:
+                    cursor.execute(
+                        "SELECT ip_group_id FROM iptraffic_service_links "
+                        "WHERE id=%s AND is_deleted=0",
+                        (int(item.service_id),),
+                    )
+                    source_groups = cursor.fetchall()
+                    assert bool(
+                        {str(row["ip_group_id"]) for row in source_groups}
+                        == {group.group_id for group in item.ip_groups}
+                    )
+                    for group in item.ip_groups:
+                        cursor.execute(
+                            "SELECT id FROM ip_groups WHERE ip_group_id=%s AND is_deleted=0",
+                            (int(group.group_id),),
+                        )
+                        assert bool(
+                            {str(row["id"]) for row in cursor.fetchall()}
+                            == {row.row_id for row in group.rows}
+                        )
+        finally:
+            connection.rollback()
+            connection.close()
+    except Exception as exc:
+        pytest.fail(f"lab mapping check failed: {type(exc).__name__}", pytrace=False)
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("variable", "expectation"),
+    ("variable", "scenario", "expectation"),
     [
-        ("NETUP_LAB_MISSING_ACCOUNT", "missing"),
-        ("NETUP_LAB_DELETED_ACCOUNT", "missing"),
-        ("NETUP_LAB_CONFLICT_ACCOUNT", "conflict"),
-        ("NETUP_LAB_MULTILINK_ACCOUNT", "multiple_links"),
+        ("NETUP_LAB_MISSING_ACCOUNT", "missing", "missing"),
+        ("NETUP_LAB_DELETED_ACCOUNT", "deleted", "missing"),
+        ("NETUP_LAB_CONFLICT_ACCOUNT", "conflict", "conflict"),
+        ("NETUP_LAB_MULTILINK_ACCOUNT", "multiple_links", "multiple_links"),
     ],
 )
-def test_restored_utm5_optional_scenarios(variable: str, expectation: str) -> None:
-    if os.environ.get("RUN_NETUP_LAB_TESTS") != "1":
-        pytest.skip("separate NetUP lab read-only channel is not configured")
-    account_no = os.environ.get(variable)
-    if not account_no:
-        pytest.skip("this anonymized lab scenario is not configured")
-    config = NetupConfig.model_validate(
-        {
-            "purpose": "lab",
-            "host": os.environ.get("NETUP_LAB_HOST"),
-            "port": os.environ.get("NETUP_LAB_PORT", "3306"),
-            "database": os.environ.get("NETUP_LAB_DATABASE", "UTM5"),
-            "user": os.environ.get("NETUP_LAB_USER"),
-            "password": os.environ.get("NETUP_LAB_PASSWORD"),
-            "tls_ca": os.environ.get("NETUP_LAB_TLS_CA"),
-            "allow_plaintext_lab": os.environ.get("NETUP_LAB_ALLOW_PLAINTEXT", "false"),
-            "lab_as_of_utc": os.environ.get("NETUP_LAB_AS_OF_UTC") or None,
-        }
-    )
+def test_restored_utm5_optional_scenarios(variable: str, scenario: str, expectation: str) -> None:
+    config = _lab_config()
+    account_no = os.environ.get(variable) or _lab_scenario_account(config, scenario)
     card = NetUPBillingProvider.from_config(config).lookup_by_account(account_no)
     if expectation == "missing":
         assert card is None
@@ -516,6 +682,20 @@ def test_restored_utm5_optional_scenarios(variable: str, expectation: str) -> No
         assert card is not None
         assert any(
             connection.field_meta["port"].quality == DataQuality.CONFLICT
+            for connection in card.connections
+        )
+        assert any(
+            len(
+                {
+                    (row.switch_id, row.port_id, row.vlan_id)
+                    for group in connection.ip_groups
+                    for row in group.rows
+                    if row.switch_id not in {None, "0"}
+                    and row.port_id not in {None, 0}
+                    and row.vlan_id not in {None, 0}
+                }
+            )
+            > 1
             for connection in card.connections
         )
     else:

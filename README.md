@@ -1,6 +1,6 @@
 # OSS Control Center — Service Desk и Subscriber 360 (Phase 1.3)
 
-FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC, Ticket Engine и Subscriber 360 через синтетический mock BillingProvider. Заявки, комментарии, решения, история, аудит, снимки биллинга и ручные наблюдения хранятся в PostgreSQL. Реальные NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются.
+FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC, Ticket Engine и Subscriber 360 через синтетический mock BillingProvider. Заявки, комментарии, решения, история, аудит, снимки биллинга и ручные наблюдения хранятся в PostgreSQL. Production NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются; отдельный NetUP provider проверяется только на восстановленной лабораторной копии.
 
 Приложение использует Python 3.12 внутри контейнера. На Ubuntu 26.04 не требуется устанавливать Python или PostgreSQL для приложения в ОС. Перед запуском нужен доступ текущего пользователя к Docker socket; не обходите отсутствие доступа через изменение групп или прав сокета.
 
@@ -124,5 +124,7 @@ read-only `NetUPBillingProvider` не обращается к UTM5 без явн
 [deployment guide](docs/netup/provider-deployment.md),
 [security model](docs/netup/provider-security.md),
 [migration plan](docs/netup/provider-migration.md) и
-[runbook](docs/netup/provider-runbook.md). Для лаборатории нужен отдельный
-SQL-канал; исследовательский `netup-sql` не подключается к runtime API.
+[runbook](docs/netup/provider-runbook.md) и
+[протоколе лабораторной проверки](docs/netup/lab-validation.md). Для лаборатории
+используется отдельный SQL-канал; исследовательский `netup-sql` не
+подключается к runtime API.
