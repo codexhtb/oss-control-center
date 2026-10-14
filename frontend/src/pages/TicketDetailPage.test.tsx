@@ -10,7 +10,7 @@ import { TicketDetailPage } from './TicketDetailPage'
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
   decisions: vi.fn(), engineers: vi.fn(), start: vi.fn(), addComment: vi.fn(),
-  lookup: vi.fn(),
+  lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(),
 } }))
 
 const ticketId = '00000000-0000-4000-8000-000000000010'
@@ -32,7 +32,7 @@ function session(role: 'operator' | 'engineer'): MeResponse {
       display_name: 'Тестовый пользователь', role, is_active: true,
       created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     permissions: role === 'engineer'
-      ? ['subscriber.read', 'ticket.read', 'ticket.comment', 'ticket.start', 'ticket.assign', 'ticket.manual_diagnostic', 'ticket.decision', 'ticket.close']
+      ? ['subscriber.read', 'ticket.read', 'ticket.comment', 'ticket.start', 'ticket.assign', 'ticket.manual_diagnostic', 'diagnostics.run', 'ticket.decision', 'ticket.close']
       : ['subscriber.read', 'ticket.read', 'ticket.comment'],
   }
 }
@@ -43,7 +43,7 @@ function renderDetail(role: 'operator' | 'engineer') {
 }
 
 beforeEach(() => {
-  for (const fn of [ticketApi.get, ticketApi.comments, ticketApi.history, ticketApi.diagnostics, ticketApi.decisions, ticketApi.engineers, ticketApi.start, ticketApi.addComment, ticketApi.lookup]) vi.mocked(fn).mockReset()
+  for (const fn of [ticketApi.get, ticketApi.comments, ticketApi.history, ticketApi.diagnostics, ticketApi.decisions, ticketApi.engineers, ticketApi.start, ticketApi.addComment, ticketApi.lookup, ticketApi.checkTicket, ticketApi.confirmCheck]) vi.mocked(fn).mockReset()
   vi.mocked(ticketApi.get).mockResolvedValue(base)
   vi.mocked(ticketApi.comments).mockResolvedValue(empty)
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
@@ -97,4 +97,33 @@ it('keeps operator actions within comment permission', async () => {
   fireEvent.change(screen.getByRole('textbox', { name: 'Новый комментарий' }), { target: { value: 'Уточнение' } })
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить комментарий' }))
   await waitFor(() => expect(ticketApi.addComment).toHaveBeenCalledWith(ticketId, 'Уточнение'))
+})
+
+it('shows an engineer a monitoring result and requires a separate confirm action', async () => {
+  const linked: TicketDetail = {
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'IN_PROGRESS',
+    account_no: 'synthetic-account',
+    subscriber_snapshot_id: '00000000-0000-4000-8000-000000000040',
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    subscriber: { full_name: 'Синтетический абонент', organization_name: null, phone: null,
+      actual_address: null, fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
+  }
+  vi.mocked(ticketApi.get).mockResolvedValue(linked)
+  const report = {
+    connection_snapshot_id: linked.connection_snapshot_id!, checked_at: base.created_at,
+    device_match: 'KNOWN' as const, interface_match: 'UNKNOWN' as const,
+    observations: [{ source: 'LIBRENMS' as const, measured_object: 'device:42', result: 'UP',
+      observed_at: base.created_at, retrieved_at: base.created_at, quality: 'KNOWN' as const }],
+    limitations: ['interface_mapping_unconfirmed'],
+  }
+  vi.mocked(ticketApi.checkTicket).mockResolvedValue({ check_id: '00000000-0000-4000-8000-000000000042', expires_at: base.created_at, report })
+  vi.mocked(ticketApi.confirmCheck).mockResolvedValue({ id: '00000000-0000-4000-8000-000000000043' } as never)
+  renderDetail('engineer')
+  expect(await screen.findByRole('heading', { name: 'Проверка OSS' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
+  expect(await screen.findByText('Соответствие порта NetUP и интерфейса не подтверждено.')).toBeInTheDocument()
+  expect(ticketApi.confirmCheck).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить и сохранить в истории' }))
+  await waitFor(() => expect(ticketApi.confirmCheck).toHaveBeenCalledWith(ticketId, '00000000-0000-4000-8000-000000000042', 3))
 })

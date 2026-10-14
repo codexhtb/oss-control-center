@@ -12,6 +12,7 @@ const permissionLabels: Partial<Record<Permission, string>> = {
   'ticket.assign': 'Назначение инженера',
   'ticket.field_work': 'Запрос выездных работ',
   'ticket.manual_diagnostic': 'Ручная диагностика',
+  'diagnostics.run': 'Проверка мониторинга',
   'ticket.decision': 'Решения',
   'ticket.close': 'Закрытие заявок',
   'ticket.audit.read': 'Чтение аудита заявки',

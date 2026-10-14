@@ -152,12 +152,37 @@ export interface TicketComment {
 export interface Diagnostic {
   id: string
   ticket_id: string
+  check_id: string | null
   source_kind: string
   availability: string
-  observation: { finding?: string }
+  observation: { finding?: string } | DiagnosticReport
   observed_at: string
   recorded_at: string
   recorded_by: string
+}
+
+export interface MonitoringObservation {
+  source: 'LIBRENMS' | 'ICINGA'
+  measured_object: string
+  result: string
+  observed_at: string | null
+  retrieved_at: string
+  quality: DataQuality
+}
+
+export interface DiagnosticReport {
+  connection_snapshot_id: string
+  checked_at: string
+  device_match: DataQuality
+  interface_match: DataQuality
+  observations: MonitoringObservation[]
+  limitations: string[]
+}
+
+export interface TicketCheckResult {
+  check_id: string
+  expires_at: string
+  report: DiagnosticReport
 }
 
 export interface Decision {

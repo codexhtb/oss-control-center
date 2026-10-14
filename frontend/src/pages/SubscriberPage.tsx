@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { formatDate, statusLabel, ticketTitle } from '../features/tickets/presentation'
 import { ticketApi } from '../features/tickets/ticket-api'
+import { MonitoringReport } from '../features/tickets/MonitoringReport'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow } from '../features/tickets/types'
 import type { MeResponse } from '../shared/api/types'
 import { errorText } from '../shared/api/client'
@@ -25,7 +26,8 @@ function Fact({ label, value, meta }: { label: string; value: string | number | 
   return <div className="subscriber-fact"><span>{label}</span><strong>{value === null || value === undefined || value === '' ? 'UNKNOWN' : value}</strong><Origin meta={meta} /></div>
 }
 
-function ConnectionBlock({ connection, service }: { connection: SubscriberConnectionCard; service: string }) {
+function ConnectionBlock({ connection, service, lookupId, canCheck }: { connection: SubscriberConnectionCard; service: string; lookupId: string; canCheck: boolean }) {
+  const check = useMutation({ mutationFn: () => ticketApi.checkSubscriber(lookupId, connection.connection_snapshot_id) })
   return <article className="subscriber-service">
     <div className="subscriber-service__head"><div><span className="eyebrow">ПОДКЛЮЧЕНИЕ · {service}</span><h3>{connection.device || 'Устройство неизвестно'}</h3></div><Origin meta={connection.field_meta.device} /></div>
     <div className="subscriber-facts subscriber-facts--three">
@@ -47,6 +49,9 @@ function ConnectionBlock({ connection, service }: { connection: SubscriberConnec
         </tr>)}
       </tbody></table></div>
     </div>)}
+    {canCheck && <div className="monitoring-action"><Button variant="secondary" disabled={check.isPending} onClick={() => check.mutate()}>{check.isPending ? 'Проверяем…' : 'Проверить подключение'}</Button></div>}
+    {check.isError && <Notice tone="error">{errorText(check.error)}</Notice>}
+    {check.data && <MonitoringReport report={check.data} />}
   </article>
 }
 
@@ -76,7 +81,7 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
       {card.services.length ? <div className="service-list">{card.services.map((service) => <article key={service.service_id} className="service-row"><div><span className="eyebrow">СВЯЗКА {service.service_id} · ЛС {service.account_id || 'UNKNOWN'}</span><h3>{service.name || 'Услуга без названия'}</h3><span>Тариф: {service.tariff_name || 'UNKNOWN'} <Origin meta={service.field_meta.tariff_name} /></span></div><div className="service-row__state"><span>{service.billing_active ? 'Действует в биллинге' : 'Статус UNKNOWN'}</span><Origin meta={service.field_meta.billing_active} />{service.billing_blocked && <span>Блокировка услуги в биллинге</span>}</div></article>)}</div> : <p className="muted">Действующие услуги в источнике не найдены</p>}
     </section>
     <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Подключения и IP-группы</h2></div>
-      {card.connections.length ? <div className="connection-list">{card.connections.map((connection) => <ConnectionBlock key={connection.connection_snapshot_id} connection={connection} service={serviceNames.get(connection.service_id || '') || 'UNKNOWN'} />)}</div> : <p className="muted">Данные о подключении UNKNOWN</p>}
+      {card.connections.length ? <div className="connection-list">{card.connections.map((connection) => <ConnectionBlock key={connection.connection_snapshot_id} connection={connection} service={serviceNames.get(connection.service_id || '') || 'UNKNOWN'} lookupId={card.lookup_id} canCheck={session.permissions.includes('diagnostics.run')} />)}</div> : <p className="muted">Данные о подключении UNKNOWN</p>}
     </section>
     <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>История обращений</h2><span className="subscriber-section-note">Связанные заявки по этому абоненту</span></div>
       {history.isPending ? <p role="status" className="muted">Загружаем обращения…</p> : history.isError ? <Notice tone="error">{errorText(history.error)}</Notice> : history.data?.items.length ? <><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Номер</th><th>Тема</th><th>Статус</th><th>Создана</th></tr></thead><tbody>{history.data.items.map((ticket) => <tr key={ticket.id}><td><Link to={`/tickets/${ticket.id}`}>#{ticket.number}</Link></td><td>{ticketTitle(ticket.subject)}</td><td>{statusLabel[ticket.status]}</td><td>{formatDate(ticket.created_at)}</td></tr>)}</tbody></table></div><div className="subscriber-pagination"><Button variant="quiet" disabled={historyPage <= 1} onClick={() => setHistoryPage(historyPage - 1)}>Назад</Button><span>{historyPage} / {Math.ceil(history.data.total / history.data.size)}</span><Button variant="quiet" disabled={historyPage * history.data.size >= history.data.total} onClick={() => setHistoryPage(historyPage + 1)}>Далее</Button></div></> : <p className="muted">Связанных обращений пока нет</p>}

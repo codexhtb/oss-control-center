@@ -268,6 +268,10 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .subscriber-table td { padding: 10px 9px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 .subscriber-table td a { color: var(--accent); font-weight: 700; }
 .subscriber-table .origin-chip { margin: 4px 0 0; }
+.monitoring-action { margin: 14px 0; }
+.monitoring-report { margin: 12px 0; }
+.monitoring-report .subscriber-table { margin-top: 9px; }
+.monitoring-limitations { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .subscriber-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 @media (max-width: 1080px) { .subscriber-columns { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .subscriber-search { align-items: stretch; flex-direction: column; } .subscriber-heading { align-items: flex-start; flex-direction: column; } .subscriber-facts, .subscriber-facts--three { grid-template-columns: 1fr; } .service-row { flex-direction: column; } .service-row__state { justify-items: start; text-align: left; } }

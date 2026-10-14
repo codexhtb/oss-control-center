@@ -8,7 +8,7 @@ import type { MeResponse } from '../shared/api/types'
 import { SubscriberPage } from './SubscriberPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({
-  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn() },
+  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), checkSubscriber: vi.fn() },
 }))
 
 const timestamp = '2026-01-01T00:00:00Z'
@@ -48,7 +48,7 @@ const card: SubscriberCard = {
 function session(role: 'operator' | 'engineer'): MeResponse {
   return {
     user: { id: '00000000-0000-4000-8000-000000000003', login: role, display_name: role, role, is_active: true, created_at: timestamp, updated_at: timestamp },
-    permissions: role === 'operator' ? ['subscriber.read', 'subscriber.finance.read', 'ticket.create'] : ['subscriber.read', 'ticket.create'],
+    permissions: role === 'operator' ? ['subscriber.read', 'subscriber.finance.read', 'ticket.create'] : ['subscriber.read', 'ticket.create', 'diagnostics.run'],
   }
 }
 
@@ -65,6 +65,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.lookup).mockReset()
   vi.mocked(ticketApi.getLookup).mockReset().mockResolvedValue(card)
   vi.mocked(ticketApi.subscriberTickets).mockReset().mockResolvedValue({ items: [], page: 1, size: 10, total: 0 })
+  vi.mocked(ticketApi.checkSubscriber).mockReset()
 })
 
 it('renders source quality, multiple contacts, tariff, IP rows, finance and linked action', async () => {
@@ -89,4 +90,17 @@ it('hides finance from engineer and searches without account number in browser U
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
   expect(screen.queryByText('Финансовые сведения')).not.toBeInTheDocument()
   expect(screen.queryByText('10.5')).not.toBeInTheDocument()
+})
+
+it('runs monitoring only for engineer and shows unavailable data without a made-up state', async () => {
+  vi.mocked(ticketApi.checkSubscriber).mockResolvedValue({
+    connection_snapshot_id: card.connections[0]!.connection_snapshot_id,
+    checked_at: timestamp, device_match: 'UNKNOWN', interface_match: 'UNKNOWN',
+    observations: [], limitations: ['monitoring_mapping_missing'],
+  })
+  renderPage('engineer')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  await waitFor(() => expect(ticketApi.checkSubscriber).toHaveBeenCalledWith(card.lookup_id, card.connections[0]!.connection_snapshot_id))
+  expect(await screen.findByText('Нет подтверждённого сопоставления с мониторингом.')).toBeInTheDocument()
 })
