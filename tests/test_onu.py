@@ -117,6 +117,16 @@ def test_unconfigured_source_is_explicit() -> None:
     assert result.candidates == []
 
 
+def test_confirmed_ethernet_connection_never_queries_onu_inventory() -> None:
+    snapshot = connection([{"switch_id": "7", "vlan_id": 101}])
+    snapshot.access_type = "ETHERNET"
+    reader = FakeReader([gpon_row()])
+    result = lookup_onu_candidates(snapshot, registry(), reader)
+    assert result.availability == "UNKNOWN"
+    assert result.candidates == []
+    assert reader.calls == []
+
+
 def test_multiple_or_truncated_candidates_are_never_confirmed() -> None:
     reader = FakeReader([gpon_row(), {**gpon_row(), "interface": "GPON0/1:3"}], True)
     result = lookup_onu_candidates(
