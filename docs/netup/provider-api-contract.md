@@ -29,6 +29,34 @@
 поля, поэтому старые карточки/заявки читаются без преобразования. Клиенты,
 жёстко запрещающие новые ключи JSON-ответа, должны обновить парсер.
 
+## Stage 3C — тарифы, финансовые признаки и история
+
+`services[]` дополнены nullable `tariff_name`, `billing_active` и
+`billing_blocked`, каждое с `field_meta`. `tariff_name` появляется только
+после проверенного JOIN одного `service_links.tariff_link_id` с
+`account_tariff_link` того же счёта и каталожного тарифа; для услуг типа 2
+в этой копии он `UNKNOWN`. `billing_active=true` означает прохождение
+фильтров действия связки на дату источника; `billing_blocked` относится
+к `periodic_service_links.is_blocked`, не к работоспособности сети.
+
+`financial_accounts[]` сохраняет баланс, кредит и сырой признак блокировки
+для каждого связанного счёта в immutable snapshot. Баланс и кредит
+сериализуются десятичными строками в единицах UTM5; валюту или сумму
+доступного остатка адаптер не выводит. Только `operator` получает массив
+через HTTP (`subscriber.finance.read`); `engineer` получает `[]`, `admin`
+не имеет `subscriber.read`. Старые и mock snapshots остаются валидны с
+пустым массивом. `technical_state` остаётся `UNKNOWN`.
+
+`GET /api/v1/subscriber-lookups/{lookup_id}/tickets?page=1&size=20`
+возвращает страницу связанных заявок. Требуются автор lookup,
+`subscriber.read` и `ticket.read`; совпадение — `(source, subscriber_id)`
+или точный `(source, account_no)`, если ID неизвестен. `size` 1–50,
+ответ `Cache-Control: no-store`. Browser URL карточки содержит только
+`lookup_id`, не номер ЛС.
+
+Ревизии `0010` и `0011` добавляют JSONB финансовых наблюдений и частичный
+индекс истории; ранее применённые миграции не изменяются.
+
 ## Результаты и ошибки
 
 | Случай | Поведение |

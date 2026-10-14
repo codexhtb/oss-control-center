@@ -207,6 +207,44 @@ def test_finance_permission_and_subscriber_history_across_lookups(
     assert lookup(billing_client, "MOCK-ETH-001").status_code == 403
 
 
+def test_subscriber_history_includes_other_account_of_same_source(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    class TwoAccountProvider(MockBillingProvider):
+        def lookup_by_account(self, account_no: str):
+            card = super().lookup_by_account("MOCK-ETH-001")
+            assert card is not None
+            card.billing_account = account_no
+            card.subscriber_id = "synthetic-two-account-subscriber"
+            card.accounts = [
+                BillingAccount(account_id="SYNTHETIC-ACCOUNT-A", is_primary=True),
+                BillingAccount(account_id="SYNTHETIC-ACCOUNT-B", is_primary=False),
+            ]
+            card.services[0].account_id = account_no
+            return card
+
+    billing_client.app.dependency_overrides[get_billing_provider] = TwoAccountProvider
+    seed_user(billing_engine, "multi_account_operator", Role.OPERATOR)
+    login(billing_client, "multi_account_operator")
+    first = lookup(billing_client, "SYNTHETIC-ACCOUNT-A")
+    assert first.status_code == 200
+    created = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(first.json())
+    )
+    assert created.status_code == 201
+    second = lookup(billing_client, "SYNTHETIC-ACCOUNT-B")
+    assert second.status_code == 200
+    history = billing_client.get(
+        f"/api/v1/subscriber-lookups/{second.json()['lookup_id']}/tickets?page=1&size=10"
+    )
+    assert history.status_code == 200
+    assert history.json()["total"] == 1
+    assert history.json()["items"][0]["id"] == created.json()["id"]
+    assert billing_client.get(
+        f"/api/v1/subscriber-lookups/{second.json()['lookup_id']}/tickets?page=0"
+    ).status_code == 422
+
+
 @pytest.mark.parametrize(
     ("account", "access_type"),
     [
@@ -717,5 +755,10 @@ def test_upgrade_existing_ticket_from_0003(
             assert detail.subscriber.actual_address is None
             assert detail.subscriber.accounts == []
             assert detail.subscriber.contacts == []
+            assert db.get(SubscriberSnapshot, snapshot_id).financial_accounts == []
+        with engine.connect() as connection:
+            assert "ix_subscriber_snapshots_source_subscriber" in {
+                item["name"] for item in inspect(connection).get_indexes("subscriber_snapshots")
+            }
     finally:
         engine.dispose()

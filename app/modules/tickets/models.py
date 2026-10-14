@@ -33,6 +33,11 @@ class SubscriberSnapshot(Base):
         CheckConstraint("length(account_no) > 0", name="ck_subscriber_snapshots_account"),
         CheckConstraint("expires_at > fetched_at", name="ck_subscriber_snapshots_expiry"),
         Index("ix_subscriber_snapshots_account_fetched", "account_no", "fetched_at"),
+        Index(
+            "ix_subscriber_snapshots_source_subscriber",
+            "source", "subscriber_id", "id",
+            postgresql_where=text("subscriber_id IS NOT NULL"),
+        ),
         Index("ix_subscriber_snapshots_fetched", "fetched_at", "id"),
     )
 

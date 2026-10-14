@@ -873,6 +873,7 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             assert snapshot is not None and stored_connection is not None
             assert snapshot.actual_address is None and snapshot.accounts == []
             assert snapshot.contacts == []
+            assert snapshot.financial_accounts == []
             assert stored_connection.service_id is None and stored_connection.ip_groups == []
 
             raw = synthetic_subscriber(conflict=True)
