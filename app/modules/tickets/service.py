@@ -113,6 +113,7 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         connection_snapshot_id=selected,
         selected_service_id=selected_service,
         description=payload.description,
+        subject=payload.subject,
         status=TicketStatus.OPEN,
         priority=payload.priority,
         created_by=actor_id,
@@ -195,6 +196,7 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
     if (
         ticket.ticket_type != payload.ticket_type
         or ticket.description != payload.description
+        or ticket.subject != payload.subject
         or ticket.priority != payload.priority
     ):
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")
@@ -290,6 +292,7 @@ def list_tickets(
     assignee: UUID | None,
     account_no: str | None,
     ticket_type: TicketType | None = None,
+    unassigned: bool = False,
 ) -> tuple[list[Ticket], int]:
     conditions = []
     if status is not None:
@@ -300,6 +303,8 @@ def list_tickets(
         conditions.append(Ticket.number == number)
     if assignee is not None:
         conditions.append(Ticket.assigned_engineer_id == assignee)
+    if unassigned:
+        conditions.append(Ticket.assigned_engineer_id.is_(None))
     if account_no is not None:
         conditions.append(Ticket.account_no == account_no)
     if ticket_type is not None:

@@ -7,6 +7,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, Connection, Engine
 from sqlalchemy.exc import IntegrityError
@@ -153,7 +154,7 @@ def test_0007_upgrade_preserves_existing_linked_ticket_and_history(
     command.upgrade(config, "0007_contacts")
     engine = create_engine(isolated_postgres_url)
     try:
-        # The current ORM includes 0008 columns; use only SQL against 0007.
+        # Current ORM includes later columns; use only SQL against the 0007 schema.
         with engine.begin() as connection:
             user_id = _user(connection)
             snapshot_id, connection_id = _snapshot(connection, user_id, "MOCK-LEGACY-14")
@@ -209,7 +210,8 @@ def test_0007_upgrade_preserves_existing_linked_ticket_and_history(
         command.upgrade(config, "head")
         with engine.connect() as connection:
             assert (
-                MigrationContext.configure(connection).get_current_revision() == "0008_ticket_types"
+                MigrationContext.configure(connection).get_current_revision()
+                == ScriptDirectory.from_config(config).get_current_head()
             )
             for table in (
                 "ticket_history",
@@ -232,6 +234,7 @@ def test_0007_upgrade_preserves_existing_linked_ticket_and_history(
             assert stored.account_no == "MOCK-LEGACY-14"
             assert stored.subscriber_snapshot_id == snapshot_id
             assert stored.connection_snapshot_id == connection_id
+            assert stored.subject is None
             observation = db.query(DiagnosticSnapshot).filter_by(ticket_id=ticket_id).one()
             assert observation.subscriber_snapshot_id == snapshot_id
     finally:

@@ -131,6 +131,10 @@ class Ticket(Base):
         CheckConstraint("version > 0", name="ck_tickets_version"),
         CheckConstraint("length(description) > 0", name="ck_tickets_description"),
         CheckConstraint(
+            "subject IS NULL OR (length(btrim(subject)) > 0 AND subject !~ '[[:cntrl:]]')",
+            name="ck_tickets_subject",
+        ),
+        CheckConstraint(
             "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
             "AND account_no IS NOT NULL AND length(account_no) > 0) OR "
             "(ticket_type IN ('MANUAL', 'INTERNAL') AND subscriber_snapshot_id IS NULL "
@@ -170,6 +174,7 @@ class Ticket(Base):
     connection_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     selected_service_id: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     created_by: Mapped[UUID] = mapped_column(
@@ -238,7 +243,10 @@ class TicketResolution(Base):
 
 class TicketEvent(Base):
     __tablename__ = "ticket_history"
-    __table_args__ = (Index("ix_ticket_history_ticket_occurred", "ticket_id", "occurred_at", "id"),)
+    __table_args__ = (
+        Index("ix_ticket_history_ticket_occurred", "ticket_id", "occurred_at", "id"),
+        Index("ix_ticket_history_recent", "occurred_at", "id"),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     ticket_id: Mapped[UUID] = mapped_column(

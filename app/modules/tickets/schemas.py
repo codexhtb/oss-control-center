@@ -1,6 +1,7 @@
 """Strict public Service Desk payloads; snapshots are read from PostgreSQL."""
 
 from datetime import UTC, datetime
+from unicodedata import category
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -19,8 +20,18 @@ class CreateTicket(StrictModel):
     connection_snapshot_id: UUID | None = None
     selected_service_id: str | None = Field(default=None, min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=10000)
+    subject: str | None = Field(default=None, max_length=160)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value):
+            raise ValueError("subject must be nonblank, trimmed and contain no control characters")
+        return value
 
     @model_validator(mode="after")
     def validate_source(self) -> "CreateTicket":
@@ -115,6 +126,7 @@ class TicketView(BaseModel):
     connection_snapshot_id: UUID | None
     selected_service_id: str | None
     description: str
+    subject: str | None
     status: TicketStatus
     priority: TicketPriority
     created_by: UUID
@@ -168,6 +180,22 @@ class EventView(BaseModel):
     event_data: dict
     ticket_version: int
     occurred_at: datetime
+
+
+class RecentEventView(BaseModel):
+    id: UUID
+    ticket_id: UUID
+    ticket_number: int
+    event_type: str
+    actor_id: UUID | None
+    ticket_version: int
+    occurred_at: datetime
+
+
+class AssignableEngineerView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    display_name: str
 
 
 class AuditView(BaseModel):

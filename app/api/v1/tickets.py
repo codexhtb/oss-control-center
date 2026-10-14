@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
 from app.core.errors import ApiError
+from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role, permissions_for
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import (
     DiagnosticSnapshot,
+    Ticket,
     TicketAudit,
     TicketComment,
     TicketEvent,
@@ -21,6 +23,7 @@ from app.modules.tickets.models import (
 from app.modules.tickets.schemas import (
     AddComment,
     AddDecision,
+    AssignableEngineerView,
     AssignEngineer,
     AuditView,
     CloseTicket,
@@ -32,6 +35,7 @@ from app.modules.tickets.schemas import (
     FieldWorkRequest,
     ManualDiagnostic,
     Page,
+    RecentEventView,
     TicketDetail,
     TicketView,
 )
@@ -52,6 +56,8 @@ from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 PageNumber = Annotated[int, Query(ge=1)]
 PageSize = Annotated[int, Query(ge=1, le=100)]
+FeedPageNumber = Annotated[int, Query(ge=1, le=1000)]
+FeedPageSize = Annotated[int, Query(ge=1, le=50)]
 IfMatch = Annotated[str | None, Header(alias="If-Match")]
 
 
@@ -83,6 +89,10 @@ def can_assign(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_ASSIGN)
 
 
+def can_list_engineers(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
+    return _allowed(identity, db, Permission.TICKET_ASSIGN)
+
+
 def can_field_work(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_FIELD_WORK)
 
@@ -108,6 +118,7 @@ CreateDep = Annotated[AuthContext, Depends(can_create)]
 CommentDep = Annotated[AuthContext, Depends(can_comment)]
 StartDep = Annotated[AuthContext, Depends(can_start)]
 AssignDep = Annotated[AuthContext, Depends(can_assign)]
+EngineerListDep = Annotated[AuthContext, Depends(can_list_engineers)]
 FieldDep = Annotated[AuthContext, Depends(can_field_work)]
 DiagnoseDep = Annotated[AuthContext, Depends(can_diagnose)]
 DecisionDep = Annotated[AuthContext, Depends(can_decide)]
@@ -162,9 +173,12 @@ def listing(
     priority: TicketPriority | None = None,
     number: Annotated[int | None, Query(ge=1)] = None,
     assignee: UUID | None = None,
+    unassigned: bool = False,
     account_no: str | None = None,
     ticket_type: TicketType | None = None,
 ):
+    if unassigned and assignee is not None:
+        raise ApiError(422, "conflicting_filters", "assignee and unassigned cannot be combined")
     items, total = list_tickets(
         db,
         page=page,
@@ -173,10 +187,64 @@ def listing(
         priority=priority,
         number=number,
         assignee=assignee,
+        unassigned=unassigned,
         account_no=account_no,
         ticket_type=ticket_type,
     )
     return {"items": items, "page": page, "size": size, "total": total}
+
+
+@router.get("/assignable-engineers", response_model=Page[AssignableEngineerView])
+def assignable_engineers(
+    identity: EngineerListDep,
+    db: SessionDep,
+    page: PageNumber = 1,
+    size: PageSize = 20,
+):
+    conditions = (User.role == Role.ENGINEER, User.is_active.is_(True))
+    total = db.scalar(select(func.count()).select_from(User).where(*conditions)) or 0
+    rows = (
+        db.execute(
+            select(User.id, User.display_name)
+            .where(*conditions)
+            .order_by(User.display_name, User.id)
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [dict(row) for row in rows], "page": page, "size": size, "total": total}
+
+
+@router.get("/events/recent", response_model=Page[RecentEventView])
+def recent_events(
+    identity: ReadDep,
+    db: SessionDep,
+    page: FeedPageNumber = 1,
+    size: FeedPageSize = 20,
+):
+    total = db.scalar(select(func.count()).select_from(TicketEvent)) or 0
+    rows = (
+        db.execute(
+            select(
+                TicketEvent.id,
+                TicketEvent.ticket_id,
+                Ticket.number.label("ticket_number"),
+                TicketEvent.event_type,
+                TicketEvent.actor_id,
+                TicketEvent.ticket_version,
+                TicketEvent.occurred_at,
+            )
+            .join(Ticket, Ticket.id == TicketEvent.ticket_id)
+            .order_by(TicketEvent.occurred_at.desc(), TicketEvent.id.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        .mappings()
+        .all()
+    )
+    return {"items": [dict(row) for row in rows], "page": page, "size": size, "total": total}
 
 
 @router.get("/{ticket_id}", response_model=TicketDetail)

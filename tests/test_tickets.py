@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import URL, Engine
@@ -549,6 +550,214 @@ def test_three_types_http_creation_rbac_and_filters(
             ).status_code
             == 403
         )
+
+
+def test_subject_for_all_types_validation_replay_and_legacy_client(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    snapshot, _ = seed_snapshot(ticket_engine, operator)
+    login(ticket_client, operator.login)
+    for kind in TicketType:
+        payload = {
+            "ticket_type": kind.value,
+            "subject": f"Synthetic {kind.value} task",
+            "description": "Synthetic description",
+            "client_request_id": str(uuid4()),
+        }
+        if kind == TicketType.SUBSCRIBER_LINKED:
+            payload["lookup_id"] = str(snapshot.id)
+        created = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+        assert created.status_code == 201, created.text
+        ticket_id = created.json()["id"]
+        assert created.json()["subject"] == payload["subject"]
+        assert (
+            ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()["subject"]
+            == payload["subject"]
+        )
+        assert (
+            ticket_client.post(
+                "/api/v1/tickets", headers=csrf(ticket_client), json=payload
+            ).status_code
+            == 200
+        )
+        changed = {**payload, "subject": "Different synthetic subject"}
+        assert (
+            ticket_client.post(
+                "/api/v1/tickets", headers=csrf(ticket_client), json=changed
+            ).status_code
+            == 409
+        )
+        assert ticket_client.post("/api/v1/tickets", json=payload).status_code == 403
+    old_payload = {
+        "lookup_id": str(snapshot.id),
+        "description": "Legacy synthetic request",
+        "client_request_id": str(uuid4()),
+    }
+    old = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=old_payload)
+    assert old.status_code == 201, old.text
+    assert old.json()["subject"] is None
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets", headers=csrf(ticket_client), json=old_payload
+        ).status_code
+        == 200
+    )
+    invalid = ("", "   ", " leading", "trailing ", "line\nbreak", "control\x7f", "x" * 161)
+    for subject in invalid:
+        response = ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": "INTERNAL",
+                "subject": subject,
+                "description": "x",
+                "client_request_id": str(uuid4()),
+            },
+        )
+        assert response.status_code == 422
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 4
+
+
+def test_assignable_engineers_unassigned_filter_and_recent_events(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "engineer", Role.ENGINEER)
+    inactive = seed_user(ticket_engine, "inactive", Role.ENGINEER)
+    seed_user(ticket_engine, "admin", Role.ADMIN)
+    with Session(ticket_engine) as db:
+        db.get(User, inactive.id).is_active = False
+        db.commit()
+    assert ticket_client.get("/api/v1/tickets/events/recent").status_code == 401
+    login(ticket_client, operator.login)
+    assert ticket_client.get("/api/v1/tickets/assignable-engineers").status_code == 403
+    created = []
+    for kind in ("MANUAL", "INTERNAL"):
+        response = ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": kind,
+                "description": f"Synthetic {kind}",
+                "client_request_id": str(uuid4()),
+            },
+        )
+        assert response.status_code == 201, response.text
+        created.append(response.json())
+    unassigned = ticket_client.get(
+        "/api/v1/tickets",
+        params={"unassigned": "true", "ticket_type": "MANUAL", "page": 1, "size": 1},
+    )
+    assert unassigned.status_code == 200
+    assert unassigned.json()["total"] == 1
+    assert len(unassigned.json()["items"]) == 1
+    feed = ticket_client.get("/api/v1/tickets/events/recent", params={"size": 1, "page": 1})
+    assert feed.status_code == 200
+    assert feed.json()["total"] == 2 and len(feed.json()["items"]) == 1
+    assert set(feed.json()["items"][0]) == {
+        "id",
+        "ticket_id",
+        "ticket_number",
+        "event_type",
+        "actor_id",
+        "ticket_version",
+        "occurred_at",
+    }
+    assert (
+        ticket_client.get("/api/v1/tickets/events/recent", params={"size": 51}).status_code == 422
+    )
+    assert (
+        ticket_client.get("/api/v1/tickets/events/recent", params={"page": 1001}).status_code == 422
+    )
+    login(ticket_client, engineer.login)
+    engineers = ticket_client.get("/api/v1/tickets/assignable-engineers", params={"size": 1})
+    assert engineers.status_code == 200
+    assert engineers.json()["total"] == 1
+    assert engineers.json()["items"] == [
+        {"id": str(engineer.id), "display_name": engineer.display_name}
+    ]
+    assigned = ticket_client.post(
+        f"/api/v1/tickets/{created[0]['id']}/assignment",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"engineer_id": str(engineer.id)},
+    )
+    assert assigned.status_code == 200, assigned.text
+    listing = ticket_client.get("/api/v1/tickets", params={"unassigned": "true"}).json()
+    assert listing["total"] == 1 and listing["items"][0]["id"] == created[1]["id"]
+    assert (
+        ticket_client.get("/api/v1/tickets", params={"assignee": str(engineer.id)}).json()["total"]
+        == 1
+    )
+    assert (
+        ticket_client.get(
+            "/api/v1/tickets", params={"assignee": str(engineer.id), "unassigned": "true"}
+        ).status_code
+        == 422
+    )
+    feed = ticket_client.get("/api/v1/tickets/events/recent", params={"size": 1, "page": 2}).json()
+    assert feed["total"] == 3 and len(feed["items"]) == 1
+    login(ticket_client, "admin")
+    assert ticket_client.get("/api/v1/tickets/events/recent").status_code == 403
+    assert ticket_client.get("/api/v1/tickets/assignable-engineers").status_code == 403
+
+
+def test_0009_upgrade_preserves_subjectless_history(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "0008_ticket_types")
+    engine = create_engine(isolated_postgres_url)
+    try:
+        operator = seed_user(engine, "operator", Role.OPERATOR)
+        ticket_id = uuid4()
+        event_id = uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text("""INSERT INTO tickets
+                    (id, ticket_type, description, status, priority,
+                     created_by, client_request_id, version)
+                    VALUES (:id, 'MANUAL', 'Synthetic legacy description',
+                            'OPEN', 'NORMAL', :creator, :request_id, 1)"""),
+                {"id": ticket_id, "creator": operator.id, "request_id": uuid4()},
+            )
+            connection.execute(
+                text("""INSERT INTO ticket_history
+                    (id, ticket_id, event_type, actor_id, event_data, ticket_version)
+                    VALUES (:id, :ticket_id, 'ticket_created', :actor, '{}'::jsonb, 1)"""),
+                {"id": event_id, "ticket_id": ticket_id, "actor": operator.id},
+            )
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                == ScriptDirectory.from_config(config).get_current_head()
+            )
+            assert (
+                connection.execute(
+                    text("SELECT subject FROM tickets WHERE id = :id"), {"id": ticket_id}
+                ).scalar_one()
+                is None
+            )
+            assert (
+                connection.execute(
+                    text("SELECT id FROM ticket_history WHERE ticket_id = :id"), {"id": ticket_id}
+                ).scalar_one()
+                == event_id
+            )
+        with Session(engine) as db:
+            assert db.get(Ticket, ticket_id).subject is None
+        with pytest.raises(DBAPIError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE tickets SET subject = '   ' WHERE id = :id"), {"id": ticket_id}
+                )
+    finally:
+        engine.dispose()
 
 
 def test_manual_internal_lifecycle_without_billing(
