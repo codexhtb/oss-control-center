@@ -168,7 +168,18 @@ async function main() {
       const onuResponse = await engineer.context.request.get(`${origin}/api/v1/subscriber-lookups/${card.lookup_id}/connections/${card.connections[0].connection_snapshot_id}/onu`)
       expectStatus(onuResponse, 200, 'Subscriber ONU source availability')
       const onu = await onuResponse.json()
-      if (onu.source !== 'BDCOM' || onu.association !== 'UNCONFIRMED') throw new Error('ONU source contract mismatch')
+      if (onu.source !== 'BDCOM' || !['UNCONFIRMED', 'MATCHED_BY_RULE'].includes(onu.association)) throw new Error('ONU source contract mismatch')
+      if (onu.association === 'MATCHED_BY_RULE' && (onu.candidates.length !== 1 || !onu.match)) throw new Error('ONU match lacks unique evidence')
+      if (process.env.OSS_ONU_MATCH_ONLY === '1') {
+        if (onu.association !== 'MATCHED_BY_RULE' || onu.candidates[0].pon_type !== process.env.OSS_EXPECT_PON_TYPE) throw new Error('Expected unique PON ONU rule match was not returned')
+        if (onu.match.billing_source !== 'NETUP' || onu.match.onu_source !== 'LIBRENMS_BDCOM') throw new Error('ONU match provenance missing')
+        await engineer.page.locator('.onu-candidate').first().waitFor()
+        if (!(await engineer.page.locator('.onu-candidates').textContent()).includes('ONU найдена по утверждённому соответствию OLT')) throw new Error('Browser did not show verified ONU association')
+        if (onu.candidates[0].pon_type === 'GPON' && onu.candidates[0].mac) throw new Error('GPON surrogate key exposed as MAC')
+        console.log(`Read-only ${onu.candidates[0].pon_type} ONU browser match passed`)
+        await engineer.context.close()
+        return
+      }
       if (process.env.OSS_BDCOM_EXPECT_UNAVAILABLE === '1') {
         if (onu.availability !== 'UNAVAILABLE' || onu.candidates.length) throw new Error('Unconfigured ONU source produced subscriber data')
         await engineer.page.getByText('Источник BDCOM ONU не подключён или недоступен.').first().waitFor()
@@ -189,7 +200,7 @@ async function main() {
             if (!text.includes(item.state === 'UNKNOWN' ? 'UNKNOWN' : item.state[0] + item.state.slice(1).toLowerCase())) throw new Error('Browser ONU state differs from source response')
           }
         }
-        console.log(`BDCOM ONU source connected: ${onu.availability}, ${onu.candidates.length} unconfirmed candidates`)
+        console.log(`BDCOM ONU source connected: ${onu.availability}, association ${onu.association}, ${onu.candidates.length} candidates`)
       }
       const pending = engineer.page.waitForResponse((response) => response.url().endsWith(`/subscriber-lookups/${card.lookup_id}/diagnostics/check`) && response.request().method() === 'POST')
       await engineer.page.getByRole('button', { name: 'Проверить подключение' }).first().click()

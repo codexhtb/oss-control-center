@@ -23,16 +23,30 @@ def connection(rows: list[dict]) -> SimpleNamespace:
 
 
 class FakeReader:
-    def __init__(self, rows: list[dict] | None = None, truncated: bool = False):
+    def __init__(
+        self, rows: list[dict] | None = None, truncated: bool = False, pon_type: str = "GPON"
+    ):
         self.rows = rows or []
         self.truncated = truncated
-        self.calls: list[tuple[int, int]] = []
+        self.pon_type = pon_type
+        self.calls: list[tuple[int, int, int | None]] = []
 
-    def candidates(self, device_id: int, vlan: int):
-        self.calls.append((device_id, vlan))
+    def candidates(self, device_id: int, vlan: int, netup_port: int | None = None):
+        self.calls.append((device_id, vlan, netup_port))
+        rows = self.rows
+        if netup_port is not None:
+            offset = 13 if self.pon_type == "GPON" else 6
+            pon_port = netup_port - offset
+            rows = [
+                row for row in rows if row["interface"].startswith(f"{self.pon_type}0/{pon_port}:")
+            ]
         return (
-            {"sys_name": "synthetic-olt", "last_success": datetime(2026, 10, 10, 12)},
-            self.rows,
+            {
+                "sys_name": "synthetic-olt",
+                "pon_type": self.pon_type,
+                "last_success": datetime(2026, 10, 10, 12),
+            },
+            rows,
             self.truncated,
         )
 
@@ -86,12 +100,101 @@ def test_vlan_only_produces_unconfirmed_candidate() -> None:
     result = lookup_onu_candidates(
         connection([{"switch_id": "7", "port_id": 3, "vlan_id": 101}]), registry(), reader
     )
-    assert reader.calls == [(42, 101)]
+    assert reader.calls == [(42, 101, None)]
     assert result.availability == "AVAILABLE"
     assert result.source == "BDCOM" and result.retrieved_at.tzinfo is not None
     assert result.association == "UNCONFIRMED"
     assert result.candidates[0].inventory_polled_at == "2026-10-10 12:00:00"
     assert "optical_values_may_have_different_ages" in result.limitations
+
+
+def netup_row(port: int, vlan: int = 101) -> dict:
+    return {
+        "switch_id": "7",
+        "port_id": port,
+        "vlan_id": vlan,
+        "field_meta": {
+            key: {"source": "NETUP", "quality": "KNOWN", "observed_at": "2026-10-10T12:00:00+00:00"}
+            for key in ("switch_id", "port_id", "vlan_id")
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("pon_type", "port", "row"),
+    [
+        ("GPON", 14, gpon_row()),
+        (
+            "EPON",
+            7,
+            {
+                **gpon_row(),
+                "pon_type": "EPON",
+                "interface": "EPON0/1:2",
+                "mac": "02:00:00:00:00:01",
+                "serial": None,
+            },
+        ),
+    ],
+)
+def test_unique_complete_key_matches_by_confirmed_rule(pon_type, port, row) -> None:
+    reader = FakeReader([row], pon_type=pon_type)
+    result = lookup_onu_candidates(connection([netup_row(port)]), registry(), reader)
+    assert reader.calls == [(42, 101, port)]
+    assert result.availability == "AVAILABLE"
+    assert result.association == "MATCHED_BY_RULE"
+    assert result.match is not None
+    assert result.match.pon_port == 1 and result.match.netup_port == port
+    assert result.match.vlan == 101
+    assert result.match.billing_source == "NETUP"
+    assert result.match.onu_source == "LIBRENMS_BDCOM"
+    assert result.match.billing_observed_at is not None
+
+
+def test_composite_miss_does_not_confirm_vlan_candidate() -> None:
+    reader = FakeReader([gpon_row()])
+    result = lookup_onu_candidates(connection([netup_row(15)]), registry(), reader)
+    assert result.availability == "UNKNOWN"
+    assert result.association == "UNCONFIRMED"
+    assert len(result.candidates) == 1
+    assert reader.calls == [(42, 101, 15), (42, 101, None)]
+    assert "onu_composite_key_not_found" in result.limitations
+    assert "nearby_vlan_candidates_unconfirmed" in result.limitations
+
+
+def test_duplicate_composite_key_remains_conflict() -> None:
+    rows = [gpon_row(), {**gpon_row(), "interface": "GPON0/1:3"}]
+    result = lookup_onu_candidates(connection([netup_row(14)]), registry(), FakeReader(rows))
+    assert result.availability == "CONFLICT"
+    assert result.association == "UNCONFIRMED"
+    assert len(result.candidates) == 2
+    assert "onu_composite_key_ambiguous" in result.limitations
+
+
+def test_mock_or_unproven_source_never_auto_matches() -> None:
+    reader = FakeReader([gpon_row()])
+    result = lookup_onu_candidates(
+        connection([{"switch_id": "7", "port_id": 14, "vlan_id": 101}]), registry(), reader
+    )
+    assert reader.calls == [(42, 101, None)]
+    assert result.association == "UNCONFIRMED"
+
+
+def test_conflicting_netup_ports_never_query_onu() -> None:
+    reader = FakeReader([gpon_row()])
+    result = lookup_onu_candidates(connection([netup_row(14), netup_row(15)]), registry(), reader)
+    assert result.availability == "CONFLICT" and reader.calls == []
+
+
+def test_two_service_links_with_same_complete_key_never_auto_match() -> None:
+    first = connection([netup_row(14)])
+    second = connection([netup_row(14)])
+    reader = FakeReader([gpon_row()])
+    result = lookup_onu_candidates(first, registry(), reader, sibling_connections=[first, second])
+    assert result.availability == "CONFLICT"
+    assert result.association == "UNCONFIRMED"
+    assert "multiple_service_links_same_pon_vlan" in result.limitations
+    assert reader.calls == []
 
 
 @pytest.mark.parametrize(
@@ -271,3 +374,48 @@ def test_reader_queries_only_two_tables_with_parameters(monkeypatch) -> None:
     assert calls[0][1] == (42,)
     assert calls[1][1] == (42, 101)
     assert "LIMIT 21" in calls[1][0]
+
+
+@pytest.mark.parametrize(
+    ("pon_type", "netup_port", "expected_pattern"),
+    [
+        ("GPON", 16, "^GPON[0-9]+/3:[0-9]+$"),
+        ("EPON", 9, "^EPON[0-9]+/3:[0-9]+$"),
+    ],
+)
+def test_reader_uses_parameterized_full_pon_vlan_key(
+    monkeypatch, pon_type, netup_port, expected_pattern
+) -> None:
+    calls = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, query, params):
+            calls.append((query, params))
+
+        def fetchall(self):
+            return [{"device_id": 42, "pon_type": pon_type}] if len(calls) == 1 else []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr("app.modules.diagnostics.onu.pymysql.connect", lambda **_: Connection())
+    config = OnuDbConfig(
+        "127.0.0.1", 3306, "librenms", "reader", "synthetic-only", None, True, "dev"
+    )
+    BdcomOnuReader(config).candidates(42, 101, netup_port)
+    assert len(calls) == 2
+    assert "interface REGEXP %s" in calls[1][0]
+    assert calls[1][1] == (42, 101, pon_type, expected_pattern)

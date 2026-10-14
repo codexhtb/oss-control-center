@@ -29,12 +29,24 @@ class OnuCandidate(BaseModel):
     optical_measured_at: str | None = None
 
 
+class OnuMatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    netup_port: int = Field(gt=0)
+    pon_port: int = Field(gt=0)
+    vlan: int = Field(gt=0, le=4094)
+    olt_mapping_basis: Literal["manual_verified", "unique_exact_sysname"]
+    billing_observed_at: datetime | None = None
+    billing_source: Literal["NETUP"] = "NETUP"
+    onu_source: Literal["LIBRENMS_BDCOM"] = "LIBRENMS_BDCOM"
+
+
 class OnuResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: Literal["BDCOM"] = "BDCOM"
     retrieved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     availability: Literal["AVAILABLE", "UNAVAILABLE", "UNKNOWN", "CONFLICT"]
-    association: Literal["UNCONFIRMED"] = "UNCONFIRMED"
+    association: Literal["UNCONFIRMED", "MATCHED_BY_RULE"] = "UNCONFIRMED"
+    match: OnuMatch | None = None
     candidates: list[OnuCandidate] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=10)
     time_basis: Literal["SOURCE_LOCAL_UNVERIFIED"] = "SOURCE_LOCAL_UNVERIFIED"
@@ -170,7 +182,9 @@ class BdcomOnuReader:
     def __init__(self, config: OnuDbConfig):
         self.config = config
 
-    def candidates(self, device_id: int, vlan: int) -> tuple[dict, list[dict], bool]:
+    def candidates(
+        self, device_id: int, vlan: int, netup_port: int | None = None
+    ) -> tuple[dict, list[dict], bool]:
         connect_options = {
             "user": self.config.user,
             "password": self.config.password,
@@ -194,20 +208,28 @@ class BdcomOnuReader:
         try:
             with pymysql.connect(**connect_options) as connection, connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT device_id, hostname, sys_name, last_success "
+                    "SELECT device_id, hostname, sys_name, pon_type, last_success "
                     "FROM bdcom_onu_olts WHERE device_id = %s LIMIT 2",
                     (device_id,),
                 )
                 olts = cursor.fetchall()
                 if len(olts) != 1:
                     return {}, [], len(olts) > 1
-                cursor.execute(
+                query = (
                     "SELECT pon_type, interface, mac, serial, state, reason, present, last_seen, "
                     "onu_rx_power, onu_tx_power, olt_rx_power, signal_updated_at "
                     "FROM bdcom_onus WHERE device_id = %s AND vlan = %s AND present = 1 "
-                    "ORDER BY interface, mac LIMIT 21",
-                    (device_id, vlan),
                 )
+                params: tuple = (device_id, vlan)
+                pon_type = str(olts[0].get("pon_type") or "").upper()
+                if netup_port is not None:
+                    offset = {"EPON": 6, "GPON": 13}.get(pon_type)
+                    if offset is None or not 1 <= netup_port - offset <= 256:
+                        return olts[0], [], False
+                    pon_port = netup_port - offset
+                    query += "AND pon_type = %s AND interface REGEXP %s "
+                    params += (pon_type, f"^{pon_type}[0-9]+/{pon_port}:[0-9]+$")
+                cursor.execute(query + "ORDER BY interface, mac LIMIT 21", params)
                 rows = cursor.fetchall()
                 return olts[0], rows[:20], len(rows) > 20
         except (pymysql.MySQLError, OSError):

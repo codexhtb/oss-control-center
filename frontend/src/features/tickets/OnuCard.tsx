@@ -25,11 +25,15 @@ function Candidate({ item }: { item: OnuResult['candidates'][number] }) {
 
 export function OnuCard({ result }: { result: OnuResult }) {
   if (result.availability === 'UNAVAILABLE') return <Notice tone="error">Источник BDCOM ONU не подключён или недоступен.</Notice>
-  if (!result.candidates.length) return <p className="muted">ONU не сопоставлена с абонентом. {result.availability === 'CONFLICT' ? 'В NetUP есть противоречивые привязки.' : 'Подтверждённых данных нет.'}</p>
+  if (!result.candidates.length) return <p className="muted">ONU не сопоставлена с абонентом. {result.limitations.includes('olt_mapping_unconfirmed') ? 'Соответствие OLT не утверждено.' : result.limitations.includes('multiple_service_links_same_pon_vlan') ? 'Один OLT, PON-порт и VLAN указаны у нескольких сервисных связок.' : result.limitations.includes('onu_composite_key_not_found') ? 'Нет действующей ONU с таким OLT, PON-портом и VLAN.' : result.availability === 'CONFLICT' ? 'В NetUP есть противоречивые привязки.' : 'Подтверждённых данных нет.'}</p>
   return <div className="onu-candidates">
-    <p className="muted">Кандидаты по OLT и VLAN. Принадлежность абоненту не подтверждена инженером.</p>
+    {result.association === 'MATCHED_BY_RULE' && result.match
+      ? <p className="muted">ONU найдена по утверждённому соответствию OLT, порту NetUP {result.match.netup_port} → PON {result.match.pon_port} и VLAN {result.match.vlan}. Топология: NetUP{result.match.billing_observed_at ? `, ${result.match.billing_observed_at}` : ''}; ONU: LibreNMS BDCOM. Физическое состояние линии определяется по времени опроса.</p>
+      : <p className="muted">Кандидаты для проверки инженером. Автоматическое соответствие абоненту не установлено.</p>}
     {result.candidates.map((item) => <Candidate key={`${item.pon_type}-${item.interface}-${item.serial || item.mac}`} item={item} />)}
     {result.limitations.includes('onu_candidates_truncated') && <p className="muted">Показаны только первые 20 кандидатов.</p>}
+    {result.limitations.includes('onu_composite_key_ambiguous') && <p className="muted">Найдено несколько ONU с одинаковым OLT, PON-портом и VLAN. Требуется проверка инженером.</p>}
+    {result.limitations.includes('netup_topology_stale') && <p className="muted">Топология NetUP взята из исторической копии; её текущая актуальность не подтверждена.</p>}
     {result.limitations.includes('optical_values_may_have_different_ages') && <p className="muted">Время отдельного оптического значения может отличаться от времени общего обновления.</p>}
   </div>
 }

@@ -219,9 +219,17 @@ def subscriber_onu(
     connection = db.get(ConnectionSnapshot, connection_id)
     if connection is None or connection.subscriber_snapshot_id != lookup_id:
         raise ApiError(404, "connection_not_found", "Connection not found")
-    db.expunge(connection)
+    siblings = (
+        db.execute(
+            select(ConnectionSnapshot).where(ConnectionSnapshot.subscriber_snapshot_id == lookup_id)
+        )
+        .scalars()
+        .all()
+    )
+    for sibling in siblings:
+        db.expunge(sibling)
     db.rollback()
-    result = lookup_onu_candidates(connection, *runtime)
+    result = lookup_onu_candidates(connection, *runtime, sibling_connections=siblings)
     _still_engineer(db, actor_id)
     response.headers["Cache-Control"] = "no-store"
     return result
@@ -244,9 +252,19 @@ def ticket_onu(
     connection = db.get(ConnectionSnapshot, ticket.connection_snapshot_id)
     if connection is None:
         raise ApiError(409, "connection_missing", "Confirmed connection is unavailable")
-    db.expunge(connection)
+    siblings = (
+        db.execute(
+            select(ConnectionSnapshot).where(
+                ConnectionSnapshot.subscriber_snapshot_id == connection.subscriber_snapshot_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for sibling in siblings:
+        db.expunge(sibling)
     db.rollback()
-    result = lookup_onu_candidates(connection, *runtime)
+    result = lookup_onu_candidates(connection, *runtime, sibling_connections=siblings)
     _still_engineer(db, actor_id)
     response.headers["Cache-Control"] = "no-store"
     return result

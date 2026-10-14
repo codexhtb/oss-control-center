@@ -62,7 +62,7 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /subscriber-lookups/{lookup_id}/diagnostics/check` | Инженер, автор lookup | `{connection_snapshot_id}` | Preview без записи в заявку |
 | `POST /tickets/{ticket_id}/diagnostics/check` | Инженер | `If-Match` | Preview и `check_id`, действующий 15 минут |
 | `POST /tickets/{ticket_id}/diagnostics/confirm` | Инженер | `{check_id}` + `If-Match` | `201` автоматический snapshot, история и аудит при `IN_PROGRESS` |
-| `GET /subscriber-lookups/{lookup_id}/connections/{connection_id}/onu` | Инженер, автор lookup | UUID в пути | Read-only BDCOM ONU кандидаты; `association=UNCONFIRMED` |
+| `GET /subscriber-lookups/{lookup_id}/connections/{connection_id}/onu` | Инженер, автор lookup | UUID в пути | Read-only BDCOM ONU; составной ключ OLT+PON+VLAN или неподтверждённые кандидаты |
 | `GET /tickets/{ticket_id}/onu` | Инженер | UUID в пути | Read-only BDCOM ONU кандидаты для подтверждённого connection snapshot |
 | `POST /tickets/{ticket_id}/decisions` | Инженер | `{decision_text, performed_actions}` | `201` новая неизменяемая версия решения, история и аудит; требуется `IN_PROGRESS` |
 | `POST /tickets/{ticket_id}/close` | Инженер | `{decision_id}` + `If-Match` | `IN_PROGRESS → CLOSED` только с решением той же заявки; `closed_by`, `closed_at`, история и аудит в транзакции |
@@ -70,15 +70,22 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
 
 Ответ ONU GET содержит `source=BDCOM`, `retrieved_at`, `availability`,
-`association=UNCONFIRMED`, `time_basis=SOURCE_LOCAL_UNVERIFIED`, `limitations`
+`association=UNCONFIRMED | MATCHED_BY_RULE`, необязательный `match`
+с портом NetUP, вычисленным PON-портом, VLAN, основанием OLT mapping,
+источниками и временем NetUP, `time_basis=SOURCE_LOCAL_UNVERIFIED`, `limitations`
 и не более 20 `candidates`. Каждый кандидат содержит OLT, интерфейс,
 `pon_type`, физический `mac` (nullable), `serial` (nullable), `state`,
 `reason`, три nullable оптических значения и отдельные
 `inventory_polled_at`/`optical_measured_at`. GPON surrogate в DB `mac`
 не считается физическим MAC. `UNAVAILABLE` не подменяется пустым успешным
 списком. Ответы имеют `Cache-Control: no-store`; путь содержит только UUID,
-а не ЛС или MAC. Подтверждение принадлежности ONU абоненту этим API
-не выполняется.
+а не ЛС или MAC. `MATCHED_BY_RULE` возможен только при утверждённом
+сопоставлении OLT, одной полной тройке NetUP switch/port/VLAN с provenance
+NETUP, преобразовании порта по утверждённому правилу GPON `−13`/EPON `−6`
+и ровно одной действующей ONU по OLT+PON+VLAN при единственной такой
+сервисной связке в snapshot абонента. Повторы, неполные значения
+и неутверждённые OLT остаются `UNCONFIRMED`; результат не доказывает
+физическое состояние линии вне времени опроса.
 
 Пути в таблице относительны к `/api/v1`. Для linked `lookup_id` равен ID сохранённого subscriber snapshot; создать заявку можно только из ещё действующего snapshot, созданного текущим оператором или инженером. `connection_snapshot_id` должен принадлежать ему. Для manual/internal billing поля запрещены даже при `null`; `account_no` и произвольный клиентский snapshot не принимаются. Закрытие `OPEN` сначала требует явного начала работы; это проверяется сервером. В Phase 1 не предусмотрены API для ServiceDesk Plus и Telegram. Диагностические наблюдения содержат `source`, `measured_object`, `result`, `observed_at`, `retrieved_at` и `quality`; подробности — в [OSS Diagnostics](oss-diagnostics.md).
 

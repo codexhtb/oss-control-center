@@ -204,7 +204,16 @@ export interface OnuResult {
   source: 'BDCOM'
   retrieved_at: string
   availability: 'AVAILABLE' | 'UNAVAILABLE' | 'UNKNOWN' | 'CONFLICT'
-  association: 'UNCONFIRMED'
+  association: 'UNCONFIRMED' | 'MATCHED_BY_RULE'
+  match?: {
+    netup_port: number
+    pon_port: number
+    vlan: number
+    olt_mapping_basis: 'manual_verified' | 'unique_exact_sysname'
+    billing_observed_at: string | null
+    billing_source: 'NETUP'
+    onu_source: 'LIBRENMS_BDCOM'
+  } | null
   candidates: OnuCandidate[]
   limitations: string[]
   time_basis: 'SOURCE_LOCAL_UNVERIFIED'
