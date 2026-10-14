@@ -60,6 +60,57 @@ Chromium-контейнеру; его значение не находится �
 копия в `/root/oss-secrets/` и зашифрованный backup остаются задачей владельца.
 Состояние реестра: **backup pending** до проверенного восстановления.
 
+Опциональная интеграция LibreNMS использует только read-only токен владельца
+в `.dev-secrets/librenms-token` (`0600`) и проверенный реестр соответствий в
+`.dev-secrets/monitoring-mappings.json` (`0600`). Токен передаётся API как
+read-only mount файла, не как переменная со значением. Для этого override
+`compose.monitoring.dev.yaml` запускает API от непривилегированного UID 1001,
+совпадающего с владельцем файла. `LIBRENMS_URL` задаёт origin
+`http://172.17.7.70`; адаптер добавляет `/api/v0` самостоятельно. HTTP
+разрешён только в лабораторном `APP_ENV=dev` с явным opt-in; для постоянной
+эксплуатации нужен TLS или защищённый канал. PostgreSQL не публикуется.
+Подтверждённые соответствия оборудования и портов вносятся в защищённый
+реестр отдельно; пустой реестр означает `UNKNOWN`, даже если LibreNMS API
+доступен. Владелец утвердил только уникальные точные совпадения имён; генератор
+`dev/build_monitoring_mappings.py` использует read-only `SELECT` к NetUP Lab и
+`GET /api/v0/devices` к LibreNMS, не выводит имена, IP и IDs и никогда не
+сопоставляет порты. Для повторной генерации нужен пустой защищённый файл и
+явный флаг `--approve-unique-exact-sysname`; текущий реестр перезаписывать
+нельзя без отдельной сверки. При смене файла Compose API надо пересоздать,
+поскольку bind mount держит исходный inode. Icinga2 не подключена.
+
+Повторное построение реестра после проверки источников (без вывода реквизитов):
+
+```bash
+test ! -e .dev-secrets/monitoring-mappings.next.json
+umask 077
+printf '{"devices":[]}\n' > .dev-secrets/monitoring-mappings.next.json
+set -a
+. ./.env.netup-lab
+set +a
+APP_ENV=dev NETUP_LAB_ALLOW_PLAINTEXT=true \
+  LIBRENMS_URL=http://172.17.7.70 \
+  LIBRENMS_TOKEN_FILE=.dev-secrets/librenms-token \
+  MONITORING_ALLOW_HTTP_DEV=true \
+  .venv/bin/python -m dev.build_monitoring_mappings \
+  --approve-unique-exact-sysname \
+  --output .dev-secrets/monitoring-mappings.next.json
+```
+
+Генератор выводит только количество пар. Сверьте его с ожидаемым диапазоном,
+затем вручную замените защищённый реестр и пересоздайте только dev API. Реестр
+содержит сетевые идентификаторы и не попадает в Git. Тестовый ЛС с активным
+сопоставлением хранится в `.dev-secrets/monitoring-smoke.env` (`0600`); это
+реальное лабораторное значение, его нельзя выводить в журнал или коммит.
+Read-only Chromium-проверка через HTTPS:
+
+```bash
+sg docker -c 'OSS_READ_ONLY=1 OSS_MONITORING_ONLY=1 OSS_SMOKE_ENV_FILE=/opt/oss-control-center/.dev-secrets/monitoring-smoke.env sh dev/run_browser_e2e.sh'
+```
+
+Она проверяет факт получения состояния устройства из LibreNMS, явный
+`UNKNOWN` для порта, RBAC, CSRF и Origin; новых заявок не создаёт.
+
 Администратор может создать отдельную защищённую копию без вывода значений.
 Перед командами проверить, что целевые файлы ещё не существуют:
 
@@ -99,6 +150,12 @@ sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml up -d api w
 sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml ps'
 python3 dev/smoke_https.py
 ```
+
+Для dev-стека с LibreNMS добавьте `-f compose.monitoring.dev.yaml` к каждой
+команде Compose после `-f compose.dev.yaml`. Перед запуском проверьте
+`docker compose ... config --quiet` и права обоих защищённых файлов. Не
+подставляйте значения токена в shell arguments или логи. Выключение override
+оставляет код доступным, но источник LibreNMS не настроен.
 
 `seed` запускается только на пустой dev-базе и при повторном вызове откажет,
 не меняя пользователей. Проверки с подтверждением локального CA:

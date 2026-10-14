@@ -1,0 +1,15 @@
+# Opt-in read-only LibreNMS access for the isolated oss-control-dev stack.
+# A local token and an approved mapping file are required; neither enters Git.
+services:
+  api:
+    # Match the owner of protected 0600 files; still runs as a non-root user.
+    user: "1001:1001"
+    environment:
+      LIBRENMS_URL: "http://172.17.7.70"
+      LIBRENMS_TOKEN_FILE: /run/monitoring/librenms-token
+      MONITORING_MAPPING_FILE: /run/monitoring/mappings.json
+      MONITORING_ALLOW_HTTP_DEV: "true"
+      MONITORING_TIMEOUT_SECONDS: "3"
+    volumes:
+      - ./.dev-secrets/librenms-token:/run/monitoring/librenms-token:ro
+      - ./.dev-secrets/monitoring-mappings.json:/run/monitoring/mappings.json:ro

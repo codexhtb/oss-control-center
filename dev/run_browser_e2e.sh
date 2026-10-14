@@ -9,8 +9,9 @@ else
   billing_mode=${OSS_BILLING_MODE:-MOCK}
 fi
 if [ "$billing_mode" = NETUP ]; then
-  test -r "$project_dir/.dev-secrets/netup-smoke.env"
-  set -- --env-file "$project_dir/.dev-secrets/netup-smoke.env"
+  smoke_env_file=${OSS_SMOKE_ENV_FILE:-$project_dir/.dev-secrets/netup-smoke.env}
+  test -r "$smoke_env_file"
+  set -- --env-file "$smoke_env_file"
 else
   set --
 fi
@@ -25,6 +26,7 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --env OSS_BILLING_MODE="$billing_mode" \
   --env OSS_STAGE3C_LINKED \
   --env OSS_READ_ONLY \
+  --env OSS_MONITORING_ONLY \
   "$@" \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \

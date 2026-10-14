@@ -63,7 +63,7 @@ async function createTicket(page, kind) {
   if (kind !== 'SUBSCRIBER_LINKED' && (ticket.subscriber_snapshot_id || ticket.account_no)) throw new Error('Unlinked ticket has billing data')
   return ticket
 }
-async function checkNetupLabLookup(page) {
+async function checkNetupLabLookup(page, expectFinance = true, returnCard = false) {
   const accountNo = process.env.OSS_LAB_ACCOUNT_NO
   if (!accountNo) throw new Error('Protected NetUP Lab smoke account is not configured')
   await page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link', { name: 'Абоненты', exact: true }).click()
@@ -77,11 +77,11 @@ async function checkNetupLabLookup(page) {
   await page.locator('.subscriber-heading h1').waitFor()
   if (!page.url().endsWith(`/subscribers/${card.lookup_id}`)) throw new Error('Subscriber route exposes account number or wrong lookup')
   if (!(await page.locator('.subscriber-heading').textContent()).includes('NETUP')) throw new Error('Browser card does not show NetUP source')
-  if (await page.getByRole('heading', { name: 'Финансовые сведения' }).count() !== 1) throw new Error('Operator finance section missing')
+  if ((await page.getByRole('heading', { name: 'Финансовые сведения' }).count() === 1) !== expectFinance) throw new Error('Subscriber finance RBAC mismatch')
   if (card.connections.length && !(await page.locator('.ip-group').count())) throw new Error('IP group rows not rendered')
   expectStatus(await page.context().request.get(`${origin}/api/v1/subscriber-lookups/${card.lookup_id}/tickets`), 200, 'Subscriber ticket history')
   console.log('NetUP Lab: full Subscriber 360 card and ticket history passed')
-  if (process.env.OSS_STAGE3C_LINKED !== '1') return null
+  if (process.env.OSS_STAGE3C_LINKED !== '1') return returnCard ? card : null
   await page.getByRole('link', { name: /Создать заявку/ }).click()
   await page.getByText('ПОДТВЕРЖДЁННАЯ КАРТОЧКА').waitFor()
   if (await page.getByRole('combobox', { name: 'Услуга' }).count()) {
@@ -139,18 +139,65 @@ async function main() {
     if (process.env.OSS_READ_ONLY === '1') {
       if (billingMode !== 'NETUP') throw new Error('Read-only Subscriber 360 check requires NetUP Lab')
       await checkNetupLabLookup(operator.page)
-      const existingTicket = operator.page.locator('.subscriber-table a[href^="/tickets/"]').first()
-      await existingTicket.waitFor()
-      await existingTicket.click()
-      await operator.page.locator('.subscriber-summary').waitFor()
-      for (const phrase of ['Технология: UNKNOWN', 'ONU: UNKNOWN', 'Техническое состояние: UNKNOWN']) {
-        if ((await operator.page.locator('.subscriber-summary').textContent()).includes(phrase)) throw new Error('Ticket displays an unconfirmed technical value')
+      if (process.env.OSS_MONITORING_ONLY !== '1') {
+        const existingTicket = operator.page.locator('.subscriber-table a[href^="/tickets/"]').first()
+        await existingTicket.waitFor()
+        await existingTicket.click()
+        await operator.page.locator('.subscriber-summary').waitFor()
+        for (const phrase of ['Технология: UNKNOWN', 'ONU: UNKNOWN', 'Техническое состояние: UNKNOWN']) {
+          if ((await operator.page.locator('.subscriber-summary').textContent()).includes(phrase)) throw new Error('Ticket displays an unconfirmed technical value')
+        }
+        await operator.page.getByRole('button', { name: /Открыть карточку абонента/ }).click()
+        await operator.page.locator('.subscriber-heading h1').waitFor()
+        if (!operator.page.url().includes('/subscribers/')) throw new Error('Ticket did not open subscriber card')
       }
-      await operator.page.getByRole('button', { name: /Открыть карточку абонента/ }).click()
-      await operator.page.locator('.subscriber-heading h1').waitFor()
-      if (!operator.page.url().includes('/subscribers/')) throw new Error('Ticket did not open subscriber card')
+      const operatorLookup = new URL(operator.page.url()).pathname.split('/').pop()
+      const operatorConnection = (await (await operator.context.request.get(`${origin}/api/v1/subscriber-lookups/${operatorLookup}`)).json()).connections[0]
+      if (operatorConnection) {
+        const denied = await operator.context.request.post(`${origin}/api/v1/subscriber-lookups/${operatorLookup}/diagnostics/check`, {
+          headers: { Origin: origin, 'X-CSRF-Token': await csrfToken(operator.context) },
+          data: { connection_snapshot_id: operatorConnection.connection_snapshot_id },
+        })
+        expectStatus(denied, 403, 'Operator monitoring RBAC')
+      }
       await operator.context.close()
-      console.log('NetUP Lab: existing linked ticket and subscriber navigation passed without ticket creation')
+      const engineer = await login(browser, 'dev-engineer', 'engineer')
+      const card = await checkNetupLabLookup(engineer.page, false, true)
+      if (!card.connections.length) throw new Error('Read-only monitoring browser check needs a confirmed billing connection')
+      const pending = engineer.page.waitForResponse((response) => response.url().endsWith(`/subscriber-lookups/${card.lookup_id}/diagnostics/check`) && response.request().method() === 'POST')
+      await engineer.page.getByRole('button', { name: 'Проверить подключение' }).first().click()
+      const checked = await pending
+      expectStatus(checked, 200, 'Subscriber monitoring preview')
+      const report = await checked.json()
+      if (report.connection_snapshot_id !== card.connections[0].connection_snapshot_id || !Array.isArray(report.observations) || !Array.isArray(report.limitations)) throw new Error('Monitoring preview contract mismatch')
+      if (process.env.OSS_MONITORING_ONLY === '1') {
+        if (!report.observations.some((item) => item.source === 'LIBRENMS' && item.measured_object.startsWith('device:') && ['UP', 'DOWN'].includes(item.result))) throw new Error('Approved exact-name mapping did not produce a real LibreNMS device state')
+        if (!report.limitations.includes('device_mapping_unique_exact_sysname') || report.interface_match !== 'UNKNOWN') throw new Error('Monitoring report hid mapping provenance or inferred an interface')
+      }
+      await engineer.page.locator('.monitoring-report').first().waitFor()
+      const open = await engineer.context.request.get(`${origin}/api/v1/tickets?ticket_type=SUBSCRIBER_LINKED&status=OPEN&size=50`)
+      expectStatus(open, 200, 'Open linked ticket list')
+      let ticketChecked = false
+      for (const candidate of (await open.json()).items) {
+        const detailResponse = await engineer.context.request.get(`${origin}/api/v1/tickets/${candidate.id}`)
+        expectStatus(detailResponse, 200, 'Open linked ticket detail')
+        const detail = await detailResponse.json()
+        if (!detail.connection_snapshot_id) continue
+        const path = `${origin}/api/v1/tickets/${detail.id}/diagnostics/check`
+        expectStatus(await engineer.context.request.post(path, { headers: { Origin: origin, 'If-Match': `"${detail.version}"` } }), 403, 'Monitoring CSRF')
+        expectStatus(await engineer.context.request.post(path, { headers: { Origin: 'https://untrusted.invalid', 'X-CSRF-Token': await csrfToken(engineer.context), 'If-Match': `"${detail.version}"` } }), 403, 'Monitoring Origin')
+        await engineer.page.goto(`${origin}/tickets/${detail.id}`)
+        await engineer.page.getByRole('heading', { name: 'Мониторинг подключения' }).waitFor()
+        const ticketPending = engineer.page.waitForResponse((response) => response.url().endsWith(`/tickets/${detail.id}/diagnostics/check`) && response.request().method() === 'POST')
+        await engineer.page.getByRole('button', { name: 'Проверить подключение' }).click()
+        expectStatus(await ticketPending, 200, 'Ticket monitoring preview')
+        await engineer.page.locator('.monitoring-report').waitFor()
+        ticketChecked = true
+        break
+      }
+      if (!ticketChecked) throw new Error('No existing open linked ticket with a confirmed connection for browser monitoring check')
+      await engineer.context.close()
+      console.log('NetUP Lab: Subscriber 360 and ticket monitoring preview, CSRF, Origin and RBAC passed without ticket creation')
       return
     }
     const tickets = []
