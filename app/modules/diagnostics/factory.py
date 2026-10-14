@@ -1,8 +1,11 @@
 """Construct optional monitoring readers without inventing unavailable sources."""
 
+import os
+
 from app.modules.diagnostics.config import MappingRegistry, MonitoringConfig, protected_text
 from app.modules.diagnostics.correlation import CorrelationEngine
 from app.modules.diagnostics.http import JsonTransport
+from app.modules.diagnostics.onu import BdcomOnuReader, OnuDbConfig
 from app.modules.diagnostics.providers import IcingaProvider, LibreNMSProvider
 
 
@@ -34,3 +37,10 @@ def get_correlation_engine() -> CorrelationEngine:
             )
         )
     return CorrelationEngine(registry, librenms, icinga)
+
+
+def get_onu_runtime() -> tuple[MappingRegistry, BdcomOnuReader | None]:
+    config = MonitoringConfig.from_env()
+    registry = MappingRegistry.from_file(config.mapping_file)
+    path = os.environ.get("BDCOM_ONU_CREDENTIAL_FILE")
+    return registry, BdcomOnuReader(OnuDbConfig.from_file(path, config.app_env)) if path else None

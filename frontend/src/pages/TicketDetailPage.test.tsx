@@ -10,7 +10,7 @@ import { TicketDetailPage } from './TicketDetailPage'
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
   decisions: vi.fn(), engineers: vi.fn(), start: vi.fn(), addComment: vi.fn(),
-  lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(),
+  lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
 } }))
 
 const ticketId = '00000000-0000-4000-8000-000000000010'
@@ -43,13 +43,18 @@ function renderDetail(role: 'operator' | 'engineer') {
 }
 
 beforeEach(() => {
-  for (const fn of [ticketApi.get, ticketApi.comments, ticketApi.history, ticketApi.diagnostics, ticketApi.decisions, ticketApi.engineers, ticketApi.start, ticketApi.addComment, ticketApi.lookup, ticketApi.checkTicket, ticketApi.confirmCheck]) vi.mocked(fn).mockReset()
+  for (const fn of [ticketApi.get, ticketApi.comments, ticketApi.history, ticketApi.diagnostics, ticketApi.decisions, ticketApi.engineers, ticketApi.start, ticketApi.addComment, ticketApi.lookup, ticketApi.checkTicket, ticketApi.confirmCheck, ticketApi.ticketOnu]) vi.mocked(fn).mockReset()
   vi.mocked(ticketApi.get).mockResolvedValue(base)
   vi.mocked(ticketApi.comments).mockResolvedValue(empty)
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
   vi.mocked(ticketApi.diagnostics).mockResolvedValue(empty)
   vi.mocked(ticketApi.decisions).mockResolvedValue(empty)
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
+  vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
+    source: 'BDCOM', retrieved_at: base.created_at,
+    availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
+    limitations: ['onu_source_not_configured'], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
+  })
 })
 
 it('shows the saved ticket and sends the current version when an engineer starts work', async () => {

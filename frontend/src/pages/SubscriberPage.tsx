@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { formatDate, statusLabel, ticketTitle } from '../features/tickets/presentation'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { MonitoringReport } from '../features/tickets/MonitoringReport'
+import { SubscriberOnuCard } from '../features/tickets/OnuCard'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow } from '../features/tickets/types'
 import type { MeResponse } from '../shared/api/types'
 import { errorText } from '../shared/api/client'
@@ -52,6 +53,7 @@ function ConnectionBlock({ connection, service, lookupId, canCheck }: { connecti
     {canCheck && <div className="monitoring-action"><Button variant="secondary" disabled={check.isPending} onClick={() => check.mutate()}>{check.isPending ? 'Проверяем…' : 'Проверить подключение'}</Button></div>}
     {check.isError && <Notice tone="error">{errorText(check.error)}</Notice>}
     {check.data && <MonitoringReport report={check.data} />}
+    {canCheck && connection.access_type !== 'ETHERNET' && <SubscriberOnuCard lookupId={lookupId} connectionId={connection.connection_snapshot_id} />}
   </article>
 }
 

@@ -16,12 +16,13 @@ from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.v1.diagnostics import engine_dependency
+from app.api.v1.diagnostics import engine_dependency, onu_dependency
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.db.session import get_session
 from app.main import create_app
 from app.modules.billing.quality import DataQuality
+from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.correlation import DiagnosticReport, Observation
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User
@@ -95,7 +96,7 @@ def seed_user(engine: Engine, name: str, role: Role) -> User:
 
 
 def seed_snapshot(
-    engine: Engine, user: User, count: int = 1
+    engine: Engine, user: User, count: int = 1, ip_groups: list | None = None
 ) -> tuple[SubscriberSnapshot, list[ConnectionSnapshot]]:
     with Session(engine, expire_on_commit=False) as db:
         snapshot = SubscriberSnapshot(
@@ -119,6 +120,7 @@ def seed_snapshot(
                 port=None,
                 vlan=None,
                 onu_id=None,
+                ip_groups=ip_groups or [],
             )
             for index in range(count)
         ]
@@ -136,6 +138,32 @@ def login(client: TestClient, name: str) -> None:
 
 def csrf(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": client.cookies["oss_csrf"]}
+
+
+def test_onu_endpoint_requires_engineer_and_never_invents_an_onu(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "onu_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "onu_operator", Role.OPERATOR)
+    snapshot, connections = seed_snapshot(
+        ticket_engine,
+        engineer,
+        count=2,
+        ip_groups=[{"group_id": "synthetic", "rows": [{"switch_id": "7", "vlan_id": 101}]}],
+    )
+    ticket_client.app.dependency_overrides[onu_dependency] = lambda: (
+        MappingRegistry(devices=[DeviceMapping(netup_switch_id="7", librenms_device_id=42)]),
+        None,
+    )
+    path = f"/api/v1/subscriber-lookups/{snapshot.id}/connections/{connections[1].id}/onu"
+    login(ticket_client, operator.login)
+    assert ticket_client.get(path).status_code == 403
+    login(ticket_client, engineer.login)
+    response = ticket_client.get(path)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json()["availability"] == "UNAVAILABLE"
+    assert response.json()["candidates"] == []
 
 
 def test_automatic_diagnostic_requires_engineer_confirmation(

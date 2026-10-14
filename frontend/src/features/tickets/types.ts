@@ -185,6 +185,31 @@ export interface TicketCheckResult {
   report: DiagnosticReport
 }
 
+export interface OnuCandidate {
+  olt: string | null
+  interface: string
+  pon_type: 'EPON' | 'GPON'
+  mac: string | null
+  serial: string | null
+  state: 'ONLINE' | 'OFFLINE' | 'DEREGISTERED' | 'UNKNOWN'
+  reason: string | null
+  onu_rx_dbm: string | null
+  olt_rx_dbm: string | null
+  onu_tx_dbm: string | null
+  inventory_polled_at: string | null
+  optical_measured_at: string | null
+}
+
+export interface OnuResult {
+  source: 'BDCOM'
+  retrieved_at: string
+  availability: 'AVAILABLE' | 'UNAVAILABLE' | 'UNKNOWN' | 'CONFLICT'
+  association: 'UNCONFIRMED'
+  candidates: OnuCandidate[]
+  limitations: string[]
+  time_basis: 'SOURCE_LOCAL_UNVERIFIED'
+}
+
 export interface Decision {
   id: string
   ticket_id: string

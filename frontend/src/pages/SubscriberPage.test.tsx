@@ -8,7 +8,7 @@ import type { MeResponse } from '../shared/api/types'
 import { SubscriberPage } from './SubscriberPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({
-  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), checkSubscriber: vi.fn() },
+  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
 }))
 
 const timestamp = '2026-01-01T00:00:00Z'
@@ -66,6 +66,11 @@ beforeEach(() => {
   vi.mocked(ticketApi.getLookup).mockReset().mockResolvedValue(card)
   vi.mocked(ticketApi.subscriberTickets).mockReset().mockResolvedValue({ items: [], page: 1, size: 10, total: 0 })
   vi.mocked(ticketApi.checkSubscriber).mockReset()
+  vi.mocked(ticketApi.subscriberOnu).mockReset().mockResolvedValue({
+    source: 'BDCOM', retrieved_at: timestamp,
+    availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
+    limitations: ['onu_source_not_configured'], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
+  })
 })
 
 it('renders source quality, multiple contacts, tariff, IP rows, finance and linked action', async () => {

@@ -8,10 +8,13 @@ from fastapi import APIRouter, Depends, Header, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
-from app.api.v1.identity import CsrfIdentityDep, SessionDep
+from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
 from app.core.errors import ApiError
+from app.modules.diagnostics.config import MappingRegistry
 from app.modules.diagnostics.correlation import CorrelationEngine, DiagnosticReport
-from app.modules.diagnostics.factory import get_correlation_engine
+from app.modules.diagnostics.factory import get_correlation_engine, get_onu_runtime
+from app.modules.diagnostics.onu import BdcomOnuReader, OnuResult
+from app.modules.diagnostics.onu_correlation import lookup_onu_candidates
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role, permissions_for
 from app.modules.tickets.models import (
@@ -59,6 +62,18 @@ def _engineer(identity: CsrfIdentityDep) -> UUID:
     if Permission.DIAGNOSTICS_RUN not in permissions_for(Role(identity.user.role)):
         raise ApiError(403, "forbidden", "Permission denied")
     return identity.user.id
+
+
+def onu_dependency() -> tuple[MappingRegistry, BdcomOnuReader | None]:
+    try:
+        return get_onu_runtime()
+    except (ValueError, OSError, TypeError):
+        raise ApiError(
+            503, "monitoring_configuration_unavailable", "Monitoring configuration unavailable"
+        ) from None
+
+
+OnuRuntimeDep = Annotated[tuple[MappingRegistry, BdcomOnuReader | None], Depends(onu_dependency)]
 
 
 def _still_engineer(db: SessionDep, actor_id: UUID) -> None:
@@ -183,3 +198,55 @@ def confirm_check(
     item = confirm_monitoring_check(db, actor_id, ticket_id, payload.check_id, _version(if_match))
     response.headers["Cache-Control"] = "no-store"
     return item
+
+
+@router.get(
+    "/subscriber-lookups/{lookup_id}/connections/{connection_id}/onu",
+    response_model=OnuResult,
+)
+def subscriber_onu(
+    lookup_id: UUID,
+    connection_id: UUID,
+    response: Response,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    runtime: OnuRuntimeDep,
+) -> OnuResult:
+    actor_id = _engineer(identity)
+    snapshot = db.get(SubscriberSnapshot, lookup_id)
+    if snapshot is None or snapshot.requested_by != actor_id:
+        raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
+    connection = db.get(ConnectionSnapshot, connection_id)
+    if connection is None or connection.subscriber_snapshot_id != lookup_id:
+        raise ApiError(404, "connection_not_found", "Connection not found")
+    db.expunge(connection)
+    db.rollback()
+    result = lookup_onu_candidates(connection, *runtime)
+    _still_engineer(db, actor_id)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get("/tickets/{ticket_id}/onu", response_model=OnuResult)
+def ticket_onu(
+    ticket_id: UUID,
+    response: Response,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    runtime: OnuRuntimeDep,
+) -> OnuResult:
+    actor_id = _engineer(identity)
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
+    if ticket.connection_snapshot_id is None:
+        raise ApiError(409, "connection_required", "Ticket has no confirmed connection")
+    connection = db.get(ConnectionSnapshot, ticket.connection_snapshot_id)
+    if connection is None:
+        raise ApiError(409, "connection_missing", "Confirmed connection is unavailable")
+    db.expunge(connection)
+    db.rollback()
+    result = lookup_onu_candidates(connection, *runtime)
+    _still_engineer(db, actor_id)
+    response.headers["Cache-Control"] = "no-store"
+    return result
