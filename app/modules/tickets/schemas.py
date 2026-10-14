@@ -212,6 +212,7 @@ class AuditView(BaseModel):
 class DiagnosticView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    check_id: UUID | None = None
     ticket_id: UUID
     connection_snapshot_id: UUID | None
     source_kind: str

@@ -12,6 +12,7 @@
 - [Phase 1.4: три типа заявок — архитектура и план](phase-1.4-ticket-types.md)
 - [Phase 1.4 Stage 3: Web UI — этапы и границы](phase-1.4-web-ui.md)
 - [Acceptance criteria и тестирование](acceptance-and-testing.md)
+- [OSS Diagnostics — read-only мониторинг](oss-diagnostics.md)
 - [Решения ревью и остающиеся вопросы](review.md)
 
 **Source of truth:** PostgreSQL хранит заявки, комментарии, решения, историю, аудит и диагностические snapshots. ServiceDesk Plus остаётся только в AS-IS и временном миграционном процессе; синхронизация с ним не разрабатывается. Нет необходимости знать production API NetUP, чтобы начать Phase 1.

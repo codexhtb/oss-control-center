@@ -12,6 +12,7 @@ from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role, permissions_for
 from app.modules.tickets.models import (
     ConnectionSnapshot,
+    DiagnosticCheck,
     DiagnosticSnapshot,
     SubscriberSnapshot,
     Ticket,
@@ -412,6 +413,57 @@ def add_diagnostic(
     _changed(ticket)
     _fact(db, ticket, actor_id, "manual_diagnostic_added", {"diagnostic_id": str(item.id)})
     db.commit()
+    db.refresh(item)
+    return item
+
+
+def confirm_monitoring_check(
+    db: Session, actor_id: UUID, ticket_id: UUID, check_id: UUID, version: int | None
+) -> DiagnosticSnapshot:
+    """Atomically acknowledge a server-produced report into immutable ticket history."""
+    _actor(db, actor_id, Permission.TICKET_MANUAL_DIAGNOSTIC)
+    ticket = _ticket(db, ticket_id, lock=True)
+    _version(ticket, version)
+    if ticket.status != TicketStatus.IN_PROGRESS:
+        raise ApiError(409, "invalid_transition", "Start ticket before confirming diagnostics")
+    check = db.execute(
+        select(DiagnosticCheck).where(DiagnosticCheck.id == check_id).with_for_update()
+    ).scalar_one_or_none()
+    if check is None or check.ticket_id != ticket_id or check.requested_by != actor_id:
+        raise ApiError(404, "check_not_found", "Diagnostic check not found")
+    if check.expires_at <= datetime.now(UTC):
+        raise ApiError(409, "check_expired", "Diagnostic check expired; run it again")
+    if db.scalar(select(DiagnosticSnapshot.id).where(DiagnosticSnapshot.check_id == check_id)):
+        raise ApiError(409, "check_already_confirmed", "Diagnostic check already confirmed")
+    report = check.report
+    item = DiagnosticSnapshot(
+        ticket_id=ticket.id,
+        subscriber_snapshot_id=ticket.subscriber_snapshot_id,
+        connection_snapshot_id=check.connection_snapshot_id,
+        check_id=check.id,
+        source_kind="AUTOMATED",
+        availability=(
+            "KNOWN"
+            if any(o.get("quality") == "KNOWN" for o in report["observations"])
+            else "UNKNOWN"
+        ),
+        observation=report,
+        observed_at=datetime.fromisoformat(report["checked_at"].replace("Z", "+00:00")),
+        recorded_by=actor_id,
+    )
+    db.add(item)
+    try:
+        db.flush()
+        _changed(ticket)
+        _fact(
+            db, ticket, actor_id, "automatic_diagnostic_confirmed", {"diagnostic_id": str(item.id)}
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ApiError(
+            409, "check_already_confirmed", "Diagnostic check already confirmed"
+        ) from None
     db.refresh(item)
     return item
 

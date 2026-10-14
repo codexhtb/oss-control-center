@@ -16,15 +16,19 @@ from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.v1.diagnostics import engine_dependency
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.db.session import get_session
 from app.main import create_app
+from app.modules.billing.quality import DataQuality
+from app.modules.diagnostics.correlation import DiagnosticReport, Observation
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User
 from app.modules.identity.roles import Role
 from app.modules.tickets.models import (
     ConnectionSnapshot,
+    DiagnosticCheck,
     DiagnosticSnapshot,
     SubscriberSnapshot,
     Ticket,
@@ -132,6 +136,130 @@ def login(client: TestClient, name: str) -> None:
 
 def csrf(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": client.cookies["oss_csrf"]}
+
+
+def test_automatic_diagnostic_requires_engineer_confirmation(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "diagnostic_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(ticket_engine, engineer)
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201
+    ticket_id = created.json()["id"]
+
+    class SyntheticEngine:
+        def check(self, connection):
+            when = datetime.now(UTC)
+            return DiagnosticReport(
+                connection_snapshot_id=connection.id,
+                checked_at=when,
+                device_match=DataQuality.KNOWN,
+                interface_match=DataQuality.KNOWN,
+                observations=[
+                    Observation(
+                        source="LIBRENMS",
+                        measured_object="device:42",
+                        result="UP",
+                        observed_at=when,
+                        retrieved_at=when,
+                        quality=DataQuality.KNOWN,
+                    )
+                ],
+                limitations=["optical_measurement_not_verified"],
+            )
+
+    ticket_client.app.dependency_overrides[engine_dependency] = SyntheticEngine
+    check_path = f"/api/v1/tickets/{ticket_id}/diagnostics/check"
+    assert ticket_client.post(check_path, headers={"If-Match": '"1"'}).status_code == 403
+    checked = ticket_client.post(check_path, headers={**csrf(ticket_client), "If-Match": '"1"'})
+    assert checked.status_code == 200
+    check_id = checked.json()["check_id"]
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(DiagnosticSnapshot)) == 0
+    assert (
+        ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/diagnostics/confirm",
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+            json={"check_id": check_id},
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/start",
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+        ).status_code
+        == 200
+    )
+    confirmed = ticket_client.post(
+        f"/api/v1/tickets/{ticket_id}/diagnostics/confirm",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"check_id": check_id},
+    )
+    assert confirmed.status_code == 201
+    assert confirmed.json()["source_kind"] == "AUTOMATED"
+    assert confirmed.json()["check_id"] == check_id
+    assert (
+        ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/diagnostics/confirm",
+            headers={**csrf(ticket_client), "If-Match": '"3"'},
+            json={"check_id": check_id},
+        ).status_code
+        == 409
+    )
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(DiagnosticSnapshot)) == 1
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(TicketEvent.event_type == "automatic_diagnostic_confirmed")
+            )
+            == 1
+        )
+
+    operator = seed_user(ticket_engine, "diagnostic_operator", Role.OPERATOR)
+    login(ticket_client, operator.login)
+    assert (
+        ticket_client.post(
+            check_path, headers={**csrf(ticket_client), "If-Match": '"3"'}
+        ).status_code
+        == 403
+    )
+    admin = seed_user(ticket_engine, "diagnostic_admin", Role.ADMIN)
+    login(ticket_client, admin.login)
+    assert (
+        ticket_client.post(
+            check_path, headers={**csrf(ticket_client), "If-Match": '"3"'}
+        ).status_code
+        == 403
+    )
+
+
+def test_diagnostic_check_rejects_another_connection(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "diagnostic_fk_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(ticket_engine, engineer, count=2)
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201
+    with Session(ticket_engine) as db:
+        db.add(
+            DiagnosticCheck(
+                ticket_id=UUID(created.json()["id"]),
+                subscriber_snapshot_id=snapshot.id,
+                connection_snapshot_id=connections[1].id,
+                requested_by=engineer.id,
+                report={},
+                expires_at=datetime.now(UTC) + timedelta(minutes=15),
+            )
+        )
+        with pytest.raises(DBAPIError):
+            db.commit()
+        db.rollback()
+        assert db.scalar(select(func.count()).select_from(DiagnosticCheck)) == 0
 
 
 def create(

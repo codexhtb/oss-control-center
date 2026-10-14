@@ -35,7 +35,9 @@ class SubscriberSnapshot(Base):
         Index("ix_subscriber_snapshots_account_fetched", "account_no", "fetched_at"),
         Index(
             "ix_subscriber_snapshots_source_subscriber",
-            "source", "subscriber_id", "id",
+            "source",
+            "subscriber_id",
+            "id",
             postgresql_where=text("subscriber_id IS NOT NULL"),
         ),
         Index("ix_subscriber_snapshots_fetched", "fetched_at", "id"),
@@ -325,7 +327,13 @@ class DiagnosticSnapshot(Base):
             ondelete="RESTRICT",
             name="fk_diagnostics_connection_parent",
         ),
-        CheckConstraint("source_kind = 'MANUAL'", name="ck_diagnostics_phase1_source"),
+        CheckConstraint("source_kind IN ('MANUAL', 'AUTOMATED')", name="ck_diagnostics_source"),
+        UniqueConstraint("check_id", name="uq_diagnostics_check"),
+        CheckConstraint(
+            "(source_kind = 'MANUAL' AND check_id IS NULL) OR "
+            "(source_kind = 'AUTOMATED' AND check_id IS NOT NULL)",
+            name="ck_diagnostics_check_source",
+        ),
         CheckConstraint("availability IN ('KNOWN', 'UNKNOWN')", name="ck_diagnostics_availability"),
         CheckConstraint(
             "connection_snapshot_id IS NULL OR subscriber_snapshot_id IS NOT NULL",
@@ -335,6 +343,11 @@ class DiagnosticSnapshot(Base):
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    check_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("diagnostic_checks.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     ticket_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     subscriber_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     connection_snapshot_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
@@ -348,3 +361,44 @@ class DiagnosticSnapshot(Base):
     recorded_by: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False
     )
+
+
+class DiagnosticCheck(Base):
+    """Immutable unconfirmed result; confirmation creates one DiagnosticSnapshot."""
+
+    __tablename__ = "diagnostic_checks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id", "subscriber_snapshot_id"],
+            ["tickets.id", "tickets.subscriber_snapshot_id"],
+            ondelete="RESTRICT",
+            name="fk_diagnostic_checks_ticket_snapshot",
+        ),
+        ForeignKeyConstraint(
+            ["connection_snapshot_id", "subscriber_snapshot_id"],
+            ["connection_snapshots.id", "connection_snapshots.subscriber_snapshot_id"],
+            ondelete="RESTRICT",
+            name="fk_diagnostic_checks_connection_parent",
+        ),
+        CheckConstraint("expires_at > created_at", name="ck_diagnostic_checks_expiry"),
+        Index("ix_diagnostic_checks_ticket_created", "ticket_id", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    ticket_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tickets.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    subscriber_snapshot_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    connection_snapshot_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    requested_by: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("app_users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    report: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
