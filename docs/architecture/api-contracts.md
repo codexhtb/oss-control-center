@@ -62,10 +62,23 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /subscriber-lookups/{lookup_id}/diagnostics/check` | Инженер, автор lookup | `{connection_snapshot_id}` | Preview без записи в заявку |
 | `POST /tickets/{ticket_id}/diagnostics/check` | Инженер | `If-Match` | Preview и `check_id`, действующий 15 минут |
 | `POST /tickets/{ticket_id}/diagnostics/confirm` | Инженер | `{check_id}` + `If-Match` | `201` автоматический snapshot, история и аудит при `IN_PROGRESS` |
+| `GET /subscriber-lookups/{lookup_id}/connections/{connection_id}/onu` | Инженер, автор lookup | UUID в пути | Read-only BDCOM ONU кандидаты; `association=UNCONFIRMED` |
+| `GET /tickets/{ticket_id}/onu` | Инженер | UUID в пути | Read-only BDCOM ONU кандидаты для подтверждённого connection snapshot |
 | `POST /tickets/{ticket_id}/decisions` | Инженер | `{decision_text, performed_actions}` | `201` новая неизменяемая версия решения, история и аудит; требуется `IN_PROGRESS` |
 | `POST /tickets/{ticket_id}/close` | Инженер | `{decision_id}` + `If-Match` | `IN_PROGRESS → CLOSED` только с решением той же заявки; `closed_by`, `closed_at`, история и аудит в транзакции |
 | `GET /tickets/{ticket_id}/history` | Оператор, инженер | Пагинация | Хронология фактов с источником и временем; внешних Telegram сообщений в Phase 1 нет |
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
+
+Ответ ONU GET содержит `source=BDCOM`, `retrieved_at`, `availability`,
+`association=UNCONFIRMED`, `time_basis=SOURCE_LOCAL_UNVERIFIED`, `limitations`
+и не более 20 `candidates`. Каждый кандидат содержит OLT, интерфейс,
+`pon_type`, физический `mac` (nullable), `serial` (nullable), `state`,
+`reason`, три nullable оптических значения и отдельные
+`inventory_polled_at`/`optical_measured_at`. GPON surrogate в DB `mac`
+не считается физическим MAC. `UNAVAILABLE` не подменяется пустым успешным
+списком. Ответы имеют `Cache-Control: no-store`; путь содержит только UUID,
+а не ЛС или MAC. Подтверждение принадлежности ONU абоненту этим API
+не выполняется.
 
 Пути в таблице относительны к `/api/v1`. Для linked `lookup_id` равен ID сохранённого subscriber snapshot; создать заявку можно только из ещё действующего snapshot, созданного текущим оператором или инженером. `connection_snapshot_id` должен принадлежать ему. Для manual/internal billing поля запрещены даже при `null`; `account_no` и произвольный клиентский snapshot не принимаются. Закрытие `OPEN` сначала требует явного начала работы; это проверяется сервером. В Phase 1 не предусмотрены API для ServiceDesk Plus и Telegram. Диагностические наблюдения содержат `source`, `measured_object`, `result`, `observed_at`, `retrieved_at` и `quality`; подробности — в [OSS Diagnostics](oss-diagnostics.md).
 

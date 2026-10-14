@@ -1,0 +1,7 @@
+# Opt-in only after the owner confirms the SELECT-only LibreNMS account is ready.
+services:
+  api:
+    environment:
+      BDCOM_ONU_CREDENTIAL_FILE: /run/monitoring/bdcom-onu-db.json
+    volumes:
+      - ./.dev-secrets/bdcom-onu-db.json:/run/monitoring/bdcom-onu-db.json:ro
