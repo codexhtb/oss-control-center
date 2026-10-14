@@ -1,7 +1,32 @@
-# Opt-in only after the owner confirms the SELECT-only LibreNMS account is ready.
+# The proxy reaches only the host-loopback SSH tunnel and shares a protected
+# Unix socket with the isolated dev API. No MariaDB TCP port is published.
 services:
-  api:
-    environment:
-      BDCOM_ONU_CREDENTIAL_FILE: /run/monitoring/bdcom-onu-db.json
+  bdcom_tunnel_proxy:
+    image: oss-control-dev-api:local
+    restart: unless-stopped
+    user: "1001:1001"
+    network_mode: host
+    entrypoint: ["python", "/run/bdcom-proxy.py"]
     volumes:
-      - ./.dev-secrets/bdcom-onu-db.json:/run/monitoring/bdcom-onu-db.json:ro
+      - ./dev/bdcom_tunnel_proxy.py:/run/bdcom-proxy.py:ro
+      - ./.dev-secrets/bdcom-socket:/run/bdcom
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import stat; assert stat.S_ISSOCK(__import__('os').stat('/run/bdcom/bdcom.sock').st_mode)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  api:
+    depends_on:
+      bdcom_tunnel_proxy:
+        condition: service_healthy
+    environment:
+      BDCOM_ONU_TUNNEL_PASSWORD_FILE: /run/monitoring/bdcom-mariadb-password
+      BDCOM_ONU_TUNNEL_SOCKET: /run/bdcom/bdcom.sock
+    volumes:
+      - ./.dev-secrets/bdcom-mariadb-password:/run/monitoring/bdcom-mariadb-password:ro
+      - ./.dev-secrets/bdcom-socket:/run/bdcom:ro

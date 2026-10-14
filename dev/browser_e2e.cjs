@@ -172,6 +172,24 @@ async function main() {
       if (process.env.OSS_BDCOM_EXPECT_UNAVAILABLE === '1') {
         if (onu.availability !== 'UNAVAILABLE' || onu.candidates.length) throw new Error('Unconfigured ONU source produced subscriber data')
         await engineer.page.getByText('Источник BDCOM ONU не подключён или недоступен.').first().waitFor()
+      } else if (process.env.OSS_BDCOM_EXPECT_CONNECTED === '1') {
+        if (onu.availability === 'UNAVAILABLE') throw new Error('Connected BDCOM source is unavailable')
+        if (onu.candidates.length) {
+          await engineer.page.locator('.onu-candidate').first().waitFor()
+          const rendered = await engineer.page.locator('.onu-candidate').count()
+          if (rendered !== onu.candidates.length) throw new Error('Browser ONU candidate count differs from API')
+          if (onu.candidates.some((item) => item.pon_type === 'GPON' && item.mac)) throw new Error('GPON surrogate key exposed as MAC')
+          for (let index = 0; index < onu.candidates.length; index += 1) {
+            const item = onu.candidates[index]
+            const text = await engineer.page.locator('.onu-candidate').nth(index).textContent()
+            const expected = [item.interface, item.olt, item.mac, item.serial, item.reason,
+              item.onu_rx_dbm, item.onu_tx_dbm, item.olt_rx_dbm,
+              item.inventory_polled_at, item.optical_measured_at].filter(Boolean)
+            if (expected.some((value) => !text.includes(value))) throw new Error('Browser ONU field differs from source response')
+            if (!text.includes(item.state === 'UNKNOWN' ? 'UNKNOWN' : item.state[0] + item.state.slice(1).toLowerCase())) throw new Error('Browser ONU state differs from source response')
+          }
+        }
+        console.log(`BDCOM ONU source connected: ${onu.availability}, ${onu.candidates.length} unconfirmed candidates`)
       }
       const pending = engineer.page.waitForResponse((response) => response.url().endsWith(`/subscriber-lookups/${card.lookup_id}/diagnostics/check`) && response.request().method() === 'POST')
       await engineer.page.getByRole('button', { name: 'Проверить подключение' }).first().click()

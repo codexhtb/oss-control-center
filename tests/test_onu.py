@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
+from app.modules.diagnostics.http import SourceUnavailable
 from app.modules.diagnostics.onu import BdcomOnuReader, OnuDbConfig, normalize_candidate
 from app.modules.diagnostics.onu_correlation import lookup_onu_candidates
 
@@ -159,6 +160,79 @@ def test_plaintext_credentials_dev_only_and_protected_file(tmp_path) -> None:
     path.chmod(0o644)
     with pytest.raises(ValueError, match="credential"):
         OnuDbConfig.from_file(str(path), "dev")
+
+
+def test_dev_tunnel_requires_protected_password_and_fixed_socket(tmp_path) -> None:
+    path = tmp_path / "bdcom-password"
+    path.write_text("synthetic-only\n")
+    path.chmod(0o600)
+    socket_path = "/run/bdcom/bdcom.sock"
+    with pytest.raises(ValueError, match="dev-only"):
+        OnuDbConfig.from_tunnel_password_file(str(path), socket_path, "production")
+    with pytest.raises(ValueError, match="socket"):
+        OnuDbConfig.from_tunnel_password_file(str(path), "/tmp/other.sock", "dev")
+    config = OnuDbConfig.from_tunnel_password_file(str(path), socket_path, "dev")
+    assert config.unix_socket == socket_path
+    assert config.user == "oss_diagnostics"
+    path.chmod(0o644)
+    with pytest.raises(ValueError, match="secret file"):
+        OnuDbConfig.from_tunnel_password_file(str(path), socket_path, "dev")
+
+
+def test_tunnel_reader_uses_unix_socket_and_disables_tls(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "bdcom-password"
+    path.write_text("synthetic-only")
+    path.chmod(0o600)
+    captured = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, *_):
+            return None
+
+        def fetchall(self):
+            return [{"device_id": 42}] if not hasattr(self, "fetched") else []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    def fake_connect(**kwargs):
+        captured.update(kwargs)
+        return FakeConnection()
+
+    monkeypatch.setattr("app.modules.diagnostics.onu.pymysql.connect", fake_connect)
+    config = OnuDbConfig.from_tunnel_password_file(str(path), "/run/bdcom/bdcom.sock", "dev")
+    BdcomOnuReader(config).candidates(42, 101)
+    assert captured["unix_socket"] == "/run/bdcom/bdcom.sock"
+    assert captured["ssl_disabled"] is True
+    assert "host" not in captured and "port" not in captured
+
+
+def test_tunnel_outage_is_reported_without_exposing_driver_details(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "bdcom-password"
+    path.write_text("synthetic-only")
+    path.chmod(0o600)
+
+    def unreachable(**_):
+        raise OSError("synthetic socket path and credential detail")
+
+    monkeypatch.setattr("app.modules.diagnostics.onu.pymysql.connect", unreachable)
+    config = OnuDbConfig.from_tunnel_password_file(str(path), "/run/bdcom/bdcom.sock", "dev")
+    with pytest.raises(SourceUnavailable, match="bdcom_source_unavailable") as caught:
+        BdcomOnuReader(config).candidates(42, 101)
+    assert "synthetic socket" not in str(caught.value)
 
 
 def test_reader_queries_only_two_tables_with_parameters(monkeypatch) -> None:

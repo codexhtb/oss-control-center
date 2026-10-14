@@ -50,6 +50,29 @@ class OnuDbConfig:
     tls_ca: str | None
     allow_plaintext_dev: bool
     app_env: str
+    unix_socket: str | None = None
+
+    @classmethod
+    def from_tunnel_password_file(cls, path: str, socket_path: str, app_env: str) -> "OnuDbConfig":
+        """Use the protected local socket proxy only in the isolated dev stack."""
+        if app_env != "dev":
+            raise ValueError("BDCOM tunnel plaintext is dev-only")
+        if socket_path != "/run/bdcom/bdcom.sock":
+            raise ValueError("BDCOM tunnel socket path is invalid")
+        password = protected_text(path)
+        if not password:
+            raise ValueError("BDCOM password file is empty")
+        return cls(
+            host="127.0.0.1",
+            port=13306,
+            database="librenms",
+            user="oss_diagnostics",
+            password=password,
+            tls_ca=None,
+            allow_plaintext_dev=True,
+            app_env=app_env,
+            unix_socket=socket_path,
+        )
 
     @classmethod
     def from_file(cls, path: str, app_env: str) -> "OnuDbConfig":
@@ -149,8 +172,6 @@ class BdcomOnuReader:
 
     def candidates(self, device_id: int, vlan: int) -> tuple[dict, list[dict], bool]:
         connect_options = {
-            "host": self.config.host,
-            "port": self.config.port,
             "user": self.config.user,
             "password": self.config.password,
             "database": self.config.database,
@@ -160,6 +181,12 @@ class BdcomOnuReader:
             "cursorclass": pymysql.cursors.DictCursor,
             "autocommit": True,
         }
+        if self.config.unix_socket:
+            connect_options["unix_socket"] = self.config.unix_socket
+            connect_options["ssl_disabled"] = True
+        else:
+            connect_options["host"] = self.config.host
+            connect_options["port"] = self.config.port
         if self.config.tls_ca:
             connect_options["ssl_ca"] = self.config.tls_ca
             connect_options["ssl_verify_cert"] = True

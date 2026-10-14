@@ -42,5 +42,13 @@ def get_correlation_engine() -> CorrelationEngine:
 def get_onu_runtime() -> tuple[MappingRegistry, BdcomOnuReader | None]:
     config = MonitoringConfig.from_env()
     registry = MappingRegistry.from_file(config.mapping_file)
+    tunnel_password = os.environ.get("BDCOM_ONU_TUNNEL_PASSWORD_FILE")
+    if tunnel_password:
+        if os.environ.get("BDCOM_ONU_CREDENTIAL_FILE"):
+            raise ValueError("BDCOM credential modes are mutually exclusive")
+        socket_path = os.environ.get("BDCOM_ONU_TUNNEL_SOCKET", "/run/bdcom/bdcom.sock")
+        return registry, BdcomOnuReader(
+            OnuDbConfig.from_tunnel_password_file(tunnel_password, socket_path, config.app_env)
+        )
     path = os.environ.get("BDCOM_ONU_CREDENTIAL_FILE")
     return registry, BdcomOnuReader(OnuDbConfig.from_file(path, config.app_env)) if path else None

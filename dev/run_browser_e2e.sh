@@ -28,6 +28,7 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --env OSS_READ_ONLY \
   --env OSS_MONITORING_ONLY \
   --env OSS_BDCOM_EXPECT_UNAVAILABLE \
+  --env OSS_BDCOM_EXPECT_CONNECTED \
   "$@" \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \
