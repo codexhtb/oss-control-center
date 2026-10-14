@@ -25,6 +25,13 @@ LibreNMS и его schema/data не изменяются.
 docker compose -p oss-control-dev -f compose.dev.yaml -f compose.monitoring.dev.yaml -f compose.bdcom.dev.yaml config --quiet
 ```
 
+Пока источник выключен, браузерная read-only проверка подтверждает RBAC,
+контракт `UNAVAILABLE` и отсутствие выдуманной ONU без создания заявок:
+
+```sh
+sg docker -c 'OSS_READ_ONLY=1 OSS_MONITORING_ONLY=1 OSS_BDCOM_EXPECT_UNAVAILABLE=1 OSS_SMOKE_ENV_FILE=/opt/oss-control-center/.dev-secrets/monitoring-smoke.env sh dev/run_browser_e2e.sh'
+```
+
 При тестировании не применять миграции к `oss_control` и не менять LibreNMS.
 SQL-адаптер выполняет ровно два параметризованных `SELECT` по `device_id`,
 `vlan` и `present=1`, с `LIMIT 2/21`, таймаутами 3 секунды, без записи. Время

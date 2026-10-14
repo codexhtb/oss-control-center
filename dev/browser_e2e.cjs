@@ -154,6 +154,7 @@ async function main() {
       const operatorLookup = new URL(operator.page.url()).pathname.split('/').pop()
       const operatorConnection = (await (await operator.context.request.get(`${origin}/api/v1/subscriber-lookups/${operatorLookup}`)).json()).connections[0]
       if (operatorConnection) {
+        expectStatus(await operator.context.request.get(`${origin}/api/v1/subscriber-lookups/${operatorLookup}/connections/${operatorConnection.connection_snapshot_id}/onu`), 403, 'Operator ONU RBAC')
         const denied = await operator.context.request.post(`${origin}/api/v1/subscriber-lookups/${operatorLookup}/diagnostics/check`, {
           headers: { Origin: origin, 'X-CSRF-Token': await csrfToken(operator.context) },
           data: { connection_snapshot_id: operatorConnection.connection_snapshot_id },
@@ -164,6 +165,14 @@ async function main() {
       const engineer = await login(browser, 'dev-engineer', 'engineer')
       const card = await checkNetupLabLookup(engineer.page, false, true)
       if (!card.connections.length) throw new Error('Read-only monitoring browser check needs a confirmed billing connection')
+      const onuResponse = await engineer.context.request.get(`${origin}/api/v1/subscriber-lookups/${card.lookup_id}/connections/${card.connections[0].connection_snapshot_id}/onu`)
+      expectStatus(onuResponse, 200, 'Subscriber ONU source availability')
+      const onu = await onuResponse.json()
+      if (onu.source !== 'BDCOM' || onu.association !== 'UNCONFIRMED') throw new Error('ONU source contract mismatch')
+      if (process.env.OSS_BDCOM_EXPECT_UNAVAILABLE === '1') {
+        if (onu.availability !== 'UNAVAILABLE' || onu.candidates.length) throw new Error('Unconfigured ONU source produced subscriber data')
+        await engineer.page.getByText('Источник BDCOM ONU не подключён или недоступен.').first().waitFor()
+      }
       const pending = engineer.page.waitForResponse((response) => response.url().endsWith(`/subscriber-lookups/${card.lookup_id}/diagnostics/check`) && response.request().method() === 'POST')
       await engineer.page.getByRole('button', { name: 'Проверить подключение' }).first().click()
       const checked = await pending
@@ -187,6 +196,12 @@ async function main() {
         expectStatus(await engineer.context.request.post(path, { headers: { Origin: origin, 'If-Match': `"${detail.version}"` } }), 403, 'Monitoring CSRF')
         expectStatus(await engineer.context.request.post(path, { headers: { Origin: 'https://untrusted.invalid', 'X-CSRF-Token': await csrfToken(engineer.context), 'If-Match': `"${detail.version}"` } }), 403, 'Monitoring Origin')
         await engineer.page.goto(`${origin}/tickets/${detail.id}`)
+        const ticketOnu = await engineer.context.request.get(`${origin}/api/v1/tickets/${detail.id}/onu`)
+        expectStatus(ticketOnu, 200, 'Ticket ONU source availability')
+        if (process.env.OSS_BDCOM_EXPECT_UNAVAILABLE === '1') {
+          if ((await ticketOnu.json()).availability !== 'UNAVAILABLE') throw new Error('Unconfigured ticket ONU source produced data')
+          await engineer.page.getByText('Источник BDCOM ONU не подключён или недоступен.').first().waitFor()
+        }
         await engineer.page.getByRole('heading', { name: 'Мониторинг подключения' }).waitFor()
         const ticketPending = engineer.page.waitForResponse((response) => response.url().endsWith(`/tickets/${detail.id}/diagnostics/check`) && response.request().method() === 'POST')
         await engineer.page.getByRole('button', { name: 'Проверить подключение' }).click()
