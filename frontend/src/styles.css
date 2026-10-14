@@ -324,7 +324,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .desk-pagination { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 58px; padding: 8px 17px; border-top: 1px solid var(--line); color: #91a3ac; font-size: 11px; }
 .desk-pagination > div { display: flex; gap: 4px; }
 .desk-footnote { margin: 12px 4px; color: var(--faint); font-size: 11px; }
-.create-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 20px; }
+.create-layout { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 20px; }
 .create-card { min-width: 0; padding: 27px 30px 22px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .form-section-heading { display: flex; gap: 14px; align-items: start; margin-bottom: 19px; }
 .form-section-heading--later { margin-top: 34px; }
