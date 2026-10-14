@@ -8,6 +8,9 @@ from datetime import datetime
 class NetupAccount:
     account_id: int
     is_primary: bool
+    balance: float | None = None
+    credit: float | None = None
+    is_blocked: int | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -46,6 +49,8 @@ class NetupService:
     name: str
     service_type: int
     groups: tuple[NetupGroup, ...]
+    tariff_name: str | None = None
+    billing_blocked: int | None = None
 
 
 @dataclass(frozen=True, repr=False)

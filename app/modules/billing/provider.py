@@ -1,6 +1,7 @@
 """Read-only provider contract and normalized Subscriber 360 domain object."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal, Protocol
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
@@ -27,6 +28,21 @@ class Service(BaseModel):
     )
     name: str | None = Field(default=None, max_length=200)
     account_id: str | None = Field(default=None, max_length=100)
+    tariff_name: str | None = Field(default=None, max_length=200)
+    billing_active: bool | None = None
+    billing_blocked: bool | None = None
+    field_meta: dict[str, FieldOrigin] = Field(default_factory=dict)
+
+
+class FinancialAccount(BaseModel):
+    """Raw billing observations, never a network health verdict."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str = Field(min_length=1, max_length=100)
+    balance: Decimal | None = None
+    credit: Decimal | None = None
+    account_blocked: bool | None = None
     field_meta: dict[str, FieldOrigin] = Field(default_factory=dict)
 
 
@@ -69,6 +85,7 @@ class Subscriber360(BaseModel):
     email: str | None = Field(default=None, max_length=200)
     actual_address: str | None = Field(default=None, max_length=300)
     accounts: list[BillingAccount] = Field(default_factory=list)
+    financial_accounts: list[FinancialAccount] = Field(default_factory=list)
     contracts: list[Contract]
     services: list[Service]
     connections: list[Connection]

@@ -5,7 +5,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.billing.provider import BillingAccount, Contact, Contract, Service
+from app.modules.billing.provider import (
+    BillingAccount,
+    Contact,
+    Contract,
+    FinancialAccount,
+    Service,
+)
 from app.modules.billing.quality import FieldOrigin
 from app.modules.network.models import Connection
 
@@ -54,6 +60,7 @@ class SubscriberCard(BaseModel):
     is_expired: bool
     subscriber: SubscriberInfo
     accounts: list[BillingAccount] = Field(default_factory=list)
+    financial_accounts: list[FinancialAccount] = Field(default_factory=list)
     contracts: list[Contract]
     services: list[Service]
     connections: list[ConnectionCard]

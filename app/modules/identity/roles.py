@@ -11,6 +11,7 @@ class Role(StrEnum):
 
 class Permission(StrEnum):
     SUBSCRIBER_READ = "subscriber.read"
+    SUBSCRIBER_FINANCE_READ = "subscriber.finance.read"
     TICKET_READ = "ticket.read"
     TICKET_CREATE = "ticket.create"
     TICKET_COMMENT = "ticket.comment"
@@ -29,6 +30,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.OPERATOR: frozenset(
         {
             Permission.SUBSCRIBER_READ,
+            Permission.SUBSCRIBER_FINANCE_READ,
             Permission.TICKET_READ,
             Permission.TICKET_CREATE,
             Permission.TICKET_COMMENT,

@@ -137,6 +137,38 @@ def test_normalizer_preserves_accounts_services_groups_and_origins() -> None:
     assert connection.device == "synthetic-switch" and connection.vlan == "100"
     assert connection.field_meta["access_type"].quality == DataQuality.UNKNOWN
     assert card.field_meta["actual_address"].source == "NETUP"
+    assert card.services[0].tariff_name is None
+    assert card.services[0].billing_active is True
+    assert card.financial_accounts[0].balance is None
+
+
+def test_tariff_and_finance_remain_separate_billing_observations() -> None:
+    raw = synthetic_subscriber()
+    raw = NetupSubscriber(
+        **{
+            **raw.__dict__,
+            "accounts": (NetupAccount(202, True, 12.5, 1.0, 1),),
+            "services": (
+                NetupService(
+                    301,
+                    202,
+                    "Synthetic Internet",
+                    3,
+                    (synthetic_group(),),
+                    "Synthetic tariff",
+                    0,
+                ),
+            ),
+        }
+    )
+    card = normalize_netup(raw)
+    assert card.services[0].tariff_name == "Synthetic tariff"
+    assert card.services[0].billing_active is True
+    assert card.services[0].billing_blocked is False
+    assert card.financial_accounts[0].balance == 12.5
+    assert card.financial_accounts[0].account_blocked is True
+    assert card.connections[0].access_type == AccessType.UNKNOWN
+    assert card.financial_accounts[0].field_meta["balance"].source == "NETUP"
 
 
 def test_multiple_topologies_remain_conflict_without_losing_rows() -> None:
@@ -359,8 +391,11 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
                         "actual_address": "Synthetic address",
                     }
                 ]
-            elif sql.startswith("SELECT DISTINCT a.id FROM users_accounts"):
-                self.rows = [{"id": 202}, {"id": 203}]
+            elif sql.startswith("SELECT DISTINCT a.id,a.balance"):
+                self.rows = [
+                    {"id": 202, "balance": 12.5, "credit": 0.0, "is_blocked": 1},
+                    {"id": 203, "balance": 0.0, "credit": 0.0, "is_blocked": 0},
+                ]
             elif sql.startswith("SELECT sl.id"):
                 assert params[1:3] == (202, 203)
                 self.rows = [
@@ -369,12 +404,16 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
                         "account_id": 202,
                         "service_name": "Synthetic Internet",
                         "service_type": 3,
+                        "tariff_name": "Synthetic tariff",
+                        "billing_blocked": 0,
                     },
                     {
                         "id": 302,
                         "account_id": 203,
                         "service_name": "Synthetic ancillary",
                         "service_type": 2,
+                        "tariff_name": None,
+                        "billing_blocked": 0,
                     },
                 ]
             elif sql.startswith("SELECT id,ip_group_id"):
@@ -660,6 +699,10 @@ def test_restored_utm5_via_separate_lab_channel() -> None:
     assert bool(card.billing_account == account_no)
     assert all(connection.access_type == AccessType.UNKNOWN for connection in card.connections)
     assert any(len(group.rows) > 1 for item in card.connections for group in item.ip_groups)
+    assert len(card.financial_accounts) == len(card.accounts)
+    assert all(item.field_meta["balance"].source == "NETUP" for item in card.financial_accounts)
+    assert all(item.billing_active is True for item in card.services)
+    assert all("tariff_name" in item.field_meta for item in card.services)
     if config.lab_as_of_utc is not None:
         assert card.field_meta["billing_account"].quality == DataQuality.STALE
         assert card.field_meta["billing_account"].observed_at == config.lab_as_of_utc

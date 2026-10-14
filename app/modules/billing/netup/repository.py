@@ -130,7 +130,7 @@ class NetupRepository:
         user = users[0]
         account_rows = select(
             cursor,
-            "SELECT DISTINCT a.id FROM users_accounts ua "
+            "SELECT DISTINCT a.id,a.balance,a.credit,a.is_blocked FROM users_accounts ua "
             "JOIN accounts a ON a.id=ua.account_id AND a.is_deleted=0 "
             "WHERE ua.uid=%s AND ua.is_deleted=0 ORDER BY a.id LIMIT 51",
             (user_id,),
@@ -139,7 +139,14 @@ class NetupRepository:
         if not account_rows or len(account_rows) > MAX_ACCOUNTS:
             raise BillingIncomplete from None
         accounts = tuple(
-            NetupAccount(row["id"], row["id"] == user["basic_account"]) for row in account_rows
+            NetupAccount(
+                row["id"],
+                row["id"] == user["basic_account"],
+                row["balance"],
+                row["credit"],
+                row["is_blocked"],
+            )
+            for row in account_rows
         )
         if account_id not in {item.account_id for item in accounts}:
             raise BillingIncomplete from None
@@ -149,10 +156,15 @@ class NetupRepository:
         account_ids = [item.account_id for item in accounts]
         service_rows = select(
             cursor,
-            "SELECT sl.id,sl.account_id,sd.service_name,sd.service_type "
+            "SELECT sl.id,sl.account_id,sd.service_name,sd.service_type,"
+            "psl.is_blocked AS billing_blocked,t.name AS tariff_name "
             "FROM service_links sl "
             "JOIN services_data sd ON sd.id=sl.service_id AND sd.is_deleted=0 "
             "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+            "LEFT JOIN account_tariff_link atl ON atl.id=sl.tariff_link_id "
+            "AND atl.account_id=sl.account_id AND atl.tariff_id=sd.tariff_id "
+            "AND atl.is_deleted=0 "
+            "LEFT JOIN tariffs t ON t.id=atl.tariff_id AND t.is_deleted=0 "
             f"WHERE sl.user_id=%s AND sl.account_id IN ({self._placeholders(account_ids)}) "
             "AND sl.is_deleted=0 AND sd.service_type IN (2,3) "
             "AND psl.is_planned=0 AND psl.need_del=0 "
@@ -285,6 +297,8 @@ class NetupRepository:
                     name=row["service_name"],
                     service_type=row["service_type"],
                     groups=groups,
+                    tariff_name=row["tariff_name"],
+                    billing_blocked=row["billing_blocked"],
                 )
             )
         return NetupSubscriber(

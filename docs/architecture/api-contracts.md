@@ -47,6 +47,7 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | --- | --- | --- | --- |
 | `POST /subscriber-lookups` | Оператор, инженер + CSRF | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет immutable snapshot с `source=MOCK`, временем, автором поиска, сроком действия 15 минут и внутренними ID подключений; аудит чтения. Не найдено — `404`, источник недоступен — `503` без успешной карточки |
 | `GET /subscriber-lookups/{lookup_id}` | Автор поиска, оператор или инженер | — | Сохранённая карточка без повторного обращения к провайдеру; истечение срока отражается `is_expired` |
+| `GET /subscriber-lookups/{lookup_id}/tickets` | Автор поиска с `subscriber.read` и `ticket.read` | `page` (≥1), `size` (1–50) | Страница связанных заявок того же `subscriber_id` и источника; при отсутствии ID — точное совпадение ЛС. История заявок хранится бессрочно. |
 | `POST /tickets` | Оператор, инженер | Linked: `{ticket_type?:"SUBSCRIBER_LINKED", lookup_id, selected_service_id?, connection_snapshot_id?, description, subject?, client_request_id, priority?}`; manual/internal: `{ticket_type:"MANUAL"|"INTERNAL", description, subject?, client_request_id, priority?}` | `201` заявка `OPEN`; повтор идентичного запроса `200`, другой запрос с тем же ID `409`; заявка, история и аудит атомарны. Для linked сохраняются проверки владельца, срока и выбора услуги/подключения |
 | `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `unassigned`, `account_no`, `ticket_type`; `page`, `size` | Страница сводок; `total`, `page`, `size`. `unassigned=true` означает `assigned_engineer_id IS NULL`; вместе с `assignee` даёт `422` |
 | `GET /tickets/assignable-engineers` | Инженер | `page`, `size` (1–100) | Только активные пользователи с ролью `engineer`: `id`, `display_name`; `total`, `page`, `size`. Логин, хэш и контакты не выдаются |
@@ -70,6 +71,16 @@ Phase 1.3 ввела `POST /subscriber-lookups` и `GET /subscriber-lookups/{loo
 Дополнение перед Stage 3B: `subject` — необязательный свободный текст до 160 символов, без управляющих символов, пустой строки и пробелов по краям. В старых заявках и ответах старых клиентов он равен `null`; он участвует в сравнении повторного `client_request_id`. Новые формы Web UI предлагают отдельный ввод темы без обязательного шаблона. Все три типа заявок используют одинаковое поле. Приватные ответы не кешируются; доступ к ним проверяется на сервере.
 
 ## Ответ поиска абонента
+
+Stage 3C добавляет в ответ необязательные `services[].tariff_name`,
+`billing_active`, `billing_blocked` и `financial_accounts[]`. Для старых и
+mock snapshots значения отсутствуют или равны `null`; миграция `0010`
+заполняет `financial_accounts=[]` без реконструкции прошлого. Баланс и кредит
+передаются десятичными строками в единицах источника без предположения о
+валюте. Массив `financial_accounts[]` видит только роль с
+`subscriber.finance.read` (`operator`). `engineer` получает пустой массив,
+`admin` не видит карточку. Биллинговые признаки не определяют состояние линии.
+Сырые числовые поля IP-групп сохраняются без неподтверждённого IPv4-формата.
 
 ```json
 {

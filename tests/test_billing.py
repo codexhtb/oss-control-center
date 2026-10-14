@@ -30,8 +30,8 @@ from app.modules.billing.netup.dto import (
     NetupSubscriber,
 )
 from app.modules.billing.netup.provider import NetUPBillingProvider
-from app.modules.billing.provider import BillingUnavailable
-from app.modules.billing.quality import DataQuality
+from app.modules.billing.provider import BillingAccount, BillingUnavailable, FinancialAccount
+from app.modules.billing.quality import DataQuality, FieldOrigin
 from app.modules.billing.service import create_lookup
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User
@@ -138,6 +138,73 @@ def test_engineer_can_lookup_and_create_linked_ticket_via_existing_api(
         assert ticket is not None
         assert ticket.created_by == engineer.id
         assert ticket.ticket_type == "SUBSCRIBER_LINKED"
+
+
+def test_finance_permission_and_subscriber_history_across_lookups(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    class SyntheticFinanceProvider(MockBillingProvider):
+        def lookup_by_account(self, account_no: str):
+            card = super().lookup_by_account(account_no)
+            assert card is not None
+            meta = FieldOrigin(
+                source="MOCK", observed_at=card.fetched_at, quality=DataQuality.KNOWN
+            )
+            card.accounts = [BillingAccount(account_id=account_no, is_primary=True)]
+            card.financial_accounts = [
+                FinancialAccount(
+                    account_id=account_no,
+                    balance="12.5",
+                    credit="0",
+                    account_blocked=True,
+                    field_meta={"balance": meta, "credit": meta, "account_blocked": meta},
+                )
+            ]
+            return card
+
+    billing_client.app.dependency_overrides[get_billing_provider] = SyntheticFinanceProvider
+    seed_user(billing_engine, "finance_operator", Role.OPERATOR)
+    seed_user(billing_engine, "finance_engineer", Role.ENGINEER)
+    seed_user(billing_engine, "finance_admin", Role.ADMIN)
+
+    login(billing_client, "finance_operator")
+    operator_card = lookup(billing_client, "MOCK-ETH-001").json()
+    assert operator_card["financial_accounts"][0]["balance"] == "12.5"
+    assert operator_card["technical_state"] == "UNKNOWN"
+    response = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(operator_card)
+    )
+    assert response.status_code == 201
+    history = billing_client.get(
+        f"/api/v1/subscriber-lookups/{operator_card['lookup_id']}/tickets?page=1&size=10"
+    )
+    assert history.status_code == 200
+    assert history.headers["Cache-Control"] == "no-store"
+    assert history.json()["total"] == 1
+    assert history.json()["items"][0]["id"] == response.json()["id"]
+    assert (
+        billing_client.post("/api/v1/auth/logout", headers=csrf(billing_client)).status_code == 200
+    )
+
+    login(billing_client, "finance_engineer")
+    engineer_card = lookup(billing_client, "MOCK-ETH-001").json()
+    assert engineer_card["financial_accounts"] == []
+    assert (
+        billing_client.get(
+            f"/api/v1/subscriber-lookups/{engineer_card['lookup_id']}/tickets"
+        ).json()["total"]
+        == 1
+    )
+    assert (
+        billing_client.get(f"/api/v1/subscriber-lookups/{operator_card['lookup_id']}").status_code
+        == 404
+    )
+    assert (
+        billing_client.post("/api/v1/auth/logout", headers=csrf(billing_client)).status_code == 200
+    )
+
+    login(billing_client, "finance_admin")
+    assert lookup(billing_client, "MOCK-ETH-001").status_code == 403
 
 
 @pytest.mark.parametrize(

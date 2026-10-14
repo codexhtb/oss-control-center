@@ -34,6 +34,11 @@ def validate_snapshot_structure(data: Subscriber360) -> None:
     service_ids = [item.service_id for item in data.services]
     if len(set(account_ids)) != len(account_ids) or len(set(service_ids)) != len(service_ids):
         raise ValueError("Duplicate account or service identity")
+    finance_ids = [item.account_id for item in data.financial_accounts]
+    if len(set(finance_ids)) != len(finance_ids) or any(
+        item not in account_ids for item in finance_ids
+    ):
+        raise ValueError("Financial observation references an absent or duplicate account")
     if any(
         item.account_id is not None and item.account_id not in account_ids for item in data.services
     ):
@@ -50,7 +55,7 @@ def validate_snapshot_structure(data: Subscriber360) -> None:
                 raise ValueError("Group has no rows or duplicate row identity")
 
 
-def _actor(db: Session, actor_id: UUID) -> None:
+def _actor(db: Session, actor_id: UUID) -> User:
     user = db.execute(
         select(User)
         .where(User.id == actor_id)
@@ -63,6 +68,7 @@ def _actor(db: Session, actor_id: UUID) -> None:
         or Permission.SUBSCRIBER_READ not in permissions_for(Role(user.role))
     ):
         raise ApiError(403, "forbidden", "Permission denied")
+    return user
 
 
 def _audit(db: Session, actor_id: UUID, outcome: str) -> None:
@@ -129,6 +135,7 @@ def create_lookup(
     if (
         len(data.contracts) > MAX_ITEMS
         or len(data.accounts) > MAX_ITEMS
+        or len(data.financial_accounts) > MAX_ITEMS
         or len(data.contacts) > 10
         or len(data.services) > MAX_ITEMS
         or len(data.connections) > MAX_ITEMS
@@ -171,6 +178,7 @@ def create_lookup(
         email=data.email,
         actual_address=data.actual_address,
         accounts=[item.model_dump(mode="json") for item in data.accounts],
+        financial_accounts=[item.model_dump(mode="json") for item in data.financial_accounts],
         contracts=[item.model_dump(mode="json") for item in data.contracts],
         services=[item.model_dump(mode="json") for item in data.services],
         field_meta={key: value.model_dump(mode="json") for key, value in data.field_meta.items()},
@@ -201,7 +209,7 @@ def create_lookup(
 
 
 def stored_card(db: Session, actor_id: UUID, lookup_id: UUID) -> SubscriberCard:
-    _actor(db, actor_id)
+    actor = _actor(db, actor_id)
     snapshot = db.get(SubscriberSnapshot, lookup_id)
     if snapshot is None or snapshot.requested_by != actor_id:
         raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
@@ -229,6 +237,11 @@ def stored_card(db: Session, actor_id: UUID, lookup_id: UUID) -> SubscriberCard:
         ),
         contracts=snapshot.contracts,
         accounts=snapshot.accounts,
+        financial_accounts=(
+            snapshot.financial_accounts
+            if Permission.SUBSCRIBER_FINANCE_READ in permissions_for(Role(actor.role))
+            else []
+        ),
         services=snapshot.services,
         connections=[
             ConnectionCard(

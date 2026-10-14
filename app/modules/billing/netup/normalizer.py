@@ -1,12 +1,14 @@
 """UTM5 source values -> existing Subscriber 360 plus lossless group structure."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from app.modules.billing.netup.dto import NetupGroup, NetupSubscriber
 from app.modules.billing.provider import (
     BillingAccount,
     BillingIncomplete,
     Contact,
+    FinancialAccount,
     Service,
     Subscriber360,
 )
@@ -199,10 +201,21 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
             service_id=str(item.link_id),
             name=bounded(item.name, 200),
             account_id=str(item.account_id),
+            tariff_name=bounded(item.tariff_name, 200),
+            billing_active=True,
+            billing_blocked=bool(item.billing_blocked)
+            if item.billing_blocked is not None
+            else None,
             field_meta={
                 "service_id": origin(when, DataQuality.KNOWN),
                 "name": field(item.name, when),
                 "account_id": origin(when, DataQuality.KNOWN),
+                "tariff_name": field(item.tariff_name, when),
+                "billing_active": origin(when, DataQuality.KNOWN),
+                "billing_blocked": origin(
+                    when,
+                    DataQuality.KNOWN if item.billing_blocked is not None else DataQuality.UNKNOWN,
+                ),
             },
         )
         for item in raw.services
@@ -226,6 +239,23 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
                 field_meta={
                     "account_id": origin(when, DataQuality.KNOWN),
                     "is_primary": origin(when, DataQuality.KNOWN),
+                },
+            )
+            for item in raw.accounts
+        ],
+        financial_accounts=[
+            FinancialAccount(
+                account_id=str(item.account_id),
+                balance=Decimal(str(item.balance)) if item.balance is not None else None,
+                credit=Decimal(str(item.credit)) if item.credit is not None else None,
+                account_blocked=bool(item.is_blocked) if item.is_blocked is not None else None,
+                field_meta={
+                    "balance": field(item.balance, when),
+                    "credit": field(item.credit, when),
+                    "account_blocked": origin(
+                        when,
+                        DataQuality.KNOWN if item.is_blocked is not None else DataQuality.UNKNOWN,
+                    ),
                 },
             )
             for item in raw.accounts
@@ -257,6 +287,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
     if raw.source_as_of is not None:
         metadata_sets = [card.field_meta]
         metadata_sets.extend(item.field_meta for item in card.accounts)
+        metadata_sets.extend(item.field_meta for item in card.financial_accounts)
         metadata_sets.extend(item.field_meta for item in card.services)
         for connection in card.connections:
             metadata_sets.append(connection.field_meta)
