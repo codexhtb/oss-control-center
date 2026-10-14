@@ -2,6 +2,7 @@
 const fs = require('node:fs')
 const { chromium } = require('playwright')
 const origin = 'https://172.17.7.2:8443'
+const billingMode = process.env.OSS_BILLING_MODE || 'MOCK'
 const users = JSON.parse(fs.readFileSync('/run/dev-users.json', 'utf8'))
 users.bezhan = fs.readFileSync('/run/bezhan-password', 'utf8')
 
@@ -62,6 +63,23 @@ async function createTicket(page, kind) {
   if (kind !== 'SUBSCRIBER_LINKED' && (ticket.subscriber_snapshot_id || ticket.account_no)) throw new Error('Unlinked ticket has billing data')
   return ticket
 }
+async function checkNetupLabLookup(page) {
+  const accountNo = process.env.OSS_LAB_ACCOUNT_NO
+  if (!accountNo) throw new Error('Protected NetUP Lab smoke account is not configured')
+  await page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link', { name: 'Заявки', exact: true }).click()
+  await page.getByRole('link', { name: 'Новая заявка' }).click()
+  await page.getByRole('button', { name: /По абоненту/ }).click()
+  await page.locator('#billing-account').fill(accountNo)
+  const pending = page.waitForResponse((response) => response.url().endsWith('/api/v1/subscriber-lookups') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: 'Найти' }).click()
+  const response = await pending
+  expectStatus(response, 200, 'NetUP Lab lookup')
+  const card = await response.json()
+  if (card.source !== 'NETUP' || card.subscriber.billing_account !== accountNo) throw new Error('Lookup source is not NetUP Lab')
+  await page.getByText('ПОДТВЕРЖДЁННАЯ КАРТОЧКА').waitFor()
+  if (!(await page.locator('.source-chip').textContent()).includes('NETUP')) throw new Error('Browser card does not show NetUP source')
+  console.log('NetUP Lab: browser lookup HTTP 200, source NETUP; no ticket created')
+}
 async function processTicket(page, ticket, engineerId) {
   await page.goto(`${origin}/tickets/${ticket.id}`)
   await page.getByRole('heading', { name: ticket.subject }).waitFor()
@@ -92,13 +110,15 @@ async function main() {
   const browser = await chromium.launch({ headless: true })
   try {
     const operator = await login(browser, 'dev-operator', 'operator')
-    if (process.env.OSS_SCREENSHOTS) await operator.page.screenshot({ path: '/run/screenshots/dashboard.png', fullPage: true })
+    if (process.env.OSS_SCREENSHOTS && billingMode === 'MOCK') await operator.page.screenshot({ path: '/run/screenshots/dashboard.png', fullPage: true })
     expectStatus(await operator.context.request.post(`${origin}/api/v1/tickets`, { data: {} }), 403, 'CSRF rejection')
     expectStatus(await operator.context.request.post(`${origin}/api/v1/tickets`, {
       headers: { Origin: 'https://untrusted.invalid', 'X-CSRF-Token': await csrfToken(operator.context) }, data: {},
     }), 403, 'Origin rejection')
     const tickets = []
-    for (const kind of ['MANUAL', 'INTERNAL', 'SUBSCRIBER_LINKED']) tickets.push(await createTicket(operator.page, kind))
+    const kinds = billingMode === 'NETUP' ? ['MANUAL', 'INTERNAL'] : ['MANUAL', 'INTERNAL', 'SUBSCRIBER_LINKED']
+    for (const kind of kinds) tickets.push(await createTicket(operator.page, kind))
+    if (billingMode === 'NETUP') await checkNetupLabLookup(operator.page)
     await operator.page.goto(`${origin}/tickets/${tickets[0].id}`)
     await operator.page.getByRole('textbox', { name: 'Новый комментарий' }).fill('Синтетическое уточнение оператора.')
     await postResponse(operator.page, `/tickets/${tickets[0].id}/comments`, 'Сохранить комментарий', 201)
@@ -106,10 +126,10 @@ async function main() {
       headers: { Origin: origin, 'X-CSRF-Token': await csrfToken(operator.context), 'If-Match': '"1"' },
     }), 403, 'Operator cannot start work')
     await operator.page.locator('.fact-item').getByText('Синтетическое уточнение оператора.').waitFor()
-    if (process.env.OSS_SCREENSHOTS) await operator.page.screenshot({ path: '/run/screenshots/ticket-detail.png', fullPage: true })
+    if (process.env.OSS_SCREENSHOTS && billingMode === 'MOCK') await operator.page.screenshot({ path: '/run/screenshots/ticket-detail.png', fullPage: true })
     if (await operator.page.getByRole('button', { name: /Взять в работу/ }).count()) throw new Error('Operator sees engineer action')
     await operator.context.close()
-    console.log('operator: three ticket types, ambiguous selection, comment and RBAC passed')
+    console.log(`operator: ${billingMode === 'NETUP' ? 'two synthetic ticket types and NetUP lookup' : 'three ticket types and ambiguous selection'}, comment and RBAC passed`)
 
     const engineer = await login(browser, 'dev-engineer', 'engineer')
     const identity = await (await engineer.context.request.get(`${origin}/api/v1/auth/me`)).json()

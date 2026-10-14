@@ -1,10 +1,11 @@
 # Развёртывание NetUP provider: отдельный read-only канал
 
-**Не включено в текущем dev stack.** Исследовательский `netup-sql` wrapper
-используется только для безопасных Discovery SQL и не является runtime
-подключением API. `compose.yaml` не передаёт реквизиты NetUP и оставляет
-`BILLING_PROVIDER=MOCK`. Отдельное включение требует согласования с владельцем
-UTM5 и сетевой политики, без административных учётных записей.
+Изолированный HTTPS project `oss-control-dev` использует восстановленную
+NetUP Lab с read-only SQL-учётной записью. Исследовательский `netup-sql`
+wrapper остаётся только для Discovery SQL и не является runtime-каналом.
+Старый `compose.yaml` и база `oss_control` остаются в mock-режиме; production
+NetUP не подключён. Dev-настройка описана в
+[`dev-lab.md`](../operations/dev-lab.md).
 
 ## Требования к production каналу
 
@@ -32,15 +33,16 @@ UTM5 и сетевой политики, без административных
 Для отдельной лаборатории тесты используют **другой** префикс
 `NETUP_LAB_*` и флаг `RUN_NETUP_LAB_TESTS=1`; при отсутствии lab CA задать
 `NETUP_LAB_ALLOW_PLAINTEXT=true` только для private IP. Переменные не задаются в
-обычном dev `.env`. Тесты не пишут реальные строки в stdout, snapshots или
-fixtures. Исследовательский wrapper не используется в runtime. Отдельный TCP
+обычном dev `.env`. Тесты не пишут реальные строки в stdout или fixtures;
+разрешённый HTTP lookup сохраняет защищённый snapshot в dev PostgreSQL.
+Исследовательский wrapper не используется в runtime. Отдельный TCP
 канал и лабораторная учётная запись доступны; 6 integration tests прошли.
 Лабораторная MariaDB не поддерживает TLS; тесты явно выбирают `purpose=lab`
-и plaintext на private IP. Docker socket остаётся недоступен `codexdev`;
-проект эти системные права не меняет.
+и plaintext на private IP. Dev API подключён к `edge` network для исходящего
+TCP к Lab; порты API и PostgreSQL не публикуются.
 
 Для копии от 2026-10-10 установить `NETUP_LAB_AS_OF_UTC` внутри этого дня
-(например, 12:00 UTC) только в lab тестах. Фильтр действующих услуг тогда
+(например, 12:00 UTC) в lab тестах и dev runtime. Фильтр действующих услуг тогда
 проверяет дату копии; метаданные возвращённых полей получают `STALE`, а
 `fetched_at` фиксирует фактическое время чтения. Production режим не
 принимает исторический `as_of`.

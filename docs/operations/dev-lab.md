@@ -3,8 +3,9 @@
 Dev-стек запускается как Compose project `oss-control-dev`. Он использует собственные
 контейнеры, базу `oss_control_dev` и volume `oss-control-dev_dev_postgres_data`.
 Рабочие `oss-control-center-api-1`, `oss-control-center-postgres-1`, база
-`oss_control` и их volume в команды ниже не входят. В первой версии выбран
-`BILLING_PROVIDER=MOCK`; лабораторная UTM5 не подключена.
+`oss_control` и их volume в команды ниже не входят. Dev API использует
+`BILLING_PROVIDER=NETUP` только для восстановленной лабораторной UTM5.
+Рабочий NetUP не подключён.
 
 ## Доступ
 
@@ -43,6 +44,18 @@ Dev-стек запускается как Compose project `oss-control-dev`. О
 входе; владелец должен заменить временный пароль до использования вне
 контролируемой лаборатории. Значение не включать в команды или документы.
 `.dev-secrets/registry.tsv` (`0600`) содержит только метаданные и пути.
+Лабораторный runtime credential находится в игнорируемом Git файле
+`.dev-secrets/netup-runtime.env` (`0600`), подготовленном из существующего
+`.env.netup-lab` без смены пароля. Пример без секрета —
+[`dev-runtime.env.example`](../netup/dev-runtime.env.example). Docker build
+исключает этот файл. Compose передаёт его только dev API в режиме
+`APP_ENV=dev`, `NETUP_PURPOSE=lab`. Лабораторная MariaDB не поддерживает TLS;
+plaintext разрешён лишь для private IP `172.17.7.1`. Production-валидация
+этот режим отклоняет. API имеет исходящий доступ через dev `edge` network,
+но не публикует порт. PostgreSQL остаётся во внутренней сети.
+Выбранный для browser smoke лабораторный ЛС хранится отдельно в
+`.dev-secrets/netup-smoke.env` (`0600`) и передаётся только одноразовому
+Chromium-контейнеру; его значение не находится в Git или отчётах.
 Каталоги `.dev-secrets` и `certs` имеют `0700`. `root` может прочесть файлы;
 копия в `/root/oss-secrets/` и зашифрованный backup остаются задачей владельца.
 Состояние реестра: **backup pending** до проверенного восстановления.
@@ -55,6 +68,8 @@ sudo install -d -o root -g root -m 0700 /root/oss-secrets/oss-control-dev
 sudo install -o root -g root -m 0600 /opt/oss-control-center/.env.dev /root/oss-secrets/oss-control-dev/.env.dev
 sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/users.json /root/oss-secrets/oss-control-dev/users.json
 sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/credentials/bezhan-password /root/oss-secrets/oss-control-dev/bezhan-password
+sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/netup-runtime.env /root/oss-secrets/oss-control-dev/netup-runtime.env
+sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/netup-smoke.env /root/oss-secrets/oss-control-dev/netup-smoke.env
 sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/certs/ca.key /root/oss-secrets/oss-control-dev/ca.key
 sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/certs/server.key /root/oss-secrets/oss-control-dev/server.key
 sudo install -o root -g root -m 0600 /opt/oss-control-center/.dev-secrets/registry.tsv /root/oss-secrets/oss-control-dev/registry.tsv
@@ -104,6 +119,9 @@ dev CA в собственный NSS trust store и не отключает TLS-
 форму входа, создание всех трёх типов заявок, явный выбор неоднозначных связей,
 комментарий оператора, назначение, начало работы, диагностику, решение,
 закрытие, `If-Match`, RBAC, CSRF/Origin и повторный вход dev-инженера.
+При `BILLING_PROVIDER=NETUP` он создаёт только синтетические `MANUAL` и
+`INTERNAL` заявки и проверяет поиск ЛС в NetUP Lab через браузер без создания
+linked заявки с реальными данными. Ранее в mock-режиме проверены все три типа.
 Тестовый контейнер не публикует порты и не меняет хранилище сертификатов VM.
 Для защищённых скриншотов синтетических экранов:
 
@@ -118,7 +136,7 @@ sg docker -c 'OSS_SCREENSHOTS=1 sh dev/run_browser_e2e.sh'
 Полный backend pytest на временных PostgreSQL базах и frontend gates:
 
 ```bash
-sg docker -c 'docker compose --env-file .env.dev -p oss-control-dev -f compose.dev.yaml run --rm -e RUN_DB_TESTS=1 api python -m pytest -q'
+sg docker -c 'docker compose --env-file .env.dev -p oss-control-dev -f compose.dev.yaml run --rm -e BILLING_PROVIDER=MOCK -e RUN_DB_TESTS=1 api python -m pytest -q'
 cd frontend && npm run typecheck && npm test -- --run && npm run build
 ```
 
@@ -141,6 +159,9 @@ backup базы и проверить восстановление. Дамп с�
 Stage 3B содержит ServiceDesk workflow для всех трёх типов заявок. Полная
 карточка Subscriber 360 с provenance и множественными IP-группами остаётся
 Stage 3C.
-Данные биллинга в этом dev-стеке синтетические. NetUP Lab можно подключать
-отдельным проверяемым этапом после согласования runtime-конфигурации и доступа
-только на чтение; текущий стек не нуждается в plaintext MariaDB-доступе.
+Новые lookup читаются из восстановленной NetUP Lab, а старые mock snapshots и
+синтетические заявки остаются в dev PostgreSQL. Данные Lab в lookup snapshot
+защищены RBAC; не сохраняйте скриншоты таких карточек или их содержимое в
+общих журналах. Автоматического fallback на MOCK нет. Контролируемая очистка
+lookup snapshots без заявок возможна после 24 часов; расписание очистки пока
+не настроено. Production NetUP не задействован.

@@ -3,6 +3,17 @@ set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 install -d -m 700 "$project_dir/.dev-secrets/screenshots"
+if [ -f "$project_dir/.dev-secrets/netup-runtime.env" ]; then
+  billing_mode=${OSS_BILLING_MODE:-NETUP}
+else
+  billing_mode=${OSS_BILLING_MODE:-MOCK}
+fi
+if [ "$billing_mode" = NETUP ]; then
+  test -r "$project_dir/.dev-secrets/netup-smoke.env"
+  set -- --env-file "$project_dir/.dev-secrets/netup-smoke.env"
+else
+  set --
+fi
 
 docker build --quiet -f "$project_dir/dev/Dockerfile.browser" \
   -t oss-control-dev-browser:local "$project_dir/dev" >/dev/null
@@ -11,6 +22,8 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --security-opt=no-new-privileges --tmpfs /tmp:rw,exec,uid=1001,gid=1001,size=1g \
   --env HOME=/tmp/oss-browser-home \
   --env OSS_SCREENSHOTS \
+  --env OSS_BILLING_MODE="$billing_mode" \
+  "$@" \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/credentials/bezhan-password,dst=/run/bezhan-password,readonly" \

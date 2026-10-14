@@ -5,7 +5,7 @@
 [инструкции dev-окружения](docs/operations/dev-lab.md). Команды ниже относятся
 к прежнему loopback стеку `oss-control-center` и не нужны для браузерной проверки.
 
-FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC, Ticket Engine и Subscriber 360 через синтетический mock BillingProvider. Заявки, комментарии, решения, история, аудит, снимки биллинга и ручные наблюдения хранятся в PostgreSQL. Production NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются; отдельный NetUP provider проверяется только на восстановленной лабораторной копии.
+FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC, Ticket Engine и Subscriber 360. Старый loopback stack использует mock BillingProvider; изолированный HTTPS dev-стек читает восстановленную NetUP Lab через read-only provider. Заявки, комментарии, решения, история, аудит, снимки биллинга и ручные наблюдения хранятся в PostgreSQL. Production NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются.
 
 Приложение использует Python 3.12 внутри контейнера. На Ubuntu 26.04 не требуется устанавливать Python или PostgreSQL для приложения в ОС. Перед запуском нужен доступ текущего пользователя к Docker socket; не обходите отсутствие доступа через изменение групп или прав сокета.
 
@@ -63,7 +63,7 @@ docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB
 
 ## Web UI — Stage 3B
 
-[Frontend](frontend/README.md) работает с ServiceDesk через существующий API: обзор, реестр, создание трёх типов заявок и инженерный workflow в карточке. Для просмотра с Windows используйте изолированное [HTTPS dev-окружение](docs/operations/dev-lab.md) по `https://172.17.7.2:8443/`. Полный экран Subscriber 360 остаётся Stage 3C; dev-стек использует только mock BillingProvider и отдельную PostgreSQL БД.
+[Frontend](frontend/README.md) работает с ServiceDesk через существующий API: обзор, реестр, создание трёх типов заявок и инженерный workflow в карточке. Для просмотра с Windows используйте изолированное [HTTPS dev-окружение](docs/operations/dev-lab.md) по `https://172.17.7.2:8443/`. Полный экран Subscriber 360 остаётся Stage 3C; dev-стек использует read-only NetUP Lab и отдельную PostgreSQL БД.
 
 ## Первоначальный администратор и Identity API
 
