@@ -83,6 +83,9 @@ async function processTicket(page, ticket, engineerId) {
   const saved = await page.request.get(`${origin}/api/v1/tickets/${ticket.id}`)
   expectStatus(saved, 200, 'Ticket reload')
   if ((await saved.json()).status !== 'CLOSED') throw new Error('Closed status was not persisted')
+  const history = await page.request.get(`${origin}/api/v1/tickets/${ticket.id}/history?page=1&size=20`)
+  expectStatus(history, 200, 'Ticket history reload')
+  if ((await history.json()).total < 6) throw new Error('Ticket workflow history is incomplete')
   console.log(`${ticket.ticket_type}: create, assign, start, diagnostic, decision, close passed`)
 }
 async function main() {
