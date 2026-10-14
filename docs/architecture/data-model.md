@@ -98,12 +98,14 @@ erDiagram
   tickets {
     uuid id PK
     bigint number UK
-    uuid subscriber_snapshot_id FK
-    uuid connection_snapshot_id FK
+    text ticket_type
+    uuid subscriber_snapshot_id_nullable FK
+    uuid connection_snapshot_id_nullable FK
     text selected_service_id_nullable
-    text account_no
+    text account_no_nullable
     text status
     text priority
+    text subject_nullable
     text description
     uuid created_by FK
     uuid assigned_engineer_id FK
@@ -179,11 +181,11 @@ erDiagram
 | `identity_audit_events` — 1.2A | Append-only UUID `id`, nullable актор и цель, действие, результат, HMAC логина/источника при входе, время. Без паролей, токенов и полных персональных данных. |
 | `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, nullable `subscriber_id`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, nullable ФИО, название организации, телефон, email, договоры и услуги в JSONB, `field_meta` с источником, временем и качеством существенных полей. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
 | `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable адрес, устройство, порт, VLAN, IP-группа, ONU ID и `field_meta`. ONU не требуется и не создаётся для Ethernet или неизвестного типа. Несколько подключений сохраняются раздельно. |
-| `tickets` | `id`, уникальный `number`, `account_no`, `subscriber_snapshot_id`, nullable `connection_snapshot_id` и `selected_service_id`, `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. Выбранные услуга и подключение проверяются по неизменяемому snapshot; при неоднозначности выбор явный. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
+| `tickets` | `id`, уникальный `number`, nullable `account_no`, `subscriber_snapshot_id`, `connection_snapshot_id`, `selected_service_id`, `subject VARCHAR(160)`, обязательное `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. `subject` добавлен в `0009` без заполнения исторических строк; CHECK запрещает пустое значение и управляющие символы. Для linked выбранные услуга и подключение проверяются по неизменяемому snapshot; при неоднозначности выбор явный. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
 | `ticket_comments` | `id`, `ticket_id`, `author_id`, `body`, `created_at`. Записи не подменяют решение или автоматические данные. |
 | `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `performed_actions`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
 | `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, обязательный `recorded_by` для ручной проверки. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |
-| `ticket_history` | `id`, `ticket_id`, `event_type`, nullable `actor_id`, `event_data`, `occurred_at`. Append-only история доменных фактов: создание, начало работы, комментарий, решение, закрытие. |
+| `ticket_history` | `id`, `ticket_id`, `event_type`, nullable `actor_id`, `event_data`, `occurred_at`. Append-only история доменных фактов: создание, начало работы, комментарий, решение, закрытие. Индекс `0009` по `(occurred_at, id)` поддерживает глобальную ленту; публичная сводка не выдаёт `event_data`. |
 | `audit_events` | `id`, nullable `ticket_id`, nullable `actor_id`, `action`, `outcome`, `origin`, `occurred_at`. Append-only след изменений; полные ФИО, телефон, адрес, секреты и текст жалобы в технический аудит не копируются. Отказы доступа также отражаются в `identity_audit_events` по существующему механизму identity. |
 
 Содержимое обращения, комментария, решения и snapshot защищено правами доступа и политикой хранения. Поиск Subscriber 360 создаёт snapshot в PostgreSQL. Начиная с ревизии `0006_lookup_cleanup`, snapshot без заявки может быть удалён контролируемой процедурой через 24 часа от `fetched_at`; это отдельный срок от `expires_at` (15 минут для создания заявки). Запись, связанная с заявкой, и история заявки сохраняются бессрочно. Дочерние connection snapshots удаляются в той же транзакции. Обезличенный `lookup_cleanup_audit` хранит время, cutoff и число удалённых записей, без ЛС и персональных данных. FK и блокировки защищают от гонки с созданием заявки. Ревизия `0007_contacts` добавляет `contacts JSONB NOT NULL DEFAULT []`: старые snapshots остаются читаемыми, новые сохраняют альтернативные телефоны с типом, источником, временем и качеством без эвристического выбора.
