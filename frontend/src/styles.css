@@ -211,6 +211,66 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 }
 
 /* ServiceDesk: dense working surfaces with a clear action hierarchy. */
+/* Subscriber 360: compact read-only source observations. */
+.subscriber-page { display: grid; gap: 19px; }
+.subscriber-search { display: flex; align-items: end; gap: 12px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.subscriber-search .field { width: min(420px, 100%); }
+.subscriber-search .button { margin-bottom: 1px; }
+.subscriber-empty { display: grid; justify-items: center; padding: 105px 20px; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; }
+.subscriber-empty svg { color: var(--accent); }
+.subscriber-empty h1 { margin: 15px 0 0; color: var(--text); font-size: 27px; }
+.subscriber-empty p { font-size: 13px; }
+.subscriber-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 2px 6px; }
+.subscriber-heading h1 { margin: 7px 0 10px; font-size: clamp(27px, 3vw, 39px); line-height: 1.15; letter-spacing: -.045em; }
+.subscriber-heading__meta { display: flex; flex-wrap: wrap; gap: 8px; color: #a9b9bd; font-size: 12px; }
+.subscriber-heading__meta span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: #1a242a; }
+.subscriber-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; }
+.subscriber-panel { min-width: 0; padding: 21px 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.subscriber-panel--wide { width: 100%; }
+.subscriber-panel h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+.subscriber-panel h3 { margin: 20px 0 10px; font-size: 13px; font-weight: 700; }
+.subscriber-panel > .muted { margin: 12px 0 0; font-size: 12px; }
+.subscriber-section-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-bottom: 15px; border-bottom: 1px solid var(--line-soft); }
+.subscriber-section-note { color: var(--muted); font-size: 11px; }
+.subscriber-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 17px; padding-top: 16px; }
+.subscriber-facts--three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.subscriber-fact { display: grid; align-content: start; justify-items: start; gap: 5px; min-width: 0; font-size: 12px; }
+.subscriber-fact > span:first-child { color: var(--muted); }
+.subscriber-fact strong { max-width: 100%; overflow-wrap: anywhere; font-weight: 650; }
+.origin-chip { display: inline-flex; align-items: center; width: fit-content; padding: 2px 6px; border: 1px solid #3b645b; border-radius: 5px; color: #b7e7d6; background: #1b3630; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.origin-chip--unknown { border-color: #48545b; color: #aab9be; background: #273139; }
+.origin-chip--stale { border-color: #766043; color: #f2d5a9; background: #3b3125; }
+.origin-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; margin: 0 2px; border-radius: 50%; vertical-align: middle; }
+.origin-dot--stale { background: #d6ad72; box-shadow: 0 0 0 2px #3b3125; }
+.origin-chip--conflict, .origin-chip--unavailable { border-color: #7c4b4e; color: #ffc7c2; background: #3e282a; }
+.contact-list, .account-list, .service-list, .connection-list { display: grid; gap: 8px; }
+.contact-list > div, .account-list > div { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.contact-list span:first-child { width: 82px; color: var(--muted); }
+.account-list { margin-top: 12px; }
+.account-list > div > span:not(.origin-chip) { color: var(--muted); }
+.finance-account { padding: 4px 17px 15px; border: 1px solid var(--line-soft); border-radius: 9px; }
+.finance-account h3 { margin: 12px 0 14px; }
+.finance-account .subscriber-fact + .subscriber-fact { margin-top: 13px; }
+.service-list, .connection-list { margin-top: 15px; }
+.service-row, .subscriber-service { padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 9px; background: #1a232a; }
+.service-row { display: flex; justify-content: space-between; gap: 20px; }
+.service-row h3, .subscriber-service h3 { margin: 4px 0 8px; font-size: 14px; }
+.service-row span:not(.eyebrow):not(.origin-chip) { color: var(--muted); font-size: 12px; }
+.service-row__state { display: grid; align-content: center; justify-items: end; gap: 6px; text-align: right; }
+.subscriber-service__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.subscriber-service .subscriber-facts { border-top: 1px solid var(--line-soft); }
+.ip-group { margin-top: 18px; }
+.ip-group h4 { display: flex; justify-content: space-between; margin: 0 0 9px; font-size: 12px; }
+.ip-group h4 span { color: var(--muted); font-weight: 500; }
+.table-scroll { width: 100%; overflow-x: auto; }
+.subscriber-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.subscriber-table th { padding: 10px 9px; border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 650; white-space: nowrap; }
+.subscriber-table td { padding: 10px 9px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+.subscriber-table td a { color: var(--accent); font-weight: 700; }
+.subscriber-table .origin-chip { margin: 4px 0 0; }
+.subscriber-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 12px; color: var(--muted); font-size: 12px; }
+@media (max-width: 1080px) { .subscriber-columns { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .subscriber-search { align-items: stretch; flex-direction: column; } .subscriber-heading { align-items: flex-start; flex-direction: column; } .subscriber-facts, .subscriber-facts--three { grid-template-columns: 1fr; } .service-row { flex-direction: column; } .service-row__state { justify-items: start; text-align: left; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .desk-page { max-width: 1440px; }
 .desk-heading { align-items: center; margin-bottom: 27px; }

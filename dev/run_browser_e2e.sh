@@ -23,6 +23,8 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --env HOME=/tmp/oss-browser-home \
   --env OSS_SCREENSHOTS \
   --env OSS_BILLING_MODE="$billing_mode" \
+  --env OSS_STAGE3C_LINKED \
+  --env OSS_READ_ONLY \
   "$@" \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \

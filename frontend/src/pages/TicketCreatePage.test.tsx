@@ -7,7 +7,18 @@ import type { SubscriberCard, Ticket } from '../features/tickets/types'
 import type { MeResponse } from '../shared/api/types'
 import { TicketCreatePage } from './TicketCreatePage'
 
-vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { create: vi.fn(), lookup: vi.fn() } }))
+vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { create: vi.fn(), lookup: vi.fn(), getLookup: vi.fn() } }))
+
+const subscriberDefaults = {
+  contacts: [], email: null, subscriber_id: null, field_meta: {},
+}
+const serviceDefaults = {
+  account_id: 'MOCK-GPON-001', tariff_name: null,
+  billing_active: null, billing_blocked: null, field_meta: {},
+}
+const connectionDefaults = {
+  onu_id: null, ip_group: null, ip_groups: [], field_meta: {},
+}
 
 const session: MeResponse = {
   user: {
@@ -49,14 +60,15 @@ it('requires explicit service and connection choices for an ambiguous subscriber
   const card: SubscriberCard = {
     lookup_id: '00000000-0000-4000-8000-000000000010', source: 'MOCK',
     fetched_at: '2026-01-01T00:00:00Z', expires_at: '2999-01-01T00:00:00Z', is_expired: false,
-    subscriber: { billing_account: 'MOCK-GPON-001', full_name: null, organization_name: 'Тестовая организация', phone: null, actual_address: null },
+    subscriber: { ...subscriberDefaults, billing_account: 'MOCK-GPON-001', full_name: null, organization_name: 'Тестовая организация', phone: null, actual_address: null },
+    accounts: [], financial_accounts: [], contracts: [],
     services: [
-      { service_id: 'service-a', name: 'Услуга A' },
-      { service_id: 'service-b', name: 'Услуга B' },
+      { ...serviceDefaults, service_id: 'service-a', name: 'Услуга A' },
+      { ...serviceDefaults, service_id: 'service-b', name: 'Услуга B' },
     ],
     connections: [
-      { connection_snapshot_id: '00000000-0000-4000-8000-000000000011', access_type: 'GPON', device: null, port: null, vlan: null, service_id: 'service-a' },
-      { connection_snapshot_id: '00000000-0000-4000-8000-000000000012', access_type: 'GPON', device: null, port: null, vlan: null, service_id: 'service-b' },
+      { ...connectionDefaults, connection_snapshot_id: '00000000-0000-4000-8000-000000000011', access_type: 'GPON', device: null, port: null, vlan: null, service_id: 'service-a' },
+      { ...connectionDefaults, connection_snapshot_id: '00000000-0000-4000-8000-000000000012', access_type: 'GPON', device: null, port: null, vlan: null, service_id: 'service-b' },
     ],
     technical_state: 'UNKNOWN',
   }
@@ -90,8 +102,8 @@ it('does not show a late lookup result after the account field changed', async (
   await act(async () => finishLookup({
     lookup_id: '00000000-0000-4000-8000-000000000010', source: 'MOCK',
     fetched_at: '2026-01-01T00:00:00Z', expires_at: '2999-01-01T00:00:00Z', is_expired: false,
-    subscriber: { billing_account: 'MOCK-ETH-001', full_name: 'Неверная карточка', organization_name: null, phone: null, actual_address: null },
-    services: [], connections: [], technical_state: 'UNKNOWN',
+    subscriber: { ...subscriberDefaults, billing_account: 'MOCK-ETH-001', full_name: 'Неверная карточка', organization_name: null, phone: null, actual_address: null },
+    accounts: [], financial_accounts: [], contracts: [], services: [], connections: [], technical_state: 'UNKNOWN',
   }))
   await waitFor(() => expect(ticketApi.lookup).toHaveBeenCalledWith('MOCK-ETH-001'))
   expect(screen.queryByText('Неверная карточка')).not.toBeInTheDocument()

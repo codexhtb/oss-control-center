@@ -38,6 +38,7 @@ export interface SubscriberConnection {
   port: string | null
   vlan: string | null
   onu_id: string | null
+  ip_group: string | null
   address: string | null
   service_id: string | null
   ip_groups: unknown[]
@@ -59,6 +60,43 @@ export interface TicketDetail extends Ticket {
   technical_state: string
 }
 
+export type DataQuality = 'KNOWN' | 'UNKNOWN' | 'STALE' | 'CONFLICT' | 'UNAVAILABLE'
+export interface FieldOrigin { source: 'NETUP' | 'MOCK'; observed_at: string; quality: DataQuality }
+export interface SubscriberService {
+  service_id: string
+  name: string | null
+  account_id: string | null
+  tariff_name: string | null
+  billing_active: boolean | null
+  billing_blocked: boolean | null
+  field_meta: Record<string, FieldOrigin>
+}
+export interface SubscriberIpRow {
+  row_id: string
+  ip_type_code: number
+  ip_raw: number | null
+  mask_raw: number | null
+  ip_ext_raw: number | null
+  mask_ext_raw: number | null
+  dhcp_pool_id: string | null
+  switch_id: string | null
+  device: string | null
+  port_id: number | null
+  vlan_id: number | null
+  field_meta: Record<string, FieldOrigin>
+}
+export interface SubscriberConnectionCard {
+  connection_snapshot_id: string
+  access_type: string
+  device: string | null
+  port: string | null
+  vlan: string | null
+  onu_id: string | null
+  ip_group: string | null
+  service_id: string | null
+  ip_groups: Array<{ group_id: string; rows: SubscriberIpRow[]; field_meta: Record<string, FieldOrigin> }>
+  field_meta: Record<string, FieldOrigin>
+}
 export interface SubscriberCard {
   lookup_id: string
   source: string
@@ -70,17 +108,17 @@ export interface SubscriberCard {
     full_name: string | null
     organization_name: string | null
     phone: string | null
+    contacts: Array<{ type: 'mobile' | 'work' | 'home'; value: string; source: string; observed_at: string; quality: DataQuality }>
+    email: string | null
     actual_address: string | null
+    subscriber_id: string | null
+    field_meta: Record<string, FieldOrigin>
   }
-  services: Array<{ service_id: string; name: string | null }>
-  connections: Array<{
-    connection_snapshot_id: string
-    access_type: string
-    device: string | null
-    port: string | null
-    vlan: string | null
-    service_id: string | null
-  }>
+  accounts: Array<{ account_id: string; is_primary: boolean; field_meta: Record<string, FieldOrigin> }>
+  financial_accounts: Array<{ account_id: string; balance: string | null; credit: string | null; account_blocked: boolean | null; field_meta: Record<string, FieldOrigin> }>
+  contracts: Array<{ contract_id: string; label: string | null; field_meta: Record<string, FieldOrigin> }>
+  services: SubscriberService[]
+  connections: SubscriberConnectionCard[]
   technical_state: string
 }
 

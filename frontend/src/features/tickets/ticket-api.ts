@@ -28,6 +28,10 @@ export const ticketApi = {
     apiRequest<SubscriberCard>('/api/v1/subscriber-lookups', {
       method: 'POST', json: { account_no: accountNo },
     }),
+  getLookup: (lookupId: string, signal?: AbortSignal) =>
+    apiRequest<SubscriberCard>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}`, { signal }),
+  subscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>
+    apiRequest<Page<Ticket>>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/tickets`, { page, size: 10 }), { signal }),
   comments: (id: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<TicketComment>>(withQuery(`${ticketPath(id)}/comments`, { page, size: 20 }), { signal }),
   history: (id: string, page: number, signal?: AbortSignal) =>
