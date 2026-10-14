@@ -51,11 +51,12 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
           <p className="eyebrow">OSS Control Center</p>
           <h2>Вход в систему</h2>
           <p className="muted">Используйте свою учётную запись OSS.</p>
-          <form onSubmit={submit} noValidate>
+          <form action="/api/v1/auth/login" method="post" onSubmit={submit} noValidate>
             <label className="field">
               <span>Логин</span>
               <input
-                name="login"
+                id="username"
+                name="username"
                 autoComplete="username"
                 maxLength={256}
                 value={login}
@@ -67,6 +68,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
             <label className="field">
               <span>Пароль</span>
               <input
+                id="current-password"
                 name="password"
                 type="password"
                 autoComplete="current-password"

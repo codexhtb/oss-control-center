@@ -11,6 +11,7 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --env HOME=/tmp/oss-browser-home \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \
+  --mount "type=bind,src=$project_dir/.dev-secrets/credentials/bezhan-password,dst=/run/bezhan-password,readonly" \
   --mount "type=bind,src=$project_dir/dev/browser_e2e.cjs,dst=/run/browser_e2e.cjs,readonly" \
   oss-control-dev-browser:local bash -euc '
     mkdir -p "$HOME/.pki/nssdb"

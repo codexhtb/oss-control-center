@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Activity, ArrowRight, LayoutGrid, LogOut, PanelLeftClose, Shield, UserRound } from 'lucide-react'
+import { Activity, ArrowRight, LayoutGrid, LogOut, PanelLeftClose, Shield, Ticket, UserRound } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import type { MeResponse, Role } from '../shared/api/types'
@@ -48,6 +48,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
           <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}>
             <LayoutGrid size={18} /> <span>Обзор</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>
+          {session.permissions.includes('ticket.read') && <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Ticket size={18} /> <span>Заявки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           <NavLink to="/account" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}>
             <UserRound size={18} /> <span>Мой доступ</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>

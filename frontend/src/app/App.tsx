@@ -10,6 +10,8 @@ import { useSession } from '../features/auth/use-session'
 import { AppShell } from '../layout/AppShell'
 import { AccountPage } from '../pages/AccountPage'
 import { WorkspacePage } from '../pages/WorkspacePage'
+import { TicketListPage } from '../pages/TicketListPage'
+import { TicketCreatePage } from '../pages/TicketCreatePage'
 import { queryClient } from './query-client'
 
 function AppRoutes() {
@@ -49,6 +51,8 @@ function AppRoutes() {
       <Routes>
         <Route path="/" element={<WorkspacePage session={session.data} />} />
         <Route path="/account" element={<AccountPage session={session.data} />} />
+        <Route path="/tickets" element={session.data.permissions.includes('ticket.read') ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
+        <Route path="/tickets/new" element={session.data.permissions.includes('ticket.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppShell>
