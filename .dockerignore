@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+!.env.dev.example
+.dev-secrets
+compose.dev.yaml
 __pycache__
 .pytest_cache
 .ruff_cache

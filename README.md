@@ -1,5 +1,10 @@
 # OSS Control Center — Service Desk и Subscriber 360 (Phase 1.3)
 
+**Браузерный dev-стек на MGMT IP:** отдельный Compose project `oss-control-dev`
+с HTTPS UI, API и собственной PostgreSQL описан в
+[инструкции dev-окружения](docs/operations/dev-lab.md). Команды ниже относятся
+к прежнему loopback стеку `oss-control-center` и не нужны для браузерной проверки.
+
 FastAPI backend с PostgreSQL, SQLAlchemy 2, Alembic, health endpoints, локальной аутентификацией/RBAC, Ticket Engine и Subscriber 360 через синтетический mock BillingProvider. Заявки, комментарии, решения, история, аудит, снимки биллинга и ручные наблюдения хранятся в PostgreSQL. Production NetUP, Telegram, LibreNMS, Icinga и BDCOM не подключаются; отдельный NetUP provider проверяется только на восстановленной лабораторной копии.
 
 Приложение использует Python 3.12 внутри контейнера. На Ubuntu 26.04 не требуется устанавливать Python или PostgreSQL для приложения в ОС. Перед запуском нужен доступ текущего пользователя к Docker socket; не обходите отсутствие доступа через изменение групп или прав сокета.

@@ -1,0 +1,123 @@
+name: oss-control-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env.dev}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env.dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.dev}
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    image: oss-control-dev-api:local
+    restart: unless-stopped
+    build: .
+    user: "10001:10001"
+    env_file:
+      - .env.dev
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+
+  web:
+    image: oss-control-dev-web:local
+    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.runtime
+    user: "1001:1001"
+    environment:
+      XDG_CONFIG_HOME: /tmp/caddy-config
+      XDG_DATA_HOME: /tmp/caddy-data
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./.dev-secrets/certs/server.crt:/run/dev-certs/server.crt:ro
+      - ./.dev-secrets/certs/server.key:/run/dev-certs/server.key:ro
+      - ./.dev-secrets/certs/ca.crt:/run/dev-certs/ca.crt:ro
+    ports:
+      - "172.17.7.2:8443:8443"
+    networks:
+      - backend
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--cacert", "/run/dev-certs/ca.crt", "--resolve", "172.17.7.2:8443:127.0.0.1", "https://172.17.7.2:8443/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 20s
+
+  seed:
+    profiles: [tools]
+    image: oss-control-dev-api:local
+    user: "1001:1001"
+    env_file:
+      - .env.dev
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    volumes:
+      - ./.dev-secrets/users.json:/run/dev-users.json:ro
+    command: ["python", "dev/seed_users.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  backend:
+    internal: true
+  edge: {}
+
+volumes:
+  dev_postgres_data:

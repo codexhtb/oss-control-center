@@ -1,0 +1,27 @@
+{
+	admin off
+	auto_https off
+	default_sni 172.17.7.2
+}
+
+https://172.17.7.2:8443 {
+	tls /run/dev-certs/server.crt /run/dev-certs/server.key
+
+	@api path /api/v1/*
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		header Cache-Control "no-store"
+		file_server
+	}
+
+	header {
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+}

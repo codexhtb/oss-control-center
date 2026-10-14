@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+!.env.dev.example
+.dev-secrets/
 __pycache__/
 *.py[cod]
 .pytest_cache/
