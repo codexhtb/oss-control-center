@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowRight, FilePlus2, Layers3, UserRound } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { ArrowLeft, ArrowRight, FilePlus2, Layers3, Search, UserRound } from 'lucide-react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import type { MeResponse } from '../shared/api/types'
 import { errorText } from '../shared/api/client'
@@ -8,7 +8,8 @@ import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { priorityLabel } from '../features/tickets/presentation'
-import type { CreateTicketInput, TicketPriority, TicketType } from '../features/tickets/types'
+import type { CreateTicketInput, SubscriberCard, TicketPriority, TicketType } from '../features/tickets/types'
+import { formatDate } from '../features/tickets/presentation'
 
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
 
@@ -19,16 +20,36 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const [subject, setSubject] = useState('')
   const [description, setDescription] = useState('')
   const [priority, setPriority] = useState<TicketPriority>('NORMAL')
+  const [accountNo, setAccountNo] = useState('')
+  const [card, setCard] = useState<SubscriberCard | null>(null)
+  const currentAccount = useRef('')
+  const [serviceId, setServiceId] = useState('')
+  const [connectionId, setConnectionId] = useState('')
   const [requestId, setRequestId] = useState(() => crypto.randomUUID())
+  const lookup = useMutation({
+    mutationFn: (account: string) => ticketApi.lookup(account),
+    onSuccess: (result) => {
+      if (result.subscriber.billing_account !== currentAccount.current) return
+      setCard(result)
+      setServiceId(result.services.length === 1 ? result.services[0]!.service_id : '')
+      setConnectionId(result.connections.length === 1 ? result.connections[0]!.connection_snapshot_id : '')
+      edited()
+    },
+  })
   const mutation = useMutation({
     mutationFn: (payload: CreateTicketInput) => ticketApi.create(payload),
-    onSuccess: () => {
+    onSuccess: (ticket) => {
       void queryClient.invalidateQueries({ queryKey: ['tickets'] })
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-      navigate('/tickets')
+      navigate(`/tickets/${ticket.id}`)
     },
   })
   const canCreate = session.permissions.includes('ticket.create')
+  const linked = type === 'SUBSCRIBER_LINKED'
+  const ambiguousService = (card?.services.length ?? 0) > 1
+  const ambiguousConnection = (card?.connections.length ?? 0) > 1
+  const expired = card ? card.is_expired || Date.now() >= new Date(card.expires_at).getTime() : false
+  const canSubmit = !!description.trim() && (!linked || (!!card && !expired && (!ambiguousService || !!serviceId) && (!ambiguousConnection || !!connectionId)))
 
   function edited() {
     setRequestId(crypto.randomUUID())
@@ -37,15 +58,27 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!canCreate || mutation.isPending || !description.trim() || type === 'SUBSCRIBER_LINKED') return
-    const payload: CreateTicketInput = {
-      ticket_type: type,
+    if (!canCreate || mutation.isPending || !canSubmit) return
+    const common = {
       subject: subject.trim() || undefined,
       description: description.trim(),
       priority,
       client_request_id: requestId,
     }
+    const payload: CreateTicketInput = type === 'SUBSCRIBER_LINKED' && card
+      ? { ...common, ticket_type: type, lookup_id: card.lookup_id,
+          ...(serviceId ? { selected_service_id: serviceId } : {}),
+          ...(connectionId ? { connection_snapshot_id: connectionId } : {}) }
+      : { ...common, ticket_type: type as 'MANUAL' | 'INTERNAL' }
     mutation.mutate(payload)
+  }
+
+  function performLookup() {
+    if (!accountNo.trim() || lookup.isPending) return
+    currentAccount.current = accountNo.trim()
+    setCard(null)
+    lookup.reset()
+    lookup.mutate(currentAccount.current)
   }
 
   if (!canCreate) return <Notice tone="error">У вашей роли нет права создавать заявки.</Notice>
@@ -59,16 +92,30 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
           <div className="type-picker" role="group" aria-label="Тип заявки">
             <button type="button" className={`type-option ${type === 'MANUAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('MANUAL'); edited() }}><FilePlus2 size={20} /><strong>Ручная</strong><span>Обращение без привязки к NetUP</span></button>
             <button type="button" className={`type-option ${type === 'INTERNAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('INTERNAL'); edited() }}><Layers3 size={20} /><strong>Внутренняя</strong><span>Задача команды OSS</span></button>
-            <button type="button" className="type-option" disabled title="Поиск абонента будет добавлен следующим шагом"><UserRound size={20} /><strong>По абоненту</strong><span>Из Subscriber 360</span></button>
+            <button type="button" className={`type-option ${linked ? 'type-option--selected' : ''}`} onClick={() => { setType('SUBSCRIBER_LINKED'); edited() }}><UserRound size={20} /><strong>По абоненту</strong><span>Из Subscriber 360</span></button>
           </div>
-          <div className="form-section-heading form-section-heading--later"><span className="step-number">02</span><div><h2>Содержание</h2><p>Свободный текст, без обязательного шаблона.</p></div></div>
+          {linked && <div className="lookup-section">
+            <div className="form-section-heading"><span className="step-number">02</span><div><h2>Поиск абонента</h2><p>Введите лицевой счёт. Данные берутся из согласованного источника.</p></div></div>
+            <div className="lookup-search"><label className="field"><span>Лицевой счёт</span><input id="billing-account" name="billing-account" value={accountNo} maxLength={100} placeholder="Номер ЛС" onChange={(event) => { setAccountNo(event.target.value); currentAccount.current = event.target.value.trim(); setCard(null); lookup.reset(); edited() }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); performLookup() } }} /></label><Button type="button" icon={<Search size={16} />} onClick={performLookup} disabled={!accountNo.trim() || lookup.isPending}>{lookup.isPending ? 'Ищем…' : 'Найти'}</Button></div>
+            {lookup.isError && <Notice tone="error">{errorText(lookup.error)} Данные абонента не подтверждены; заявка по абоненту не создана.</Notice>}
+            {card && <div className="lookup-card"><div className="lookup-card__top"><div><span className="eyebrow">ПОДТВЕРЖДЁННАЯ КАРТОЧКА</span><h3>{card.subscriber.full_name || card.subscriber.organization_name || 'Имя неизвестно'}</h3><span>ЛС {card.subscriber.billing_account}</span></div><span className="source-chip">{card.source} · {formatDate(card.fetched_at)}</span></div>
+              <div className="lookup-facts"><span>Контакт: <strong>{card.subscriber.phone || 'UNKNOWN'}</strong></span><span>Адрес: <strong>{card.subscriber.actual_address || 'UNKNOWN'}</strong></span><span>Техническое состояние: <strong>UNKNOWN</strong></span></div>
+              {ambiguousService && <label className="field"><span>Услуга <em>*</em></span><select aria-label="Услуга" value={serviceId} onChange={(event) => { setServiceId(event.target.value); setConnectionId(''); edited() }}><option value="">Выберите услугу</option>{card.services.map((service) => <option key={service.service_id} value={service.service_id}>{service.name || service.service_id} · {service.service_id}</option>)}</select></label>}
+              {card.services.length === 1 && <p className="lookup-single">Услуга: {card.services[0]!.name || card.services[0]!.service_id}</p>}
+              {ambiguousConnection && <label className="field"><span>Подключение <em>*</em></span><select aria-label="Подключение" value={connectionId} onChange={(event) => { setConnectionId(event.target.value); edited() }}><option value="">Выберите подключение</option>{card.connections.map((connection) => <option key={connection.connection_snapshot_id} value={connection.connection_snapshot_id} disabled={!!(serviceId && connection.service_id && connection.service_id !== serviceId)}>{connection.access_type} · {connection.device || 'Устройство UNKNOWN'} · {connection.port || 'Порт UNKNOWN'}{connection.service_id ? ` · ${connection.service_id}` : ''}</option>)}</select></label>}
+              {card.connections.length === 1 && <p className="lookup-single">Подключение: {card.connections[0]!.access_type} · {card.connections[0]!.device || 'Устройство UNKNOWN'} · {card.connections[0]!.port || 'Порт UNKNOWN'}</p>}
+              {card.connections.length === 0 && <p className="lookup-single">Подключение в источнике не указано. Техническое состояние остаётся UNKNOWN.</p>}
+              {expired && <Notice tone="error">Карточка устарела для создания заявки. Выполните поиск повторно.</Notice>}
+            </div>}
+          </div>}
+          <div className="form-section-heading form-section-heading--later"><span className="step-number">{linked ? '03' : '02'}</span><div><h2>Содержание</h2><p>Свободный текст, без обязательного шаблона.</p></div></div>
           <div className="form-fields">
             <label className="field"><span>Тема <small>необязательно</small></span><input id="ticket-subject" name="subject" value={subject} maxLength={160} placeholder="Например, проверить доступность узла" onChange={(event) => { setSubject(event.target.value); edited() }} /></label>
             <label className="field"><span>Описание <em>*</em></span><textarea id="ticket-description" name="description" value={description} maxLength={10000} rows={7} required placeholder="Что произошло и какая работа требуется?" onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
             <label className="field form-fields__priority"><span>Приоритет</span><select id="ticket-priority" name="priority" value={priority} onChange={(event) => { setPriority(event.target.value as TicketPriority); edited() }}>{priorities.map((item) => <option key={item} value={item}>{priorityLabel[item]}</option>)}</select></label>
           </div>
           {mutation.isError && <Notice tone="error">{errorText(mutation.error)} При сомнении проверьте реестр перед повтором.</Notice>}
-          <div className="create-actions"><span>Сохранение и история выполняются сервером в одной транзакции.</span><Button type="submit" variant="primary" disabled={mutation.isPending || !description.trim()}>{mutation.isPending ? 'Создаём…' : 'Создать заявку'} <ArrowRight size={16} /></Button></div>
+          <div className="create-actions"><span>Сохранение и история выполняются сервером в одной транзакции.</span><Button type="submit" variant="primary" disabled={mutation.isPending || !canSubmit}>{mutation.isPending ? 'Создаём…' : 'Создать заявку'} <ArrowRight size={16} /></Button></div>
         </form>
         <aside className="create-aside"><div className="aside-kicker">КАК ЭТО РАБОТАЕТ</div><h3>Один реестр для всех задач</h3><p>Заявка получает номер, историю и единый маршрут работы. Исполнителя и решение можно добавить после создания.</p><div className="aside-rule" /><p className="muted">Для ручной и внутренней заявки данные NetUP не подставляются. Неизвестное техническое состояние остаётся неизвестным.</p></aside>
       </div>
