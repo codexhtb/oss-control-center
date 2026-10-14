@@ -61,9 +61,9 @@ docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB
 
 Инженеры назначают исполнителя, начинают работу, фиксируют причину необходимости выездных работ, ручную диагностику и решение, затем закрывают заявку. Статусы `OPEN → IN_PROGRESS → CLOSED`. Передача монтажникам фиксируется событием, без Telegram и автоматического закрытия. Запросы назначения, начала, запроса выездных работ и закрытия требуют `If-Match: "<version>"`. Полные контракты: [API contracts](docs/architecture/api-contracts.md).
 
-## Web UI — Stage 3A
+## Web UI — Stage 3B
 
-Отдельный [frontend](frontend/README.md) содержит React/Vite основу: сессионный вход, рабочую оболочку, текущие права и readiness backend. Экраны заявок и Subscriber 360 планируются в Stage 3B/3C; основная рабочая БД для просмотра UI не меняется.
+[Frontend](frontend/README.md) работает с ServiceDesk через существующий API: обзор, реестр, создание трёх типов заявок и инженерный workflow в карточке. Для просмотра с Windows используйте изолированное [HTTPS dev-окружение](docs/operations/dev-lab.md) по `https://172.17.7.2:8443/`. Полный экран Subscriber 360 остаётся Stage 3C; dev-стек использует только mock BillingProvider и отдельную PostgreSQL БД.
 
 ## Первоначальный администратор и Identity API
 

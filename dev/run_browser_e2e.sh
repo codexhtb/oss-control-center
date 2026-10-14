@@ -2,6 +2,7 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+install -d -m 700 "$project_dir/.dev-secrets/screenshots"
 
 docker build --quiet -f "$project_dir/dev/Dockerfile.browser" \
   -t oss-control-dev-browser:local "$project_dir/dev" >/dev/null
@@ -9,9 +10,11 @@ docker build --quiet -f "$project_dir/dev/Dockerfile.browser" \
 docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --security-opt=no-new-privileges --tmpfs /tmp:rw,exec,uid=1001,gid=1001,size=1g \
   --env HOME=/tmp/oss-browser-home \
+  --env OSS_SCREENSHOTS \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/credentials/bezhan-password,dst=/run/bezhan-password,readonly" \
+  --mount "type=bind,src=$project_dir/.dev-secrets/screenshots,dst=/run/screenshots" \
   --mount "type=bind,src=$project_dir/dev/browser_e2e.cjs,dst=/run/browser_e2e.cjs,readonly" \
   oss-control-dev-browser:local bash -euc '
     mkdir -p "$HOME/.pki/nssdb"
