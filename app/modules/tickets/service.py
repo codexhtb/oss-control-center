@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,12 +20,14 @@ from app.modules.tickets.models import (
     TicketAudit,
     TicketComment,
     TicketEvent,
+    TicketPurgeAudit,
     TicketResolution,
 )
 from app.modules.tickets.schemas import (
     AddComment,
     AddDecision,
     CreateTicket,
+    DeleteTicket,
     EditTicket,
     FieldWorkRequest,
     ManualDiagnostic,
@@ -46,12 +48,14 @@ def _actor(db: Session, actor_id: UUID, permission: Permission) -> User:
     return user
 
 
-def _ticket(db: Session, ticket_id: UUID, *, lock: bool = False) -> Ticket:
+def _ticket(
+    db: Session, ticket_id: UUID, *, lock: bool = False, include_deleted: bool = False
+) -> Ticket:
     statement = select(Ticket).where(Ticket.id == ticket_id)
     if lock:
         statement = statement.with_for_update().execution_options(populate_existing=True)
     ticket = db.execute(statement).scalar_one_or_none()
-    if ticket is None:
+    if ticket is None or (ticket.deleted_at is not None and not include_deleted):
         raise ApiError(404, "ticket_not_found", "Ticket not found")
     return ticket
 
@@ -131,6 +135,108 @@ def edit_ticket(
     db.commit()
     db.refresh(ticket)
     return ticket
+
+
+def _can_read_ticket(db: Session, actor: User, ticket: Ticket) -> bool:
+    return has_permission(db, actor, Permission.TICKET_READ) or (
+        has_permission(db, actor, Permission.TICKET_READ_OWN) and ticket.created_by == actor.id
+    )
+
+
+def delete_ticket(
+    db: Session, actor_id: UUID, ticket_id: UUID, payload: DeleteTicket, version: int | None
+) -> Ticket:
+    actor = db.execute(
+        select(User)
+        .where(User.id == actor_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if actor is None or not actor.is_active:
+        raise ApiError(403, "forbidden", "Permission denied")
+    ticket = _ticket(db, ticket_id, lock=True, include_deleted=True)
+    if ticket.deleted_at is not None:
+        raise ApiError(409, "already_deleted", "Ticket is already deleted")
+    if not _can_read_ticket(db, actor, ticket):
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
+    if not has_permission(db, actor, Permission.TICKET_DELETE_ALL) and not (
+        has_permission(db, actor, Permission.TICKET_DELETE_OWN) and ticket.created_by == actor_id
+    ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    _version(ticket, version)
+    ticket.deleted_at = datetime.now(UTC)
+    ticket.deleted_by = actor_id
+    ticket.delete_reason = payload.reason
+    _changed(ticket)
+    _fact(
+        db,
+        ticket,
+        actor_id,
+        "ticket_deleted",
+        {"reason": payload.reason} if payload.reason is not None else {},
+    )
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def restore_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | None) -> Ticket:
+    actor = _actor(db, actor_id, Permission.TICKET_RESTORE)
+    if not has_permission(db, actor, Permission.TICKET_READ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    ticket = _ticket(db, ticket_id, lock=True, include_deleted=True)
+    if ticket.deleted_at is None:
+        raise ApiError(409, "not_deleted", "Ticket is not deleted")
+    _version(ticket, version)
+    ticket.deleted_at = None
+    ticket.deleted_by = None
+    ticket.delete_reason = None
+    _changed(ticket)
+    _fact(db, ticket, actor_id, "ticket_restored", {})
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def purge_ticket(
+    db: Session, actor_id: UUID, ticket_id: UUID, version: int | None, confirm_number: int
+) -> None:
+    actor = _actor(db, actor_id, Permission.TICKET_PURGE)
+    if not has_permission(db, actor, Permission.TICKET_READ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    ticket = _ticket(db, ticket_id, lock=True, include_deleted=True)
+    if ticket.deleted_at is None:
+        raise ApiError(409, "not_deleted", "Delete the ticket before purging it")
+    _version(ticket, version)
+    if ticket.number != confirm_number:
+        raise ApiError(422, "confirmation_mismatch", "Ticket number does not match")
+    db.execute(
+        text("SELECT set_config('oss.purge_ticket_id', :ticket_id, true)"),
+        {"ticket_id": str(ticket_id)},
+    )
+    db.execute(
+        text("SELECT set_config('oss.purge_actor_id', :actor_id, true)"),
+        {"actor_id": str(actor_id)},
+    )
+    if ticket.closed_decision_id is not None:
+        # Break the closed ticket / decision FK cycle inside this one transaction.
+        ticket.status = TicketStatus.IN_PROGRESS
+        ticket.closed_decision_id = None
+        ticket.closed_by = None
+        ticket.closed_at = None
+        db.flush()
+    for model in (
+        DiagnosticSnapshot,
+        DiagnosticCheck,
+        TicketComment,
+        TicketEvent,
+        TicketAudit,
+        TicketResolution,
+    ):
+        db.execute(delete(model).where(model.ticket_id == ticket_id))
+    db.execute(delete(Ticket).where(Ticket.id == ticket_id))
+    db.add(TicketPurgeAudit(ticket_id=ticket_id, ticket_number=ticket.number, actor_id=actor_id))
+    db.commit()
 
 
 def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[Ticket, bool]:
@@ -235,6 +341,8 @@ def _linked_source(
 
 
 def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticket, bool]:
+    if ticket.deleted_at is not None:
+        raise ApiError(409, "ticket_deleted", "Request already created a deleted ticket")
     if (
         ticket.ticket_type != payload.ticket_type
         or ticket.description != payload.description
@@ -337,7 +445,7 @@ def list_tickets(
     unassigned: bool = False,
     visible_to: UUID | None = None,
 ) -> tuple[list[Ticket], int]:
-    conditions = []
+    conditions = [Ticket.deleted_at.is_(None)]
     if visible_to is not None:
         conditions.append(Ticket.created_by == visible_to)
     if status is not None:

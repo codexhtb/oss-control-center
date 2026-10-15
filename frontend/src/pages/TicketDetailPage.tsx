@@ -52,6 +52,8 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [editing, setEditing] = useState(false)
   const [editSubject, setEditSubject] = useState('')
   const [editDescription, setEditDescription] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteReason, setDeleteReason] = useState('')
   const canAssign = session.permissions.includes('tickets.assign')
   const canStart = session.permissions.includes('tickets.start')
   const canDiagnose = session.permissions.includes('tickets.diagnose')
@@ -114,9 +116,24 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to="/tickets"><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{errorText(ticketQuery.error)}</Notice></div>
   const ticket = ticketQuery.data
   const canEdit = ticket.status !== 'CLOSED' && (session.permissions.includes('tickets.edit.all') || (session.permissions.includes('tickets.edit.own') && ticket.created_by === session.user.id))
+  const canDelete = session.permissions.includes('tickets.delete.all') || (session.permissions.includes('tickets.delete.own') && ticket.created_by === session.user.id)
   const open = ticket.status !== 'CLOSED'
   const inProgress = ticket.status === 'IN_PROGRESS'
   const assignedName = ticket.assigned_engineer_name || engineers.data?.items.find((item) => item.id === ticket.assigned_engineer_id)?.display_name
+
+  async function deleteCurrent() {
+    if (busy) return
+    setBusy('delete'); setActionError(null)
+    try {
+      await ticketApi.remove(id, ticket.version, deleteReason.trim() || undefined)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['tickets'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      ])
+      navigate('/tickets', { replace: true })
+    } catch (error) { setActionError(error) }
+    finally { setBusy(null) }
+  }
 
   function submitComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -179,6 +196,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
           {inProgress && session.permissions.includes('tickets.field_work') && <section className="detail-panel detail-panel--rail"><h2>Выездные работы</h2><label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={2000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label><Button disabled={!fieldReason.trim() || !!busy} onClick={() => void runAction('field', () => ticketApi.requestFieldWork(id, fieldReason.trim(), ticket.version), () => setFieldReason(''))}>Зафиксировать запрос</Button></section>}
           {inProgress && canClose && <section className="detail-panel detail-panel--rail close-panel"><h2>Закрытие</h2><p className="rail-note">Только после записанного решения инженера.</p><label className="field"><span>Подтверждённое решение</span><select aria-label="Решение для закрытия" value={selectedDecision} onChange={(event) => setSelectedDecision(event.target.value)}><option value="">Выберите решение</option>{decisions.data?.items.map((item) => <option key={item.id} value={item.id}>{formatDate(item.created_at)} · {item.decision_text.slice(0, 36)}</option>)}{selectedDecision && !decisions.data?.items.some((item) => item.id === selectedDecision) && <option value={selectedDecision}>Только что записанное решение</option>}</select></label><Button variant="primary" disabled={!selectedDecision || !!busy} onClick={() => void runAction('close', () => ticketApi.close(id, selectedDecision, ticket.version))}>Закрыть заявку</Button></section>}
           {ticket.status === 'CLOSED' && <div className="closed-note">Заявка закрыта инженером {ticket.closed_at ? formatDate(ticket.closed_at) : ''}. История остаётся доступной.</div>}
+          {canDelete && <section className="detail-panel detail-panel--rail"><h2>Удаление заявки</h2>{confirmDelete ? <div className="inline-form"><p>Удалить заявку №{ticket.number} «{ticketTitle(ticket.subject)}»? Её можно будет восстановить из корзины.</p><label className="field"><span>Причина (необязательно)</span><textarea value={deleteReason} maxLength={500} onChange={(event) => setDeleteReason(event.target.value)} /></label><div className="user-actions"><Button variant="secondary" disabled={!!busy} onClick={() => void deleteCurrent()}>Подтвердить удаление</Button><Button variant="quiet" onClick={() => setConfirmDelete(false)}>Отмена</Button></div></div> : <Button variant="quiet" onClick={() => setConfirmDelete(true)}>Удалить</Button>}</section>}
         </aside>
       </div>
     </div>

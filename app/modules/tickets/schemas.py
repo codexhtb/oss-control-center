@@ -78,6 +78,23 @@ class EditTicket(StrictModel):
         return self
 
 
+class DeleteTicket(StrictModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def valid_reason(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value)
+        ):
+            raise ValueError("reason must be nonblank, trimmed and contain no control characters")
+        return value
+
+
+class PurgeTicket(StrictModel):
+    confirm_number: int = Field(ge=1)
+
+
 class AddComment(StrictModel):
     body: str = Field(min_length=1, max_length=10000)
 
@@ -163,6 +180,9 @@ class TicketView(BaseModel):
     closed_by: UUID | None
     closed_decision_id: UUID | None
     closed_at: datetime | None
+    deleted_at: datetime | None = None
+    deleted_by: UUID | None = None
+    delete_reason: str | None = None
     version: int
     created_at: datetime
     updated_at: datetime

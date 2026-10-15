@@ -20,7 +20,8 @@ const base: TicketDetail = {
   account_no: null, subscriber_snapshot_id: null, connection_snapshot_id: null,
   selected_service_id: null, created_by: '00000000-0000-4000-8000-000000000001',
   assigned_engineer_id: null, closed_by: null, closed_decision_id: null,
-  closed_at: null, version: 3, created_at: '2026-01-01T00:00:00Z',
+  closed_at: null, deleted_at: null, deleted_by: null, delete_reason: null,
+  version: 3, created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z', subscriber: null,
   selected_connection: null, technical_state: 'UNKNOWN',
 }

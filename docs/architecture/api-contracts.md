@@ -1,5 +1,17 @@
 # API contracts — Phase 1
 
+## Текущий контракт удаления заявок (`0014`)
+
+Все изменяющие операции требуют сессию, Origin, CSRF и `If-Match: "<version>"`; ответ содержит `Cache-Control: no-store`. Детали: [удаление заявок](ticket-deletion.md).
+
+| Метод и путь | Право | Результат |
+| --- | --- | --- |
+| `DELETE /api/v1/tickets/{id}` | `tickets.delete.own` при `created_by` либо `tickets.delete.all`, плюс право чтения | Необязательное тело `{reason?}`; soft delete, версия/история/аудит; `200` |
+| `GET /api/v1/tickets/trash` | `tickets.read.all` и `tickets.restore` либо `tickets.purge` | Пагинация `page,size`, только удалённые заявки |
+| `POST /api/v1/tickets/{id}/restore` | `tickets.restore` и `tickets.read.all` | Восстановление с прежней историей; `200` |
+| `DELETE /api/v1/tickets/{id}/purge` | `tickets.purge` и `tickets.read.all` | Тело `{confirm_number}`, только soft-deleted; `204`, минимальный аудит |
+
+
 ## Текущий контракт: персональные права и редактирование
 
 Секция ниже заменяет исторические значения `ticket.*`, `subscriber.*` и

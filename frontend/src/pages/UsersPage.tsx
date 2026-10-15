@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router'
 import { apiRequest, errorText } from '../shared/api/client'
 import type { Permission, Role, User } from '../shared/api/types'
 import { Button } from '../shared/ui/Button'
@@ -18,6 +19,8 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
     { key: 'tickets.create', label: 'Создание' }, { key: 'tickets.read.all', label: 'Просмотр всех' },
     { key: 'tickets.read.own', label: 'Просмотр своих' }, { key: 'tickets.edit.all', label: 'Изменение всех' },
     { key: 'tickets.edit.own', label: 'Изменение своих' }, { key: 'tickets.comment', label: 'Комментарии' },
+    { key: 'tickets.delete.own', label: 'Удаление своих' }, { key: 'tickets.delete.all', label: 'Удаление всех' },
+    { key: 'tickets.restore', label: 'Восстановление из корзины' }, { key: 'tickets.purge', label: 'Окончательное удаление' },
     { key: 'tickets.assign', label: 'Назначение' }, { key: 'tickets.start', label: 'Начало работы' },
     { key: 'tickets.diagnose', label: 'Диагностика' }, { key: 'tickets.resolve', label: 'Решение' },
     { key: 'tickets.close', label: 'Закрытие' }, { key: 'tickets.field_work', label: 'Выездные работы' },
@@ -98,7 +101,7 @@ export function UsersPage() {
   }
 
   return <div className="page desk-page">
-    <div className="page-heading"><div><p className="eyebrow">ДОСТУП / СОТРУДНИКИ</p><h1>Пользователи</h1></div><Button variant="primary" onClick={beginCreate}>Создать пользователя</Button></div>
+    <div className="page-heading"><div><p className="eyebrow">ДОСТУП / СОТРУДНИКИ</p><h1>Пользователи</h1></div><div className="user-actions"><Link to="/trash" className="back-link">Корзина заявок</Link><Button variant="primary" onClick={beginCreate}>Создать пользователя</Button></div></div>
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
     {message && <Notice>{message}</Notice>}
     {temporaryPassword && <div className="detail-panel" role="status"><h2>Временный пароль</h2><p>Показан один раз. После закрытия получить его снова нельзя; потребуется сброс.</p><code className="temporary-password">{temporaryPassword}</code><div><Button onClick={() => setTemporaryPassword(null)}>Скрыть пароль</Button></div></div>}

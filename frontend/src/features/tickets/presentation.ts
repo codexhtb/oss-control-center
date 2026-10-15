@@ -29,6 +29,8 @@ export const eventLabel: Record<string, string> = {
   decision_recorded: 'Записано решение',
   field_work_requested: 'Запрошены выездные работы',
   ticket_closed: 'Заявка закрыта',
+  ticket_deleted: 'Заявка перемещена в корзину',
+  ticket_restored: 'Заявка восстановлена',
 }
 
 export function formatDate(value: string): string {

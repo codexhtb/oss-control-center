@@ -28,6 +28,9 @@ export interface Ticket {
   closed_by: string | null
   closed_decision_id: string | null
   closed_at: string | null
+  deleted_at: string | null
+  deleted_by: string | null
+  delete_reason: string | null
   version: number
   created_at: string
   updated_at: string

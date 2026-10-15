@@ -26,6 +26,7 @@ const ticket: Ticket = {
   priority: 'HIGH', account_no: null, subscriber_snapshot_id: null,
   connection_snapshot_id: null, selected_service_id: null, created_by: session.user.id,
   assigned_engineer_id: null, closed_by: null, closed_decision_id: null, closed_at: null,
+  deleted_at: null, deleted_by: null, delete_reason: null,
   version: 1, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 }
 

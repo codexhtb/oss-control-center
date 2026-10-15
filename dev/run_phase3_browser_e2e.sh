@@ -41,5 +41,5 @@ chmod 600 "$browser_override"
 compose -f "$browser_override" config --quiet
 compose -f "$browser_override" up -d --no-deps --wait --force-recreate api
 
-OSS_BROWSER_SCRIPT="$project_dir/dev/browser_phase3.cjs" OSS_BILLING_MODE=MOCK \
+OSS_BROWSER_SCRIPT="${OSS_BROWSER_SCRIPT:-$project_dir/dev/browser_phase3.cjs}" OSS_BILLING_MODE=MOCK \
   sh "$project_dir/dev/run_browser_e2e.sh"

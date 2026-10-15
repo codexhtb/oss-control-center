@@ -31,12 +31,14 @@ from app.modules.tickets.schemas import (
     CommentView,
     CreateTicket,
     DecisionView,
+    DeleteTicket,
     DiagnosticView,
     EditTicket,
     EventView,
     FieldWorkRequest,
     ManualDiagnostic,
     Page,
+    PurgeTicket,
     RecentEventView,
     TicketDetail,
     TicketView,
@@ -48,9 +50,12 @@ from app.modules.tickets.service import (
     assign_engineer,
     close_ticket,
     create_ticket,
+    delete_ticket,
     edit_ticket,
     list_tickets,
+    purge_ticket,
     request_field_work,
+    restore_ticket,
     start_ticket,
     ticket_detail,
 )
@@ -200,7 +205,7 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketView]:
 
 def _readable(db: Session, identity: AuthContext, ticket_id: UUID) -> Ticket:
     ticket = db.get(Ticket, ticket_id)
-    if ticket is None:
+    if ticket is None or ticket.deleted_at is not None:
         raise ApiError(404, "ticket_not_found", "Ticket not found")
     if not has_permission(db, identity.user, Permission.TICKET_READ) and not (
         has_permission(db, identity.user, Permission.TICKET_READ_OWN)
@@ -262,6 +267,30 @@ def listing(
     return {"items": _ticket_views(db, items), "page": page, "size": size, "total": total}
 
 
+@router.get("/trash", response_model=Page[TicketView])
+def trash(
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    page: PageNumber = 1,
+    size: PageSize = 20,
+):
+    if not has_permission(db, identity.user, Permission.TICKET_READ) or not (
+        has_permission(db, identity.user, Permission.TICKET_RESTORE)
+        or has_permission(db, identity.user, Permission.TICKET_PURGE)
+    ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    condition = Ticket.deleted_at.is_not(None)
+    total = db.scalar(select(func.count()).select_from(Ticket).where(condition)) or 0
+    rows = db.scalars(
+        select(Ticket)
+        .where(condition)
+        .order_by(Ticket.deleted_at.desc(), Ticket.id.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+    ).all()
+    return {"items": _ticket_views(db, rows), "page": page, "size": size, "total": total}
+
+
 @router.get("/assignable-engineers", response_model=Page[AssignableEngineerView])
 def assignable_engineers(
     identity: EngineerListDep,
@@ -297,6 +326,7 @@ def recent_events(
         if has_permission(db, identity.user, Permission.TICKET_READ)
         else [Ticket.created_by == identity.user.id]
     )
+    conditions.append(Ticket.deleted_at.is_(None))
     total = (
         db.scalar(
             select(func.count())
@@ -362,6 +392,47 @@ def edit(
     ticket = edit_ticket(db, identity.user.id, ticket_id, payload, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
+
+
+@router.delete("/{ticket_id}", response_model=TicketView)
+def soft_delete(
+    ticket_id: UUID,
+    response: Response,
+    identity: CsrfIdentityDep,
+    db: SessionDep,
+    payload: DeleteTicket | None = None,
+    if_match: IfMatch = None,
+):
+    ticket = delete_ticket(
+        db, identity.user.id, ticket_id, payload or DeleteTicket(), _version(if_match)
+    )
+    _etag(response, TicketView.model_validate(ticket))
+    return ticket
+
+
+@router.post("/{ticket_id}/restore", response_model=TicketView)
+def restore(
+    ticket_id: UUID,
+    response: Response,
+    identity: CsrfIdentityDep,
+    db: SessionDep,
+    if_match: IfMatch = None,
+):
+    ticket = restore_ticket(db, identity.user.id, ticket_id, _version(if_match))
+    _etag(response, TicketView.model_validate(ticket))
+    return ticket
+
+
+@router.delete("/{ticket_id}/purge", status_code=204)
+def purge(
+    ticket_id: UUID,
+    payload: PurgeTicket,
+    identity: CsrfIdentityDep,
+    db: SessionDep,
+    if_match: IfMatch = None,
+) -> Response:
+    purge_ticket(db, identity.user.id, ticket_id, _version(if_match), payload.confirm_number)
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/{ticket_id}/assignment", response_model=TicketView)

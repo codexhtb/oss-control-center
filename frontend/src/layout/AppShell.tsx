@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Activity, ArrowRight, LayoutGrid, LogOut, PanelLeftClose, Search, Shield, Ticket, UserRound, Users } from 'lucide-react'
+import { Activity, ArrowRight, LayoutGrid, LogOut, PanelLeftClose, Search, Shield, Ticket, Trash2, UserRound, Users } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import type { MeResponse, Role } from '../shared/api/types'
@@ -54,6 +54,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
             <UserRound size={18} /> <span>Мой доступ</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>
           {session.permissions.includes('users.manage') && <NavLink to="/users" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Users size={18} /> <span>Пользователи</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
+          {session.permissions.includes('tickets.read.all') && (session.permissions.includes('tickets.restore') || session.permissions.includes('tickets.purge')) && <NavLink to="/trash" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Trash2 size={18} /> <span>Корзина</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
         </nav>
         <div className="sidebar__spacer" />
         <div className="sidebar__environment"><Activity size={15} /><span>Внутренний контур OSS</span></div>

@@ -66,6 +66,7 @@ export async function apiRequest<T>(path: `/api/v1/${string}`, options: ApiReque
     const error = isErrorBody(payload) ? payload : null
     throw new ApiError(response.status, error?.code ?? 'api_error', error?.request_id)
   }
+  if (response.status === 204) return undefined as T
   if (!isJson) throw new ApiError(response.status, 'invalid_response')
   return payload as T
 }

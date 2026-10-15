@@ -35,6 +35,7 @@ from app.modules.tickets.models import (
     Ticket,
     TicketAudit,
     TicketEvent,
+    TicketPurgeAudit,
 )
 from app.modules.tickets.schemas import CreateTicket
 from app.modules.tickets.service import create_ticket, start_ticket
@@ -156,6 +157,313 @@ def login(client: TestClient, name: str) -> None:
 
 def csrf(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": client.cookies["oss_csrf"]}
+
+
+def grant_ticket_permission(engine: Engine, user: User, permission: Permission) -> None:
+    with Session(engine) as db:
+        row = db.get(User, user.id)
+        assert row is not None
+        if not row.permissions_customized:
+            from app.modules.identity.roles import permissions_for
+
+            db.add_all(
+                UserPermission(user_id=user.id, permission=value)
+                for value in permissions_for(Role(user.role))
+            )
+            row.permissions_customized = True
+        db.add(UserPermission(user_id=user.id, permission=permission))
+        db.commit()
+
+
+def make_manual_ticket(client: TestClient, *, subject: str = "Synthetic deletion test") -> dict:
+    response = client.post(
+        "/api/v1/tickets",
+        headers=csrf(client),
+        json={
+            "ticket_type": "MANUAL",
+            "subject": subject,
+            "description": "Disposable test ticket",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_soft_delete_own_scope_visibility_restore_and_security(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    owner = seed_user(ticket_engine, "delete_owner", Role.OPERATOR)
+    other = seed_user(ticket_engine, "delete_other", Role.OPERATOR)
+    admin = seed_user(ticket_engine, "delete_admin", Role.ADMIN)
+    grant_ticket_permission(ticket_engine, owner, Permission.TICKET_DELETE_OWN)
+    login(ticket_client, owner.login)
+    own = make_manual_ticket(ticket_client)
+    login(ticket_client, other.login)
+    foreign = make_manual_ticket(ticket_client, subject="Other synthetic ticket")
+    login(ticket_client, owner.login)
+    own_path = f"/api/v1/tickets/{own['id']}"
+    foreign_path = f"/api/v1/tickets/{foreign['id']}"
+    assert ticket_client.delete(own_path, headers={"If-Match": '"1"'}).status_code == 403
+    assert (
+        ticket_client.delete(
+            own_path,
+            headers={**csrf(ticket_client), "Origin": "https://wrong.example", "If-Match": '"1"'},
+        ).status_code
+        == 403
+    )
+    assert (
+        ticket_client.delete(
+            foreign_path, headers={**csrf(ticket_client), "If-Match": '"1"'}
+        ).status_code
+        == 403
+    )
+    assert ticket_client.delete(own_path, headers=csrf(ticket_client)).status_code == 428
+    deleted = ticket_client.request(
+        "DELETE",
+        own_path,
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"reason": "Синтетическая причина"},
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_by"] == str(owner.id)
+    assert deleted.json()["delete_reason"] == "Синтетическая причина"
+    assert deleted.json()["version"] == 2
+    assert ticket_client.get(own_path).status_code == 404
+    assert (
+        ticket_client.get("/api/v1/tickets", params={"number": own["number"]}).json()["total"] == 0
+    )
+    assert all(
+        row["ticket_id"] != own["id"]
+        for row in ticket_client.get("/api/v1/tickets/events/recent").json()["items"]
+    )
+    assert ticket_client.get("/api/v1/tickets/trash").status_code == 403
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(TicketEvent.ticket_id == UUID(own["id"]))
+            )
+            == 2
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(TicketAudit.ticket_id == UUID(own["id"]))
+            )
+            == 2
+        )
+    login(ticket_client, admin.login)
+    assert any(
+        row["id"] == own["id"] for row in ticket_client.get("/api/v1/tickets/trash").json()["items"]
+    )
+    assert (
+        ticket_client.post(
+            f"{own_path}/restore", headers={**csrf(ticket_client), "If-Match": '"1"'}
+        ).status_code
+        == 409
+    )
+    restored = ticket_client.post(
+        f"{own_path}/restore", headers={**csrf(ticket_client), "If-Match": '"2"'}
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["deleted_at"] is None
+    assert ticket_client.get(own_path).status_code == 200
+    assert any(
+        event["event_type"] == "ticket_deleted"
+        and event["event_data"]["reason"] == "Синтетическая причина"
+        for event in ticket_client.get(f"{own_path}/history").json()["items"]
+    )
+    assert (
+        ticket_client.get("/api/v1/tickets", params={"number": own["number"]}).json()["total"] == 1
+    )
+    grant_ticket_permission(ticket_engine, other, Permission.TICKET_DELETE_ALL)
+    login(ticket_client, other.login)
+    delegated = ticket_client.delete(own_path, headers={**csrf(ticket_client), "If-Match": '"3"'})
+    assert delegated.status_code == 200, delegated.text
+    login(ticket_client, admin.login)
+    assert (
+        ticket_client.post(
+            own_path + "/restore", headers={**csrf(ticket_client), "If-Match": '"4"'}
+        ).status_code
+        == 200
+    )
+    with Session(ticket_engine) as db:
+        grant = db.get(UserPermission, (other.id, Permission.TICKET_DELETE_ALL))
+        assert grant is not None
+        db.delete(grant)
+        db.commit()
+    login(ticket_client, other.login)
+    assert (
+        ticket_client.delete(
+            own_path, headers={**csrf(ticket_client), "If-Match": '"5"'}
+        ).status_code
+        == 403
+    )
+
+
+def test_purge_requires_soft_delete_confirmation_and_keeps_minimal_audit(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    admin = seed_user(ticket_engine, "purge_admin", Role.ADMIN)
+    login(ticket_client, admin.login)
+    ticket = make_manual_ticket(ticket_client)
+    path = f"/api/v1/tickets/{ticket['id']}"
+    assert (
+        ticket_client.request(
+            "DELETE",
+            f"{path}/purge",
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+            json={"confirm_number": ticket["number"]},
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(
+            f"{path}/comments", headers=csrf(ticket_client), json={"body": "Synthetic context"}
+        ).status_code
+        == 201
+    )
+    current_version = ticket_client.get(path).json()["version"]
+    deleted = ticket_client.delete(
+        path, headers={**csrf(ticket_client), "If-Match": f'"{current_version}"'}
+    )
+    assert deleted.status_code == 200
+    assert (
+        ticket_client.request(
+            "DELETE",
+            f"{path}/purge",
+            headers={**csrf(ticket_client), "If-Match": f'"{current_version + 1}"'},
+            json={"confirm_number": ticket["number"] + 1},
+        ).status_code
+        == 422
+    )
+    with Session(ticket_engine) as db:
+        with pytest.raises(DBAPIError):
+            db.execute(
+                text("DELETE FROM ticket_comments WHERE ticket_id = :id"), {"id": ticket["id"]}
+            )
+            db.commit()
+    purged = ticket_client.request(
+        "DELETE",
+        f"{path}/purge",
+        headers={**csrf(ticket_client), "If-Match": f'"{current_version + 1}"'},
+        json={"confirm_number": ticket["number"]},
+    )
+    assert purged.status_code == 204, purged.text
+    assert ticket_client.get(path).status_code == 404
+    with Session(ticket_engine) as db:
+        assert db.get(Ticket, UUID(ticket["id"])) is None
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(TicketEvent.ticket_id == UUID(ticket["id"]))
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketPurgeAudit)
+                .where(TicketPurgeAudit.ticket_id == UUID(ticket["id"]))
+            )
+            == 1
+        )
+
+
+def test_0014_upgrade_keeps_existing_ticket_and_grants_admin(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "0013_identity_permissions")
+    engine = create_engine(isolated_postgres_url)
+    try:
+        admin_id = seed_legacy_user(engine, "migration_delete_admin", Role.ADMIN)
+        ticket_id = uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text("""INSERT INTO tickets
+                    (id, ticket_type, description, status, priority, created_by,
+                     client_request_id, version)
+                    VALUES (:id, 'INTERNAL', 'Disposable historical request',
+                            'OPEN', 'NORMAL', :author, :request_id, 1)"""),
+                {"id": ticket_id, "author": admin_id, "request_id": uuid4()},
+            )
+        command.upgrade(config, "head")
+        with Session(engine) as db:
+            ticket = db.get(Ticket, ticket_id)
+            assert ticket is not None
+            assert ticket.deleted_at is None
+            assert ticket.description == "Disposable historical request"
+            assert set(
+                db.scalars(
+                    select(UserPermission.permission).where(UserPermission.user_id == admin_id)
+                )
+            ) >= {"tickets.delete.own", "tickets.delete.all", "tickets.restore", "tickets.purge"}
+    finally:
+        engine.dispose()
+
+
+def test_purge_closed_linked_ticket_preserves_source_snapshot(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    admin = seed_user(ticket_engine, "closed_purge_admin", Role.ADMIN)
+    snapshot, connections = seed_snapshot(ticket_engine, admin)
+    login(ticket_client, admin.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201, created.text
+    ticket_id = created.json()["id"]
+    path = f"/api/v1/tickets/{ticket_id}"
+    started = ticket_client.post(
+        path + "/start", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert started.status_code == 200, started.text
+    diagnosed = ticket_client.post(
+        path + "/manual-diagnostics",
+        headers=csrf(ticket_client),
+        json={
+            "finding": "Synthetic observation",
+            "observed_at": datetime.now(UTC).isoformat(),
+            "connection_snapshot_id": str(connections[0].id),
+        },
+    )
+    assert diagnosed.status_code == 201, diagnosed.text
+    decided = ticket_client.post(
+        path + "/decisions",
+        headers=csrf(ticket_client),
+        json={"decision_text": "Synthetic resolution", "performed_actions": "Synthetic action"},
+    )
+    assert decided.status_code == 201, decided.text
+    version = ticket_client.get(path).json()["version"]
+    closed = ticket_client.post(
+        path + "/close",
+        headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+        json={"decision_id": decided.json()["id"]},
+    )
+    assert closed.status_code == 200, closed.text
+    deleted = ticket_client.delete(
+        path,
+        headers={**csrf(ticket_client), "If-Match": f'"{closed.json()["version"]}"'},
+    )
+    assert deleted.status_code == 200, deleted.text
+    purged = ticket_client.request(
+        "DELETE",
+        path + "/purge",
+        headers={**csrf(ticket_client), "If-Match": f'"{deleted.json()["version"]}"'},
+        json={"confirm_number": created.json()["number"]},
+    )
+    assert purged.status_code == 204, purged.text
+    with Session(ticket_engine) as db:
+        assert db.get(Ticket, UUID(ticket_id)) is None
+        assert db.get(SubscriberSnapshot, snapshot.id) is not None
+        assert db.get(ConnectionSnapshot, connections[0].id) is not None
+        assert db.scalar(select(func.count()).select_from(DiagnosticSnapshot)) == 0
 
 
 def test_onu_endpoint_requires_engineer_and_never_invents_an_onu(

@@ -13,6 +13,9 @@
 | Просмотр всех/своих заявок | `tickets.read.all` / `tickets.read.own` | Да / — | Да / — | Да / Да |
 | Изменение всех/своих заявок | `tickets.edit.all` / `tickets.edit.own` | — / Да | Да / — | Да / Да |
 | Комментарии | `tickets.comment` | Да | Да | Да |
+| Удаление своих/любых заявок | `tickets.delete.own` / `tickets.delete.all` | — / — | — / — | Да / Да |
+| Корзина и восстановление | `tickets.restore` + `tickets.read.all` | — | — | Да |
+| Окончательное удаление | `tickets.purge` + `tickets.read.all` | — | — | Да |
 | Назначение и начало работы | `tickets.assign` / `tickets.start` | — | Да | Да |
 | Диагностика, решение, закрытие | `tickets.diagnose` / `tickets.resolve` / `tickets.close` | — | Да | Да |
 | Причина передачи монтажникам | `tickets.field_work` | — | Да | Да |

@@ -106,6 +106,7 @@ def subscriber_tickets(
     conditions = (
         SubscriberSnapshot.source == snapshot.source,
         same_subscriber,
+        Ticket.deleted_at.is_(None),
     )
     if not has_permission(db, identity.user, Permission.TICKET_READ):
         conditions += (Ticket.created_by == identity.user.id,)

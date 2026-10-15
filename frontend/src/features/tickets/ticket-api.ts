@@ -24,6 +24,18 @@ export const ticketApi = {
     apiRequest<Ticket>(ticketPath(id), {
       method: 'PATCH', json: { subject, description }, ifMatch: `"${version}"`,
     }),
+  trash: (page: number, signal?: AbortSignal) =>
+    apiRequest<Page<Ticket>>(withQuery('/api/v1/tickets/trash', { page, size: 20 }), { signal }),
+  remove: (id: string, version: number, reason?: string) =>
+    apiRequest<Ticket>(ticketPath(id), {
+      method: 'DELETE', json: reason ? { reason } : {}, ifMatch: `"${version}"`,
+    }),
+  restore: (id: string, version: number) =>
+    apiRequest<Ticket>(`${ticketPath(id)}/restore`, { method: 'POST', ifMatch: `"${version}"` }),
+  purge: (id: string, version: number, confirmNumber: number) =>
+    apiRequest<void>(`${ticketPath(id)}/purge`, {
+      method: 'DELETE', json: { confirm_number: confirmNumber }, ifMatch: `"${version}"`,
+    }),
   engineers: (signal?: AbortSignal) =>
     apiRequest<Page<Engineer>>('/api/v1/tickets/assignable-engineers?size=100', { signal }),
   recentEvents: (size = 8, signal?: AbortSignal) =>

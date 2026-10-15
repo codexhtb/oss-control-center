@@ -139,6 +139,11 @@ class Ticket(Base):
             "priority IN ('LOW', 'NORMAL', 'HIGH', 'URGENT')", name="ck_tickets_priority"
         ),
         CheckConstraint("version > 0", name="ck_tickets_version"),
+        CheckConstraint(
+            "(deleted_at IS NULL AND deleted_by IS NULL AND delete_reason IS NULL) OR "
+            "(deleted_at IS NOT NULL AND deleted_by IS NOT NULL)",
+            name="ck_tickets_delete_fields",
+        ),
         CheckConstraint("length(description) > 0", name="ck_tickets_description"),
         CheckConstraint(
             "subject IS NULL OR (length(btrim(subject)) > 0 AND subject !~ '[[:cntrl:]]')",
@@ -168,6 +173,12 @@ class Ticket(Base):
         Index("ix_tickets_assignee_status", "assigned_engineer_id", "status", "created_at"),
         Index("ix_tickets_account_created", "account_no", "created_at"),
         Index("ix_tickets_subscriber_snapshot", "subscriber_snapshot_id"),
+        Index(
+            "ix_tickets_deleted_at",
+            "deleted_at",
+            "id",
+            postgresql_where=text("deleted_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -198,6 +209,11 @@ class Ticket(Base):
     )
     closed_decision_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
+    delete_reason: Mapped[str | None] = mapped_column(String(500))
     client_request_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
@@ -291,6 +307,22 @@ class TicketAudit(Base):
     outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     origin: Mapped[str] = mapped_column(String(16), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TicketPurgeAudit(Base):
+    """Irreversible purge fact without a ticket FK or subscriber details."""
+
+    __tablename__ = "ticket_purge_audit"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ticket_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    ticket_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False
+    )
+    purged_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 

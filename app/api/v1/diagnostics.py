@@ -89,6 +89,8 @@ def _still_engineer(db: SessionDep, actor_id: UUID) -> None:
 
 
 def _ticket_visible(db: SessionDep, user: User, ticket: Ticket) -> None:
+    if ticket.deleted_at is not None:
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
     if has_permission(db, user, Permission.TICKET_READ):
         return
     if has_permission(db, user, Permission.TICKET_READ_OWN) and ticket.created_by == user.id:
