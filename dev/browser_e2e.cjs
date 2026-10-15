@@ -195,9 +195,10 @@ async function main() {
           for (let index = 0; index < onu.candidates.length; index += 1) {
             const item = onu.candidates[index]
             const text = await engineer.page.locator('.onu-candidate').nth(index).textContent()
-            const expected = [item.interface, item.olt, item.mac, item.serial, item.reason,
+            const expected = [item.interface, item.olt, item.mac, item.serial,
+              ['OFFLINE', 'DEREGISTERED'].includes(item.state) && item.reason !== 'unknown' ? item.reason : null,
               item.onu_rx_dbm, item.onu_tx_dbm, item.olt_rx_dbm,
-              item.inventory_polled_at, item.optical_measured_at].filter(Boolean)
+              ...[item.inventory_polled_at, item.optical_measured_at].filter(Boolean).map((value) => value.replace(/^(\d{4})-(\d{2})-(\d{2})[ T]/, '$3.$2.$1 '))].filter(Boolean)
             if (expected.some((value) => !text.includes(value))) throw new Error('Browser ONU field differs from source response')
             if (!text.includes(item.state === 'UNKNOWN' ? 'UNKNOWN' : item.state[0] + item.state.slice(1).toLowerCase())) throw new Error('Browser ONU state differs from source response')
           }
@@ -233,11 +234,13 @@ async function main() {
           if ((await ticketOnu.json()).availability !== 'UNAVAILABLE') throw new Error('Unconfigured ticket ONU source produced data')
           await engineer.page.getByText('Источник BDCOM ONU не подключён или недоступен.').first().waitFor()
         }
-        await engineer.page.getByRole('heading', { name: 'Мониторинг подключения' }).waitFor()
+        await engineer.page.getByRole('heading', { name: 'Диагностика подключения' }).waitFor()
+        const oltCheck = engineer.page.getByText('Проверка OLT в мониторинге', { exact: true })
+        if (await oltCheck.count()) await oltCheck.click()
         const ticketPending = engineer.page.waitForResponse((response) => response.url().endsWith(`/tickets/${detail.id}/diagnostics/check`) && response.request().method() === 'POST')
-        await engineer.page.getByRole('button', { name: 'Проверить подключение' }).click()
+        await engineer.page.getByRole('button', { name: /^Проверить (подключение|OLT)$/ }).click()
         expectStatus(await ticketPending, 200, 'Ticket monitoring preview')
-        await engineer.page.locator('.monitoring-report').waitFor()
+        await engineer.page.locator('.monitoring-report').first().waitFor()
         ticketChecked = true
         break
       }

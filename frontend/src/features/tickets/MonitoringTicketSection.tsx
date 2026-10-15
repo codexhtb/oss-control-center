@@ -38,16 +38,16 @@ export function MonitoringTicketSection({ ticket }: { ticket: TicketDetail }) {
   })
   if (!hasConnection) return null
   const monitoring = <>
-    {ticket.status !== 'CLOSED' && <div className="monitoring-action"><Button variant="secondary" disabled={check.isPending || confirm.isPending} onClick={() => check.mutate()}>{check.isPending ? 'Проверяем…' : 'Проверить подключение'}</Button></div>}
+    {ticket.status !== 'CLOSED' && <div className="monitoring-action"><Button variant="secondary" disabled={check.isPending || confirm.isPending} onClick={() => check.mutate()}>{check.isPending ? 'Проверяем…' : isPon ? 'Проверить OLT' : 'Проверить подключение'}</Button></div>}
     {check.isError && <Notice tone="error">{errorText(check.error)}</Notice>}
-    {check.data && <MonitoringReport report={check.data.report} />}
+    {check.data && <MonitoringReport report={check.data.report} scope={isPon ? 'olt' : 'connection'} />}
     {check.data && ticket.status === 'IN_PROGRESS' && !saved && <Button variant="primary" disabled={confirm.isPending} onClick={() => confirm.mutate()}>{confirm.isPending ? 'Сохраняем…' : 'Подтвердить и сохранить в истории'}</Button>}
     {confirm.isError && <Notice tone="error">{errorText(confirm.error)}</Notice>}
     {saved && <Notice>Результат сохранён в истории заявки.</Notice>}
   </>
   return <section className="detail-panel">
     <div className="detail-panel__heading"><h2>Диагностика подключения</h2></div>
-    {!isEthernet && (onu.isPending ? <p className="muted">Проверяем источник ONU…</p> : onu.isError ? <Notice tone="error">{errorText(onu.error)}</Notice> : <OnuCard result={onu.data} />)}
-    {isPon ? <details className="diagnostic-details"><summary>Дополнительные проверки оборудования</summary>{monitoring}</details> : monitoring}
+    {!isEthernet && (onu.isPending ? <p className="muted">Проверяем источник ONU…</p> : onu.isError ? <Notice tone="error">{errorText(onu.error)}</Notice> : <OnuCard result={onu.data} vlan={ticket.selected_connection?.vlan} />)}
+    {isPon ? <details className="diagnostic-details"><summary>Проверка OLT в мониторинге</summary>{monitoring}</details> : monitoring}
   </section>
 }

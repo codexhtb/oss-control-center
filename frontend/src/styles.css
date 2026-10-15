@@ -477,13 +477,37 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .onu-section h4 { margin: 0 0 .6rem; }
 .onu-candidates { display: grid; gap: .65rem; }
 .onu-candidate { border: 1px solid var(--border, #283343); border-radius: 8px; padding: .75rem; }
-.onu-candidate__heading { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
+.onu-candidate__heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; margin-bottom: .6rem; }
+.onu-identity { display: grid; gap: 5px; min-width: 0; }
+.onu-identity > span { color: #b7c8cf; font-size: 12px; overflow-wrap: anywhere; }
+.onu-identity > strong { font-size: 17px; font-weight: 650; color: #eef4f5; }
+.onu-state-context { display: grid; justify-items: end; gap: 5px; flex-shrink: 0; }
+.onu-state-context > span:first-child { font-size: 11px; color: #b0c1c9; }
 .onu-state { display: inline-flex; align-items: center; align-self: flex-start; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; white-space: nowrap; background: #29323a; color: #b9c8cf; }
 .onu-state--online { background: #173b33; color: #7ee0b5; }
 .onu-state--offline, .onu-state--deregistered { background: #4a2827; color: #ffaaa1; }
 .onu-disconnect-reason strong { color: #ffaaa1; }
 .onu-candidate .subscriber-facts { margin-bottom: .4rem; }
 .onu-candidate p { margin: .45rem 0 0; font-size: .8rem; }
+.onu-identifiers { grid-template-columns: 1fr 1fr 1fr; padding: 10px 0 13px; }
+.onu-identifiers .subscriber-fact > span { color: #b0c1c9; }
+.onu-identifiers .subscriber-fact > strong { color: #e2ecef; font-variant-numeric: tabular-nums; }
+.onu-optics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.onu-optic { display: grid; gap: 5px; }
+.onu-optic > span { font-size: 12px; color: #bfced4; }
+.onu-optic > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; }
+.onu-optic strong { font-size: 24px; line-height: 1.2; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: #f2f6f7; }
+.onu-optic__unit { font-size: 12px; color: #c3d0d5; }
+.onu-optic__missing { font-size: 12px; line-height: 1.5; color: #b0c1c9; }
+.onu-source-times { display: grid; gap: 7px; padding-top: 12px; }
+.onu-source-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 12px; font-size: 11px; color: #b0c1c9; }
+.onu-source-time > span { min-width: 175px; }
+.onu-source-time strong { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: #d3dfe3; }
+.onu-source-time small { padding: 2px 5px; border: 1px solid #45515b; border-radius: 4px; font-size: 10px; color: #c2cdd4; }
+.onu-source-note { display: flex; flex-wrap: wrap; gap: 5px 14px; margin: 0; color: #b0c1c9; font-size: 11px; line-height: 1.6; }
+.monitoring-quality { display: block; margin-top: 4px; font-size: 11px; color: #b5c4cd; }
+.ticket-detail-main .detail-panel__heading > span, .ticket-detail-main .fact-item time, .ticket-detail-main .history-list time { color: #a0b2be; }
+@media (max-width: 640px) { .onu-identifiers { grid-template-columns: repeat(2, minmax(0, 1fr)); } .onu-optics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .onu-source-time > span { min-width: 0; flex-basis: 100%; } }
 .diagnostic-details { margin-top: .75rem; border-top: 1px solid var(--line-soft); padding-top: .7rem; color: #9fb4b7; font-size: 12px; }
 .diagnostic-details summary { cursor: pointer; color: #bfd2d0; font-weight: 600; }
 .diagnostic-details[open] summary { margin-bottom: .7rem; }

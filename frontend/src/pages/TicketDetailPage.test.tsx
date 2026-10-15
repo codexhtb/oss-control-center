@@ -151,19 +151,33 @@ it('shows PON diagnostics in one section and keeps equipment checks available on
       onu_rx_dbm: '-21', olt_rx_dbm: '-24', onu_tx_dbm: null,
       inventory_polled_at: '2026-01-01 00:00:00', optical_measured_at: '2026-01-01 00:00:00' }],
   })
+  vi.mocked(ticketApi.checkTicket).mockResolvedValue({
+    check_id: 'check-id', expires_at: base.created_at, report: {
+      connection_snapshot_id: '00000000-0000-4000-8000-000000000041', checked_at: base.created_at,
+      device_match: 'KNOWN', interface_match: 'UNKNOWN', limitations: ['interface_mapping_unconfirmed'],
+      observations: [{ source: 'LIBRENMS', measured_object: 'device:1', result: 'UP',
+        quality: 'KNOWN', observed_at: base.created_at, retrieved_at: base.created_at }],
+    },
+  })
+  vi.mocked(ticketApi.confirmCheck).mockResolvedValue({ id: 'diagnostic-id' } as never)
   renderDetail('engineer')
   expect(await screen.findByText(/EPON0\/1:17/)).toBeInTheDocument()
   expect(screen.getAllByRole('heading', { name: 'Диагностика подключения' })).toHaveLength(1)
   expect(screen.queryByRole('heading', { name: 'BDCOM ONU' })).not.toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Мониторинг подключения' })).not.toBeInTheDocument()
   expect(screen.queryByText('power-off')).not.toBeInTheDocument()
-  expect(screen.getByText('-21 dBm')).toBeInTheDocument()
-  const extra = screen.getByText('Дополнительные проверки оборудования').closest('details')!
+  expect(screen.getByRole('group', { name: 'ONU Rx' })).toHaveTextContent('-21 dBm')
+  const extra = screen.getByText('Проверка OLT в мониторинге').closest('details')!
   expect(extra.open).toBe(false)
-  fireEvent.click(screen.getByText('Дополнительные проверки оборудования'))
+  fireEvent.click(screen.getByText('Проверка OLT в мониторинге'))
   expect(extra.open).toBe(true)
-  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить OLT' }))
   await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
+  expect(await screen.findByText('Устройство OLT')).toBeVisible()
+  expect(screen.getByText('device:1')).not.toBeVisible()
+  expect(screen.getByText(/интерфейс: Неизвестно/)).not.toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить и сохранить в истории' }))
+  await waitFor(() => expect(ticketApi.confirmCheck).toHaveBeenCalledWith(ticketId, 'check-id', 3))
 })
 
 it('keeps equipment monitoring primary for a confirmed Ethernet connection', async () => {
@@ -177,7 +191,7 @@ it('keeps equipment monitoring primary for a confirmed Ethernet connection', asy
   renderDetail('engineer')
   expect(await screen.findByRole('heading', { name: 'Диагностика подключения' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
-  expect(screen.queryByText('Дополнительные проверки оборудования')).not.toBeInTheDocument()
+  expect(screen.queryByText('Проверка OLT в мониторинге')).not.toBeInTheDocument()
   expect(ticketApi.ticketOnu).not.toHaveBeenCalled()
 })
 

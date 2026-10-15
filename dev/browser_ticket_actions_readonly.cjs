@@ -31,6 +31,10 @@ async function main() {
       const rows = (await listing.json()).items
       if (rows.length !== 1) throw new Error('Ticket 38 is not unique')
       const ticket = rows[0]
+      const onuResponse = await context.request.get(`${origin}/api/v1/tickets/${ticket.id}/onu`)
+      if (onuResponse.status() !== 200) throw new Error('Read-only ONU lookup failed')
+      const onu = await onuResponse.json()
+      if (onu.availability !== 'AVAILABLE' || onu.candidates.length !== 1 || !onu.match) throw new Error('Ticket 38 lacks its confirmed ONU observation')
       await page.goto(`${origin}/tickets/${ticket.id}`)
       const panel = page.getByRole('complementary', { name: 'Управление заявкой' })
       await panel.getByRole('heading', { name: 'Заявка #38' }).waitFor()
@@ -51,6 +55,37 @@ async function main() {
       })
       if (position !== 'sticky') throw new Error('Desktop panel is not sticky')
       await panel.screenshot({ path: `/run/screenshots/ticket38-actions-${me.user.role}.png`, mask: [panel.locator('dd')] })
+      const diagnostics = page.locator('section.detail-panel').filter({ has: page.getByRole('heading', { name: 'Диагностика подключения', exact: true }) })
+      const candidate = diagnostics.locator('.onu-candidate')
+      await candidate.waitFor()
+      const item = onu.candidates[0]
+      const identifiers = candidate.locator('.onu-identifiers')
+      const identityText = await candidate.locator('.onu-identity').textContent()
+      if (!identityText.includes(item.olt) || !identityText.includes(item.interface)) throw new Error('ONU identity does not match the source')
+      for (const expected of [item.mac, item.serial, String(onu.match.vlan)].filter(Boolean)) {
+        if (!(await identifiers.textContent()).includes(expected)) throw new Error('ONU identifiers/VLAN do not match the source')
+      }
+      if (!await identifiers.isVisible()) await identifiers.scrollIntoViewIfNeeded()
+      const stateLabel = { ONLINE: 'Online', OFFLINE: 'Offline', DEREGISTERED: 'Deregistered', UNKNOWN: 'UNKNOWN' }[item.state]
+      if (await candidate.locator('.onu-state').textContent() !== stateLabel) throw new Error('ONU state differs from its observation')
+      if (item.state === 'ONLINE' && await candidate.locator('.onu-disconnect-reason').count()) throw new Error('Old disconnection reason shown for Online')
+      for (const [label, value] of [['ONU Rx', item.onu_rx_dbm], ['OLT Rx', item.olt_rx_dbm], ['ONU Tx', item.onu_tx_dbm]]) {
+        const metric = candidate.getByRole('group', { name: label, exact: true })
+        const text = await metric.textContent()
+        if (value === null ? !text.includes('Нет измерения') : !text.includes(value) || !text.includes('dBm')) throw new Error('Optical value/unit differs from the source')
+      }
+      for (const [label, value] of [['Наблюдение состояния ONU', item.inventory_polled_at], ['Измерение оптики', item.optical_measured_at]]) {
+        const row = candidate.locator('.onu-source-time').filter({ hasText: label })
+        const expected = value ? value.replace(/^(\d{4})-(\d{2})-(\d{2})[ T]/, '$3.$2.$1 ') : 'Время неизвестно'
+        if (!(await row.textContent()).includes(expected)) throw new Error('Source observation time was changed')
+      }
+      if (onu.limitations.includes('netup_topology_stale')) await diagnostics.getByText('NetUP: историческая лабораторная копия.', { exact: true }).waitFor({ state: 'visible' })
+      const oltDetails = diagnostics.locator('details').filter({ has: page.getByText('Проверка OLT в мониторинге', { exact: true }) })
+      if (await oltDetails.evaluate((node) => node.open)) throw new Error('OLT checks open by default')
+      await oltDetails.locator(':scope > summary').click()
+      if (ticket.status !== 'CLOSED') await oltDetails.getByRole('button', { name: 'Проверить OLT', exact: true }).waitFor({ state: 'visible' })
+      await oltDetails.locator(':scope > summary').click()
+      await diagnostics.screenshot({ path: `/run/screenshots/ticket38-diagnostics-${me.user.role}.png`, mask: [identifiers.locator('strong'), candidate.locator('.onu-identity strong')] })
       for (const width of [820, 390]) {
         await page.setViewportSize({ width, height: 844 })
         await panel.scrollIntoViewIfNeeded()
@@ -60,9 +95,12 @@ async function main() {
           return { position: getComputedStyle(node).position, left: rect.left, right: rect.right, bottom: rect.bottom, mainTop: main.top, viewport: window.innerWidth }
         })
         if (layout.position !== 'static' || layout.left < 0 || layout.right > layout.viewport || layout.bottom > layout.mainTop) throw new Error(`Responsive panel layout failed at ${width}`)
+        const rx = await candidate.getByRole('group', { name: 'ONU Rx', exact: true }).boundingBox()
+        const oltRx = await candidate.getByRole('group', { name: 'OLT Rx', exact: true }).boundingBox()
+        if (!rx || !oltRx || Math.abs(rx.y - oltRx.y) > 1 || rx.x >= oltRx.x) throw new Error(`Rx values are not adjacent at ${width}`)
       }
       if (mutationAttempted || pageErrors) throw new Error('Read-only browser check failed')
-      console.log(`Ticket 38 read-only Chromium: role=${me.user.role}, state=${ticket.status}, grants checked, desktop sticky, 820/390px layout passed; no ticket mutations`)
+      console.log(`Ticket 38 read-only Chromium: role=${me.user.role}, state=${ticket.status}, grants, ONU identity/VLAN, Rx/Tx, separate source times, OLT disclosure, desktop sticky, 820/390px layout passed; no ticket mutations`)
       await context.close()
     }
   } finally { await browser.close() }

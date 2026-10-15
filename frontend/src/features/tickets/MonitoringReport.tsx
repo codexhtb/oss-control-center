@@ -32,12 +32,23 @@ export function isDiagnosticReport(value: unknown): value is DiagnosticReport {
   return typeof value === 'object' && value !== null && Array.isArray((value as DiagnosticReport).observations)
 }
 
-export function MonitoringReport({ report }: { report: DiagnosticReport }) {
+function FullMonitoringReport({ report }: { report: DiagnosticReport }) {
   return <div className="monitoring-report">
     <p className="muted">Проверка {formatDate(report.checked_at)} · устройство: {quality[report.device_match]} · интерфейс: {quality[report.interface_match]}</p>
     {report.observations.length ? <div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Источник</th><th>Объект</th><th>Результат</th><th>Измерено</th><th>Получено</th><th>Качество</th></tr></thead><tbody>
       {report.observations.map((item, index) => <tr key={`${item.source}-${item.measured_object}-${index}`}><td>{item.source}</td><td>{item.measured_object}</td><td>{result[item.result] || item.result}</td><td>{item.observed_at ? formatDate(item.observed_at) : 'Время неизвестно'}</td><td>{formatDate(item.retrieved_at)}</td><td>{quality[item.quality]}</td></tr>)}
     </tbody></table></div> : <p className="muted">Наблюдений мониторинга для этого подключения нет.</p>}
     {report.limitations.length > 0 && <ul className="monitoring-limitations">{report.limitations.map((item) => <li key={item}>{limitations[item] || 'Ограничение источника данных.'}</li>)}</ul>}
+  </div>
+}
+
+export function MonitoringReport({ report, scope = 'connection' }: { report: DiagnosticReport; scope?: 'connection' | 'olt' }) {
+  if (scope === 'connection') return <FullMonitoringReport report={report} />
+  return <div className="monitoring-report monitoring-report--olt">
+    <p className="muted">Проверка OLT: {formatDate(report.checked_at)}. Доступность устройства оценивается отдельно от состояния ONU.</p>
+    {report.observations.length ? <div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Источник</th><th>Объект проверки</th><th>Результат</th><th>Наблюдение</th></tr></thead><tbody>
+      {report.observations.map((item, index) => <tr key={`${item.source}-${index}`}><td>{item.source}</td><td>{item.measured_object.startsWith('device:') || item.measured_object === 'host' || item.measured_object === 'mapped_device' || item.measured_object === 'mapped_host' ? 'Устройство OLT' : item.measured_object.startsWith('interface:') ? 'Интерфейс оборудования' : item.measured_object.startsWith('service:') ? 'Сервис мониторинга' : 'Объект мониторинга'}</td><td>{result[item.result] || 'Неизвестно'}{item.quality !== 'KNOWN' && <small className="monitoring-quality">{quality[item.quality]}</small>}</td><td>{item.observed_at ? formatDate(item.observed_at) : 'Время неизвестно'}</td></tr>)}
+    </tbody></table></div> : <p className="muted">Наблюдений об OLT нет.</p>}
+    <details className="diagnostic-details"><summary>Технические сведения проверки</summary><FullMonitoringReport report={report} /></details>
   </div>
 }
