@@ -80,6 +80,20 @@ def test_gpon_surrogate_key_is_never_rendered_as_mac() -> None:
     assert item.optical_measured_at == "2026-10-09 04:10:00"
 
 
+def test_online_onu_does_not_present_previous_disconnection_reason() -> None:
+    item = normalize_candidate({**gpon_row(), "reason": "power-off"}, {})
+    assert item is not None
+    assert item.state == "ONLINE"
+    assert item.reason is None
+
+
+def test_offline_onu_keeps_disconnection_reason() -> None:
+    item = normalize_candidate({**gpon_row(), "state": "offline", "reason": "power-off"}, {})
+    assert item is not None
+    assert item.state == "OFFLINE"
+    assert item.reason == "power-off"
+
+
 def test_epon_mac_and_deregistered_are_preserved() -> None:
     row = {
         **gpon_row(),

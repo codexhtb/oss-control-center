@@ -165,7 +165,9 @@ def normalize_candidate(row: dict, olt: dict) -> OnuCandidate | None:
             mac=mac,
             serial=serial,
             state=state,
-            reason=row.get("reason") or None,
+            # Collectors persist the last deregistration reason independently of
+            # current state. An online ONU can therefore retain an old power-off.
+            reason=(row.get("reason") or None) if state in {"OFFLINE", "DEREGISTERED"} else None,
             onu_rx_dbm=_optical(row.get("onu_rx_power")),
             olt_rx_dbm=_optical(row.get("olt_rx_power")),
             onu_tx_dbm=_optical(row.get("onu_tx_power")),

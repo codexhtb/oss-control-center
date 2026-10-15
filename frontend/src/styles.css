@@ -461,8 +461,16 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .onu-candidates { display: grid; gap: .65rem; }
 .onu-candidate { border: 1px solid var(--border, #283343); border-radius: 8px; padding: .75rem; }
 .onu-candidate__heading { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
+.onu-state { display: inline-flex; align-items: center; align-self: flex-start; border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; white-space: nowrap; background: #29323a; color: #b9c8cf; }
+.onu-state--online { background: #173b33; color: #7ee0b5; }
+.onu-state--offline, .onu-state--deregistered { background: #4a2827; color: #ffaaa1; }
+.onu-disconnect-reason strong { color: #ffaaa1; }
 .onu-candidate .subscriber-facts { margin-bottom: .4rem; }
 .onu-candidate p { margin: .45rem 0 0; font-size: .8rem; }
+.diagnostic-details { margin-top: .75rem; border-top: 1px solid var(--line-soft); padding-top: .7rem; color: #9fb4b7; font-size: 12px; }
+.diagnostic-details summary { cursor: pointer; color: #bfd2d0; font-weight: 600; }
+.diagnostic-details[open] summary { margin-bottom: .7rem; }
+.diagnostic-details p { margin: .5rem 0; }
 .permission-editor { display: grid; gap: 12px; width: 100%; }
 .permission-editor fieldset { min-width: 0; margin: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; }
 .permission-editor legend { padding: 0 5px; color: #dce9e5; font-size: 12px; font-weight: 650; }

@@ -133,3 +133,49 @@ it('shows an engineer a monitoring result and requires a separate confirm action
   fireEvent.click(screen.getByRole('button', { name: 'Подтвердить и сохранить в истории' }))
   await waitFor(() => expect(ticketApi.confirmCheck).toHaveBeenCalledWith(ticketId, '00000000-0000-4000-8000-000000000042', 3))
 })
+
+it('shows PON diagnostics in one section and keeps equipment checks available on demand', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'IN_PROGRESS',
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041',
+      access_type: 'UNKNOWN', device: 'synthetic-olt', port: '7', vlan: '101',
+      onu_id: null, address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
+  })
+  vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
+    source: 'BDCOM', retrieved_at: base.created_at, availability: 'AVAILABLE',
+    association: 'MATCHED_BY_RULE', limitations: [], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
+    candidates: [{ olt: 'synthetic-olt', interface: 'EPON0/1:17', pon_type: 'EPON',
+      mac: '02:00:00:00:00:01', serial: null, state: 'ONLINE', reason: 'power-off',
+      onu_rx_dbm: '-21', olt_rx_dbm: '-24', onu_tx_dbm: null,
+      inventory_polled_at: '2026-01-01 00:00:00', optical_measured_at: '2026-01-01 00:00:00' }],
+  })
+  renderDetail('engineer')
+  expect(await screen.findByText(/EPON0\/1:17/)).toBeInTheDocument()
+  expect(screen.getAllByRole('heading', { name: 'Диагностика подключения' })).toHaveLength(1)
+  expect(screen.queryByRole('heading', { name: 'BDCOM ONU' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Мониторинг подключения' })).not.toBeInTheDocument()
+  expect(screen.queryByText('power-off')).not.toBeInTheDocument()
+  expect(screen.getByText('-21 dBm')).toBeInTheDocument()
+  const extra = screen.getByText('Дополнительные проверки оборудования').closest('details')!
+  expect(extra.open).toBe(false)
+  fireEvent.click(screen.getByText('Дополнительные проверки оборудования'))
+  expect(extra.open).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
+})
+
+it('keeps equipment monitoring primary for a confirmed Ethernet connection', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED',
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041',
+      access_type: 'ETHERNET', device: 'synthetic-switch', port: '1', vlan: '101',
+      onu_id: null, address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
+  })
+  renderDetail('engineer')
+  expect(await screen.findByRole('heading', { name: 'Диагностика подключения' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
+  expect(screen.queryByText('Дополнительные проверки оборудования')).not.toBeInTheDocument()
+  expect(ticketApi.ticketOnu).not.toHaveBeenCalled()
+})
