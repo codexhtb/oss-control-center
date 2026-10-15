@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.engine import get_engine
 from app.modules.identity.crypto import hash_password
-from app.modules.identity.models import User
-from app.modules.identity.roles import Role
+from app.modules.identity.models import User, UserPermission
+from app.modules.identity.roles import Role, permissions_for
 from app.modules.identity.service import audit
 
 USERS_PATH = Path("/run/dev-users.json")
@@ -46,9 +46,14 @@ def main() -> None:
                 display_name=f"Synthetic {role.value.title()}",
                 role=role,
                 password_hash=hash_password(password),
+                permissions_customized=True,
             )
             db.add(user)
             db.flush()
+            db.add_all(
+                UserPermission(user_id=user.id, permission=permission)
+                for permission in permissions_for(role)
+            )
             audit(db, "dev_user_seeded", "success", actor=user.id, target=user.id)
         db.commit()
     print("Created three synthetic dev identities")

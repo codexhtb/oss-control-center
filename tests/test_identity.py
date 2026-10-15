@@ -23,7 +23,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.modules.identity import bootstrap_admin
 from app.modules.identity.crypto import hash_password, hash_token
-from app.modules.identity.models import AuthSession, IdentityAuditEvent, User
+from app.modules.identity.models import AuthSession, IdentityAuditEvent, User, UserPermission
 from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import deactivate_user, utc_now
 
@@ -220,9 +220,9 @@ def test_permissions_by_role(
     permissions = set(identity_client.get("/api/v1/auth/permissions").json()["permissions"])
     assert expected <= permissions
     assert (Permission.IDENTITY_MANAGE in permissions) == (role == Role.ADMIN)
-    assert (Permission.TICKET_CLOSE in permissions) == (role == Role.ENGINEER)
-    assert (Permission.TICKET_CREATE in permissions) == (role != Role.ADMIN)
-    assert (Permission.SUBSCRIBER_READ in permissions) == (role != Role.ADMIN)
+    assert (Permission.TICKET_CLOSE in permissions) == (role != Role.OPERATOR)
+    assert Permission.TICKET_CREATE in permissions
+    assert Permission.SUBSCRIBER_READ in permissions
 
 
 @pytest.mark.parametrize("role", [Role.OPERATOR, Role.ENGINEER])
@@ -248,7 +248,7 @@ def test_no_horizontal_or_vertical_privilege_escalation(
     assert (
         identity_client.post(
             "/api/v1/users",
-            json={"login": "newuser", "display_name": "New", "role": "admin", "password": PASSWORD},
+            json={"login": "newuser", "display_name": "New", "role": "admin"},
             headers=headers,
         ).status_code
         == 403
@@ -273,7 +273,6 @@ def test_no_self_registration_and_admin_user_management(
             "login": " New.User ",
             "display_name": "New User",
             "role": "operator",
-            "password": PASSWORD,
         },
         headers=headers,
     )
@@ -288,7 +287,6 @@ def test_no_self_registration_and_admin_user_management(
                 "login": "NEW.USER",
                 "display_name": "Duplicate",
                 "role": "operator",
-                "password": PASSWORD,
             },
             headers=headers,
         ).status_code
@@ -317,7 +315,6 @@ def test_csrf_and_origin_checks(identity_engine: Engine, identity_client: TestCl
         "login": "someone",
         "display_name": "Someone",
         "role": "operator",
-        "password": PASSWORD,
     }
     assert identity_client.post("/api/v1/users", json=payload).status_code == 403
     assert (
@@ -528,3 +525,198 @@ def test_audit_contains_no_password_or_token(
         assert all(event.source_digest != "testclient" for event in events)
     assert PASSWORD not in caplog.text
     assert token not in caplog.text
+
+
+def test_personal_grants_temporary_password_and_live_session_revocation(
+    identity_engine: Engine, identity_client: TestClient
+) -> None:
+    admin = seed_user(identity_engine, "admin", Role.ADMIN)
+    assert login(identity_client, admin.login).status_code == 200
+    created = identity_client.post(
+        "/api/v1/users",
+        headers=csrf(identity_client),
+        json={
+            "login": "limited",
+            "display_name": "Limited Worker",
+            "role": "operator",
+            "permissions": [
+                Permission.TICKET_CREATE,
+                Permission.TICKET_READ_OWN,
+                Permission.TICKET_EDIT_OWN,
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    temp = created.json()["temporary_password"]
+    user_id = UUID(created.json()["id"])
+    assert len(temp) >= 24 and created.json()["must_change_password"] is True
+    with Session(identity_engine) as db:
+        target = db.get(User, user_id)
+        assert target.password_hash.startswith("$argon2id$")
+        assert temp not in target.password_hash
+
+    with TestClient(identity_client.app, base_url=ORIGIN, headers={"Origin": ORIGIN}) as worker:
+        assert login(worker, "limited", temp).status_code == 200
+        assert worker.get("/api/v1/auth/me").json()["user"]["must_change_password"] is True
+        blocked = worker.get("/api/v1/tickets")
+        assert blocked.status_code == 403 and blocked.json()["code"] == "password_change_required"
+        changed = worker.post(
+            "/api/v1/auth/password",
+            headers=csrf(worker),
+            json={"current_password": temp, "new_password": "Distinct-test-password-876!"},
+        )
+        assert changed.status_code == 200, changed.text
+        assert worker.get("/api/v1/auth/me").status_code == 401
+        assert login(worker, "limited", "Distinct-test-password-876!").status_code == 200
+        assert worker.get("/api/v1/auth/permissions").json()["permissions"] == sorted(
+            [Permission.TICKET_CREATE, Permission.TICKET_READ_OWN, Permission.TICKET_EDIT_OWN]
+        )
+        revised = identity_client.put(
+            f"/api/v1/users/{user_id}/permissions",
+            headers=csrf(identity_client),
+            json={"permissions": [Permission.TICKET_READ_OWN]},
+        )
+        assert revised.status_code == 200
+        assert worker.get("/api/v1/auth/permissions").json()["permissions"] == [
+            Permission.TICKET_READ_OWN
+        ]
+        assert worker.post("/api/v1/tickets", headers=csrf(worker), json={}).status_code == 403
+        assert (
+            identity_client.post(
+                f"/api/v1/users/{user_id}/deactivate", headers=csrf(identity_client)
+            ).status_code
+            == 200
+        )
+        assert worker.get("/api/v1/auth/me").status_code == 401
+
+    with Session(identity_engine) as db:
+        events = db.scalars(
+            select(IdentityAuditEvent).where(IdentityAuditEvent.target_user_id == user_id)
+        ).all()
+        assert {"user_created", "password_change", "permissions_changed", "user_deactivated"} <= {
+            event.action for event in events
+        }
+        assert temp not in str([event.details for event in events])
+
+
+def test_admin_edit_reset_reactivate_and_last_grant_guard(
+    identity_engine: Engine, identity_client: TestClient
+) -> None:
+    admin = seed_user(identity_engine, "admin", Role.ADMIN)
+    with Session(identity_engine) as db:
+        current = db.get(User, admin.id)
+        current.permissions_customized = True
+        db.add(UserPermission(user_id=admin.id, permission=Permission.IDENTITY_MANAGE))
+        db.add(UserPermission(user_id=admin.id, permission=Permission.TICKET_AUDIT_READ))
+        db.commit()
+    assert login(identity_client, admin.login).status_code == 200
+    headers = csrf(identity_client)
+    created = identity_client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={"login": "worker", "display_name": "Worker", "role": "engineer"},
+    )
+    assert created.status_code == 201
+    user_id = UUID(created.json()["id"])
+    edited = identity_client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=headers,
+        json={"login": "new.worker", "display_name": "New Worker"},
+    )
+    assert edited.status_code == 200 and edited.json()["login"] == "new.worker"
+    reset = identity_client.post(f"/api/v1/users/{user_id}/reset-password", headers=headers)
+    assert reset.status_code == 200 and len(reset.json()["temporary_password"]) >= 24
+    assert (
+        identity_client.post(f"/api/v1/users/{user_id}/deactivate", headers=headers).status_code
+        == 200
+    )
+    assert (
+        identity_client.post(f"/api/v1/users/{user_id}/reactivate", headers=headers).status_code
+        == 200
+    )
+    assert (
+        identity_client.put(
+            f"/api/v1/users/{admin.id}/permissions",
+            headers=headers,
+            json={"permissions": []},
+        ).status_code
+        == 409
+    )
+    with Session(identity_engine) as db:
+        with pytest.raises(IntegrityError):
+            db.query(UserPermission).filter(
+                UserPermission.user_id == admin.id,
+                UserPermission.permission == Permission.IDENTITY_MANAGE,
+            ).delete()
+            db.commit()
+        db.rollback()
+    audit_response = identity_client.get("/api/v1/users/audit")
+    assert audit_response.status_code == 200, audit_response.json().get("code")
+    assert any(row["action"] == "user_updated" for row in audit_response.json()["items"])
+
+
+def test_0013_backfills_existing_users_without_changing_password_or_sessions(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "0012_oss_diagnostics")
+    engine = create_engine(isolated_postgres_url)
+    user_id = UUID("00000000-0000-4000-8000-000000000123")
+    session_id = UUID("00000000-0000-4000-8000-000000000124")
+    old_hash = hash_password(PASSWORD)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("""INSERT INTO app_users (id, login, display_name, role, password_hash)
+                     VALUES (:id, 'legacyadmin', 'Legacy Admin', 'admin', :hash)"""),
+                {"id": user_id, "hash": old_hash},
+            )
+            connection.execute(
+                text("""INSERT INTO auth_sessions
+                     (id, user_id, token_hash, csrf_hash, expires_at)
+                     VALUES (:id, :user_id, :token_hash, :csrf_hash, now() + interval '1 hour')"""),
+                {
+                    "id": session_id,
+                    "user_id": user_id,
+                    "token_hash": hash_token("synthetic-old-session"),
+                    "csrf_hash": hash_token("synthetic-old-csrf"),
+                },
+            )
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT password_hash FROM app_users WHERE id = :id"), {"id": user_id}
+                ).scalar_one()
+                == old_hash
+            )
+            assert (
+                connection.execute(
+                    text("SELECT permissions_customized FROM app_users WHERE id = :id"),
+                    {"id": user_id},
+                ).scalar_one()
+                is True
+            )
+            assert (
+                connection.execute(
+                    text("SELECT revoked_at FROM auth_sessions WHERE id = :id"),
+                    {"id": session_id},
+                ).scalar_one()
+                is None
+            )
+            grants = set(
+                connection.execute(
+                    text("SELECT permission FROM app_user_permissions WHERE user_id = :id"),
+                    {"id": user_id},
+                ).scalars()
+            )
+            assert {
+                Permission.IDENTITY_MANAGE,
+                Permission.TICKET_READ,
+                Permission.TICKET_EDIT_ALL,
+            } <= grants
+    finally:
+        engine.dispose()

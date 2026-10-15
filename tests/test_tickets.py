@@ -25,8 +25,8 @@ from app.modules.billing.quality import DataQuality
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.correlation import DiagnosticReport, Observation
 from app.modules.identity.crypto import hash_password
-from app.modules.identity.models import User
-from app.modules.identity.roles import Role
+from app.modules.identity.models import User, UserPermission
+from app.modules.identity.roles import Permission, Role
 from app.modules.tickets.models import (
     ConnectionSnapshot,
     DiagnosticCheck,
@@ -93,6 +93,24 @@ def seed_user(engine: Engine, name: str, role: Role) -> User:
         db.add(user)
         db.commit()
         return user
+
+
+def seed_legacy_user(engine: Engine, name: str, role: Role) -> UUID:
+    """Insert through the schema at its historical revision, before ORM 0013 columns exist."""
+    user_id = uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            text("""INSERT INTO app_users (id, login, display_name, role, password_hash)
+                 VALUES (:id, :login, :name, :role, :password_hash)"""),
+            {
+                "id": user_id,
+                "login": name,
+                "name": name.title(),
+                "role": role,
+                "password_hash": hash_password(PASSWORD),
+            },
+        )
+    return user_id
 
 
 def seed_snapshot(
@@ -261,7 +279,7 @@ def test_automatic_diagnostic_requires_engineer_confirmation(
         ticket_client.post(
             check_path, headers={**csrf(ticket_client), "If-Match": '"3"'}
         ).status_code
-        == 403
+        == 200
     )
 
 
@@ -318,7 +336,7 @@ def test_upgrade_0002_to_0003_preserves_identity(
     command.upgrade(config, "0002_identity_rbac")
     engine = create_engine(isolated_postgres_url)
     try:
-        seed_user(engine, "operator", Role.OPERATOR)
+        seed_legacy_user(engine, "operator", Role.OPERATOR)
         command.upgrade(config, "0003_ticket_engine")
         with engine.connect() as connection:
             assert (
@@ -525,10 +543,10 @@ def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestCl
     assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/history").json()["total"] == 8
     assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/audit").json()["total"] == 8
     login(ticket_client, "admin")
-    assert ticket_client.get(f"/api/v1/tickets/{ticket_id}").status_code == 403
+    assert ticket_client.get(f"/api/v1/tickets/{ticket_id}").status_code == 200
     assert (
         ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json={}).status_code
-        == 403
+        == 422
     )
 
 
@@ -692,20 +710,17 @@ def test_three_types_http_creation_rbac_and_filters(
         assert db.scalar(select(func.count()).select_from(TicketEvent)) == 6
         assert db.scalar(select(func.count()).select_from(TicketAudit)) == 6
     login(ticket_client, "admin")
-    assert ticket_client.get("/api/v1/tickets").status_code == 403
+    assert ticket_client.get("/api/v1/tickets").status_code == 200
     for kind in TicketType:
-        assert (
-            ticket_client.post(
-                "/api/v1/tickets",
-                headers=csrf(ticket_client),
-                json={
-                    "ticket_type": kind.value,
-                    "description": "Denied",
-                    "client_request_id": str(uuid4()),
-                },
-            ).status_code
-            == 403
-        )
+        assert ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": kind.value,
+                "description": "Denied",
+                "client_request_id": str(uuid4()),
+            },
+        ).status_code == (422 if kind == TicketType.SUBSCRIBER_LINKED else 201)
 
 
 def test_subject_for_all_types_validation_replay_and_legacy_client(
@@ -818,6 +833,7 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
         "ticket_number",
         "event_type",
         "actor_id",
+        "actor_name",
         "ticket_version",
         "occurred_at",
     }
@@ -855,8 +871,8 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     feed = ticket_client.get("/api/v1/tickets/events/recent", params={"size": 1, "page": 2}).json()
     assert feed["total"] == 3 and len(feed["items"]) == 1
     login(ticket_client, "admin")
-    assert ticket_client.get("/api/v1/tickets/events/recent").status_code == 403
-    assert ticket_client.get("/api/v1/tickets/assignable-engineers").status_code == 403
+    assert ticket_client.get("/api/v1/tickets/events/recent").status_code == 200
+    assert ticket_client.get("/api/v1/tickets/assignable-engineers").status_code == 200
 
 
 def test_0009_upgrade_preserves_subjectless_history(
@@ -869,7 +885,7 @@ def test_0009_upgrade_preserves_subjectless_history(
     command.upgrade(config, "0008_ticket_types")
     engine = create_engine(isolated_postgres_url)
     try:
-        operator = seed_user(engine, "operator", Role.OPERATOR)
+        operator_id = seed_legacy_user(engine, "operator", Role.OPERATOR)
         ticket_id = uuid4()
         event_id = uuid4()
         with engine.begin() as connection:
@@ -879,13 +895,13 @@ def test_0009_upgrade_preserves_subjectless_history(
                      created_by, client_request_id, version)
                     VALUES (:id, 'MANUAL', 'Synthetic legacy description',
                             'OPEN', 'NORMAL', :creator, :request_id, 1)"""),
-                {"id": ticket_id, "creator": operator.id, "request_id": uuid4()},
+                {"id": ticket_id, "creator": operator_id, "request_id": uuid4()},
             )
             connection.execute(
                 text("""INSERT INTO ticket_history
                     (id, ticket_id, event_type, actor_id, event_data, ticket_version)
                     VALUES (:id, :ticket_id, 'ticket_created', :actor, '{}'::jsonb, 1)"""),
-                {"id": event_id, "ticket_id": ticket_id, "actor": operator.id},
+                {"id": event_id, "ticket_id": ticket_id, "actor": operator_id},
             )
         command.upgrade(config, "head")
         with engine.connect() as connection:
@@ -1139,3 +1155,140 @@ def test_concurrent_manual_idempotency_and_version_conflict(
     with Session(ticket_engine) as db:
         assert db.scalar(select(func.count()).select_from(Ticket)) == 1
         assert db.scalar(select(func.count()).select_from(TicketEvent)) == 2
+
+
+def test_own_ticket_edit_scope_conflict_and_history(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    owner = seed_user(ticket_engine, "edit_owner", Role.OPERATOR)
+    other = seed_user(ticket_engine, "edit_other", Role.OPERATOR)
+    with Session(ticket_engine) as db:
+        for user in (owner, other):
+            db.get(User, user.id).permissions_customized = True
+            db.add_all(
+                [
+                    UserPermission(user_id=user.id, permission=permission)
+                    for permission in (
+                        Permission.TICKET_CREATE,
+                        Permission.TICKET_READ_OWN,
+                        Permission.TICKET_EDIT_OWN,
+                        Permission.TICKET_COMMENT,
+                    )
+                ]
+            )
+        db.commit()
+    login(ticket_client, owner.login)
+    first = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_type": "MANUAL",
+            "subject": "Original subject",
+            "description": "Original description",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert first.status_code == 201, first.text
+    first_id = first.json()["id"]
+    assert (
+        ticket_client.get(f"/api/v1/tickets/{first_id}").json()["created_by_name"]
+        == owner.display_name
+    )
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{first_id}",
+            headers={"If-Match": '"1"'},
+            json={"subject": "Edited subject"},
+        ).status_code
+        == 403
+    )
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{first_id}",
+            headers=csrf(ticket_client),
+            json={"subject": "Edited subject"},
+        ).status_code
+        == 428
+    )
+    edited = ticket_client.patch(
+        f"/api/v1/tickets/{first_id}",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"subject": "Edited subject", "description": "Edited description"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["version"] == 2
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{first_id}",
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+            json={"subject": "Lost update"},
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{first_id}",
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"account_no": "not-allowed"},
+        ).status_code
+        == 422
+    )
+    assert (
+        ticket_client.post(
+            f"/api/v1/tickets/{first_id}/comments",
+            headers=csrf(ticket_client),
+            json={"body": "More synthetic context"},
+        ).status_code
+        == 201
+    )
+    assert (
+        ticket_client.get(f"/api/v1/tickets/{first_id}/comments").json()["items"][0]["author_name"]
+        == owner.display_name
+    )
+    login(ticket_client, other.login)
+    second = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_type": "INTERNAL",
+            "subject": "Other task",
+            "description": "Other description",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert second.status_code == 201
+    second_id = second.json()["id"]
+    assert ticket_client.get("/api/v1/tickets").json()["total"] == 1
+    assert ticket_client.get(f"/api/v1/tickets/{first_id}").status_code == 404
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{first_id}",
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"subject": "Unauthorized"},
+        ).status_code
+        == 403
+    )
+    login(ticket_client, owner.login)
+    assert ticket_client.get("/api/v1/tickets").json()["total"] == 1
+    assert ticket_client.get(f"/api/v1/tickets/{second_id}").status_code == 404
+    history = ticket_client.get(f"/api/v1/tickets/{first_id}/history")
+    assert history.status_code == 200
+    change = next(item for item in history.json()["items"] if item["event_type"] == "ticket_edited")
+    assert change["actor_id"] == str(owner.id)
+    assert change["actor_name"] == owner.display_name
+    assert change["event_data"]["changes"]["subject"] == {
+        "before": "Original subject",
+        "after": "Edited subject",
+    }
+    with Session(ticket_engine) as db:
+        assert db.get(Ticket, UUID(first_id)).subject == "Edited subject"
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(
+                    TicketAudit.ticket_id == UUID(first_id), TicketAudit.action == "ticket_edited"
+                )
+            )
+            == 1
+        )

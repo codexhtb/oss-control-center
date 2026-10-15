@@ -8,8 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
+from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
-from app.modules.identity.roles import Permission, Role, permissions_for
+from app.modules.identity.roles import Permission, Role
 from app.modules.tickets.models import (
     ConnectionSnapshot,
     DiagnosticCheck,
@@ -25,6 +26,7 @@ from app.modules.tickets.schemas import (
     AddComment,
     AddDecision,
     CreateTicket,
+    EditTicket,
     FieldWorkRequest,
     ManualDiagnostic,
     TicketDetail,
@@ -39,7 +41,7 @@ def _actor(db: Session, actor_id: UUID, permission: Permission) -> User:
         .with_for_update()
         .execution_options(populate_existing=True)
     ).scalar_one_or_none()
-    if not user or not user.is_active or permission not in permissions_for(Role(user.role)):
+    if not user or not user.is_active or not has_permission(db, user, permission):
         raise ApiError(403, "forbidden", "Permission denied")
     return user
 
@@ -90,6 +92,45 @@ def _fact(db: Session, ticket: Ticket, actor_id: UUID, event_type: str, data: di
 def _changed(ticket: Ticket) -> None:
     ticket.version += 1
     ticket.updated_at = datetime.now(UTC)
+
+
+def edit_ticket(
+    db: Session, actor_id: UUID, ticket_id: UUID, payload: EditTicket, version: int | None
+) -> Ticket:
+    actor = db.execute(
+        select(User)
+        .where(User.id == actor_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if actor is None or not actor.is_active:
+        raise ApiError(403, "forbidden", "Permission denied")
+    ticket = _ticket(db, ticket_id, lock=True)
+    can_edit_all = has_permission(db, actor, Permission.TICKET_EDIT_ALL)
+    can_edit_own = has_permission(db, actor, Permission.TICKET_EDIT_OWN)
+    if not can_edit_all and not (can_edit_own and ticket.created_by == actor_id):
+        raise ApiError(403, "forbidden", "Permission denied")
+    if not has_permission(db, actor, Permission.TICKET_READ) and not (
+        has_permission(db, actor, Permission.TICKET_READ_OWN) and ticket.created_by == actor_id
+    ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    _version(ticket, version)
+    _open(ticket)
+    changed: dict[str, dict[str, str | None]] = {}
+    for field in ("subject", "description"):
+        if field in payload.model_fields_set:
+            value = getattr(payload, field)
+            previous = getattr(ticket, field)
+            if value != previous:
+                changed[field] = {"before": previous, "after": value}
+                setattr(ticket, field, value)
+    if not changed:
+        raise ApiError(409, "no_change", "No fields changed")
+    _changed(ticket)
+    _fact(db, ticket, actor_id, "ticket_edited", {"changes": changed})
+    db.commit()
+    db.refresh(ticket)
+    return ticket
 
 
 def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[Ticket, bool]:
@@ -294,8 +335,11 @@ def list_tickets(
     account_no: str | None,
     ticket_type: TicketType | None = None,
     unassigned: bool = False,
+    visible_to: UUID | None = None,
 ) -> tuple[list[Ticket], int]:
     conditions = []
+    if visible_to is not None:
+        conditions.append(Ticket.created_by == visible_to)
     if status is not None:
         conditions.append(Ticket.status == status)
     if priority is not None:

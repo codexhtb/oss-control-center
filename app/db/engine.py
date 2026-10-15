@@ -19,6 +19,7 @@ def get_engine() -> Engine:
         max_overflow=5,
         pool_timeout=timeout,
         pool_recycle=1800,
+        hide_parameters=True,
         connect_args={
             "connect_timeout": timeout,
             "options": f"-c statement_timeout={timeout * 1000}",

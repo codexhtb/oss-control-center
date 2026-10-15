@@ -1,5 +1,33 @@
 # API contracts — Phase 1
 
+## Текущий контракт: персональные права и редактирование
+
+Секция ниже заменяет исторические значения `ticket.*`, `subscriber.*` и
+`identity.manage` в таблицах прежних фаз. Актуальные ключи перечислены в
+[RBAC matrix](rbac.md). Все приватные ответы имеют `Cache-Control: no-store`.
+Никакой endpoint не принимает plaintext пароль при создании сотрудника.
+
+| Метод и путь | Право | Контракт |
+| --- | --- | --- |
+| `GET /auth/me`, `GET /auth/permissions` | Сессия | `user.must_change_password`, актуальные индивидуальные `permissions` |
+| `POST /auth/password` | Сессия + Origin + CSRF | `{current_password,new_password}`; новый пароль от 12 символов, отзыв всех сессий и cookies; повторный вход |
+| `GET /users` | `users.read` | `page` 1+, `size` 1–100, список `id, login, display_name, role, is_active, must_change_password, permissions` |
+| `GET /users/{id}` | `users.read` | Те же публичные поля одного сотрудника |
+| `POST /users` | `users.manage` + CSRF | `{login,display_name,role,permissions?}`; `201` пользователь и однократно `temporary_password`; `permissions` без дублей, отсутствие списка использует профиль роли |
+| `PATCH /users/{id}` | `users.manage` + CSRF | `{login?,display_name?}`; до/после в identity audit, конфликт логина `409` |
+| `PUT /users/{id}/permissions` | `users.manage` + CSRF | `{permissions:[...]}`; полная замена, действие в текущей сессии, аудит до/после; нельзя отозвать последний `users.manage` активного admin |
+| `POST /users/{id}/reset-password` | `users.manage` + CSRF | Однократный `temporary_password`, отзыв сессий цели, обязательная смена |
+| `POST /users/{id}/deactivate`, `/reactivate` | `users.manage` + CSRF | Состояние, отзыв сессий при отключении, last-admin guard |
+| `GET /users/audit` | `users.manage` + `audit.read` | Страница событий с актором, целью, временем и несекретными деталями |
+| `PATCH /tickets/{id}` | `tickets.edit.own` или `.all` + право чтения + CSRF | `{subject?,description?}`; `If-Match: "<version>"`; только незакрытая заявка; `200` с новым ETag, `428` без версии, `409` при конфликте; событие с before/after и аудит атомарны |
+
+Для `tickets.read.own` все ticket GET и лента событий ограничены заявками с
+`created_by` текущего сотрудника; чужая карточка и факты дают `404`.
+`tickets.read.all` снимает это ограничение в едином контуре OSS. Поля `created_by_name`,
+`assigned_engineer_name`, `author_name` и `actor_name` добавлены к ответам
+для отображения сотрудника без технического логина; существующие ID сохранены.
+Исторические абзацы далее описывают контракты на момент их принятия.
+
 Утверждённое дополнение Phase 1.4: [контракт трёх типов создания заявок](phase-1.4-ticket-types.md). Stage 2 поддерживает создание `SUBSCRIBER_LINKED`, `MANUAL` и `INTERNAL` через общий `POST /tickets`. Прежний запрос с `lookup_id` без `ticket_type` остаётся совместимым.
 
 Версия HTTP API: `/api/v1`. Это контракт OSS Control Center, а не описание API NetUP. Все записи сохраняются в PostgreSQL. JSON использует UTF-8, идентификаторы ресурсов — UUID, лицевой счёт — строка (ведущие нули сохраняются), время — UTC ISO 8601. Поля без достоверного значения возвращаются как `null` или отсутствуют согласно схеме, а не заполняются догадкой.

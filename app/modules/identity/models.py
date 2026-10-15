@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +25,12 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    permissions_customized: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -53,6 +60,15 @@ class AuthSession(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserPermission(Base):
+    __tablename__ = "app_user_permissions"
+
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), primary_key=True
+    )
+    permission: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
 class LoginBucket(Base):
@@ -86,6 +102,7 @@ class IdentityAuditEvent(Base):
     outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     login_digest: Mapped[str | None] = mapped_column(String(64))
     source_digest: Mapped[str | None] = mapped_column(String(64))
+    details: Mapped[dict | None] = mapped_column(JSONB)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

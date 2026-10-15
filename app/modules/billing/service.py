@@ -16,8 +16,9 @@ from app.modules.billing.provider import (
     Subscriber360,
 )
 from app.modules.billing.schemas import ConnectionCard, SubscriberCard, SubscriberInfo
+from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
-from app.modules.identity.roles import Permission, Role, permissions_for
+from app.modules.identity.roles import Permission
 from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot, TicketAudit
 
 LOOKUP_LIFETIME = timedelta(minutes=15)
@@ -62,11 +63,7 @@ def _actor(db: Session, actor_id: UUID) -> User:
         .with_for_update()
         .execution_options(populate_existing=True)
     ).scalar_one_or_none()
-    if (
-        not user
-        or not user.is_active
-        or Permission.SUBSCRIBER_READ not in permissions_for(Role(user.role))
-    ):
+    if not user or not user.is_active or not has_permission(db, user, Permission.SUBSCRIBER_READ):
         raise ApiError(403, "forbidden", "Permission denied")
     return user
 
@@ -239,7 +236,7 @@ def stored_card(db: Session, actor_id: UUID, lookup_id: UUID) -> SubscriberCard:
         accounts=snapshot.accounts,
         financial_accounts=(
             snapshot.financial_accounts
-            if Permission.SUBSCRIBER_FINANCE_READ in permissions_for(Role(actor.role))
+            if has_permission(db, actor, Permission.SUBSCRIBER_FINANCE_READ)
             else []
         ),
         services=snapshot.services,

@@ -34,7 +34,7 @@ def test_ticket_creation_permissions_are_centralized() -> None:
         Permission.TICKET_DECISION,
         Permission.TICKET_CLOSE,
     } <= permissions_for(Role.ENGINEER)
-    assert not {Permission.TICKET_CREATE, Permission.SUBSCRIBER_READ, Permission.TICKET_READ} & (
+    assert {Permission.TICKET_CREATE, Permission.SUBSCRIBER_READ, Permission.TICKET_READ} <= (
         permissions_for(Role.ADMIN)
     )
     assert set(TicketType) == {"SUBSCRIBER_LINKED", "MANUAL", "INTERNAL"}

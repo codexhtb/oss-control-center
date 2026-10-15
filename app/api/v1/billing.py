@@ -15,7 +15,8 @@ from app.modules.billing.netup.provider import NetUPBillingProvider
 from app.modules.billing.provider import BillingProvider, UnavailableBillingProvider
 from app.modules.billing.schemas import LookupRequest, SubscriberCard
 from app.modules.billing.service import create_lookup, stored_card
-from app.modules.identity.roles import Permission, Role, permissions_for
+from app.modules.identity.access import has_permission
+from app.modules.identity.roles import Permission
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import SubscriberSnapshot, Ticket
 from app.modules.tickets.schemas import Page, TicketView
@@ -38,7 +39,7 @@ ProviderDep = Annotated[BillingProvider, Depends(get_billing_provider)]
 
 
 def _allowed(identity: AuthContext, db: SessionDep) -> AuthContext:
-    if Permission.SUBSCRIBER_READ not in permissions_for(Role(identity.user.role)):
+    if not has_permission(db, identity.user, Permission.SUBSCRIBER_READ):
         audit(db, "permission_denied", "denied", actor=identity.user.id)
         db.commit()
         raise ApiError(403, "forbidden", "Permission denied")
@@ -89,7 +90,10 @@ def subscriber_tickets(
 ) -> dict:
     if page < 1 or size < 1 or size > 50:
         raise ApiError(422, "invalid_page", "Invalid page or page size")
-    if Permission.TICKET_READ not in permissions_for(Role(identity.user.role)):
+    if not (
+        has_permission(db, identity.user, Permission.TICKET_READ)
+        or has_permission(db, identity.user, Permission.TICKET_READ_OWN)
+    ):
         raise ApiError(403, "forbidden", "Permission denied")
     snapshot = db.get(SubscriberSnapshot, lookup_id)
     if snapshot is None or snapshot.requested_by != identity.user.id:
@@ -103,6 +107,8 @@ def subscriber_tickets(
         SubscriberSnapshot.source == snapshot.source,
         same_subscriber,
     )
+    if not has_permission(db, identity.user, Permission.TICKET_READ):
+        conditions += (Ticket.created_by == identity.user.id,)
     base = (
         select(Ticket)
         .join(SubscriberSnapshot, Ticket.subscriber_snapshot_id == SubscriberSnapshot.id)

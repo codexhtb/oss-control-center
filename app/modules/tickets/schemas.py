@@ -51,6 +51,33 @@ class AssignEngineer(StrictModel):
     engineer_id: UUID
 
 
+class EditTicket(StrictModel):
+    subject: str | None = Field(default=None, max_length=160)
+    description: str | None = Field(default=None, min_length=1, max_length=10000)
+
+    @field_validator("subject")
+    @classmethod
+    def valid_subject(cls, value: str | None) -> str | None:
+        return CreateTicket.validate_subject(value)
+
+    @field_validator("description")
+    @classmethod
+    def valid_description(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip() or any(category(ch) == "Cc" and ch not in "\n\r\t" for ch in value)
+        ):
+            raise ValueError("description must contain text and no control characters")
+        return value
+
+    @model_validator(mode="after")
+    def nonempty(self) -> "EditTicket":
+        if not self.model_fields_set or any(
+            getattr(self, key) is None for key in self.model_fields_set
+        ):
+            raise ValueError("subject or description is required")
+        return self
+
+
 class AddComment(StrictModel):
     body: str = Field(min_length=1, max_length=10000)
 
@@ -130,7 +157,9 @@ class TicketView(BaseModel):
     status: TicketStatus
     priority: TicketPriority
     created_by: UUID
+    created_by_name: str | None = None
     assigned_engineer_id: UUID | None
+    assigned_engineer_name: str | None = None
     closed_by: UUID | None
     closed_decision_id: UUID | None
     closed_at: datetime | None
@@ -157,6 +186,7 @@ class CommentView(BaseModel):
     id: UUID
     ticket_id: UUID
     author_id: UUID
+    author_name: str | None = None
     body: str
     created_at: datetime
 
@@ -166,6 +196,7 @@ class DecisionView(BaseModel):
     id: UUID
     ticket_id: UUID
     engineer_id: UUID
+    engineer_name: str | None = None
     decision_text: str
     performed_actions: str
     created_at: datetime
@@ -177,6 +208,7 @@ class EventView(BaseModel):
     ticket_id: UUID
     event_type: str
     actor_id: UUID | None
+    actor_name: str | None = None
     event_data: dict
     ticket_version: int
     occurred_at: datetime
@@ -188,6 +220,7 @@ class RecentEventView(BaseModel):
     ticket_number: int
     event_type: str
     actor_id: UUID | None
+    actor_name: str | None = None
     ticket_version: int
     occurred_at: datetime
 

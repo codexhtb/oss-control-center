@@ -1,4 +1,4 @@
-"""Central role and permission policy; no implicit administrator superuser."""
+"""Named capabilities and role presets for migration and new accounts."""
 
 from enum import StrEnum
 
@@ -10,21 +10,25 @@ class Role(StrEnum):
 
 
 class Permission(StrEnum):
-    SUBSCRIBER_READ = "subscriber.read"
-    SUBSCRIBER_FINANCE_READ = "subscriber.finance.read"
-    TICKET_READ = "ticket.read"
-    TICKET_CREATE = "ticket.create"
-    TICKET_COMMENT = "ticket.comment"
-    TICKET_START = "ticket.start"
-    TICKET_ASSIGN = "ticket.assign"
-    TICKET_FIELD_WORK = "ticket.field_work"
-    TICKET_MANUAL_DIAGNOSTIC = "ticket.manual_diagnostic"
+    SUBSCRIBER_READ = "subscribers.read"
+    SUBSCRIBER_FINANCE_READ = "subscribers.finance.read"
+    TICKET_READ = "tickets.read.all"
+    TICKET_READ_OWN = "tickets.read.own"
+    TICKET_CREATE = "tickets.create"
+    TICKET_EDIT_ALL = "tickets.edit.all"
+    TICKET_EDIT_OWN = "tickets.edit.own"
+    TICKET_COMMENT = "tickets.comment"
+    TICKET_START = "tickets.start"
+    TICKET_ASSIGN = "tickets.assign"
+    TICKET_FIELD_WORK = "tickets.field_work"
+    TICKET_MANUAL_DIAGNOSTIC = "tickets.diagnose"
+    DIAGNOSTICS_READ = "diagnostics.read"
     DIAGNOSTICS_RUN = "diagnostics.run"
-    TICKET_DECISION = "ticket.decision"
-    TICKET_CLOSE = "ticket.close"
-    TICKET_AUDIT_READ = "ticket.audit.read"
-    FIELD_DISPATCH = "field_dispatch.send"
-    IDENTITY_MANAGE = "identity.manage"
+    TICKET_DECISION = "tickets.resolve"
+    TICKET_CLOSE = "tickets.close"
+    TICKET_AUDIT_READ = "audit.read"
+    IDENTITY_MANAGE = "users.manage"
+    USERS_READ = "users.read"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -34,7 +38,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.SUBSCRIBER_FINANCE_READ,
             Permission.TICKET_READ,
             Permission.TICKET_CREATE,
+            Permission.TICKET_EDIT_OWN,
             Permission.TICKET_COMMENT,
+            Permission.DIAGNOSTICS_READ,
         }
     ),
     Role.ENGINEER: frozenset(
@@ -42,21 +48,23 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.SUBSCRIBER_READ,
             Permission.TICKET_READ,
             Permission.TICKET_CREATE,
+            Permission.TICKET_EDIT_ALL,
             Permission.TICKET_COMMENT,
             Permission.TICKET_START,
             Permission.TICKET_ASSIGN,
             Permission.TICKET_FIELD_WORK,
             Permission.TICKET_MANUAL_DIAGNOSTIC,
+            Permission.DIAGNOSTICS_READ,
             Permission.DIAGNOSTICS_RUN,
             Permission.TICKET_DECISION,
             Permission.TICKET_CLOSE,
             Permission.TICKET_AUDIT_READ,
-            Permission.FIELD_DISPATCH,
         }
     ),
-    Role.ADMIN: frozenset({Permission.IDENTITY_MANAGE}),
+    Role.ADMIN: frozenset(Permission),
 }
 
 
 def permissions_for(role: Role) -> frozenset[Permission]:
+    """Default preset only; runtime checks use persisted user grants."""
     return ROLE_PERMISSIONS[role]

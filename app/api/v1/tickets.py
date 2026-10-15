@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
 from app.core.errors import ApiError
+from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
-from app.modules.identity.roles import Permission, Role, permissions_for
+from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import (
     DiagnosticSnapshot,
@@ -31,6 +32,7 @@ from app.modules.tickets.schemas import (
     CreateTicket,
     DecisionView,
     DiagnosticView,
+    EditTicket,
     EventView,
     FieldWorkRequest,
     ManualDiagnostic,
@@ -46,6 +48,7 @@ from app.modules.tickets.service import (
     assign_engineer,
     close_ticket,
     create_ticket,
+    edit_ticket,
     list_tickets,
     request_field_work,
     start_ticket,
@@ -62,7 +65,7 @@ IfMatch = Annotated[str | None, Header(alias="If-Match")]
 
 
 def _allowed(identity: AuthContext, db: Session, permission: Permission) -> AuthContext:
-    if permission not in permissions_for(Role(identity.user.role)):
+    if not has_permission(db, identity.user, permission):
         audit(db, "permission_denied", "denied", actor=identity.user.id)
         db.commit()
         raise ApiError(403, "forbidden", "Permission denied")
@@ -70,7 +73,12 @@ def _allowed(identity: AuthContext, db: Session, permission: Permission) -> Auth
 
 
 def can_read(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
-    return _allowed(identity, db, Permission.TICKET_READ)
+    if not (
+        has_permission(db, identity.user, Permission.TICKET_READ)
+        or has_permission(db, identity.user, Permission.TICKET_READ_OWN)
+    ):
+        return _allowed(identity, db, Permission.TICKET_READ)
+    return identity
 
 
 def can_create(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
@@ -113,6 +121,10 @@ def can_audit(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_AUDIT_READ)
 
 
+def can_read_diagnostics(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
+    return _allowed(identity, db, Permission.DIAGNOSTICS_READ)
+
+
 ReadDep = Annotated[AuthContext, Depends(can_read)]
 CreateDep = Annotated[AuthContext, Depends(can_create)]
 CommentDep = Annotated[AuthContext, Depends(can_comment)]
@@ -124,6 +136,7 @@ DiagnoseDep = Annotated[AuthContext, Depends(can_diagnose)]
 DecisionDep = Annotated[AuthContext, Depends(can_decide)]
 CloseDep = Annotated[AuthContext, Depends(can_close)]
 AuditDep = Annotated[AuthContext, Depends(can_audit)]
+DiagnosticReadDep = Annotated[AuthContext, Depends(can_read_diagnostics)]
 
 
 def _version(raw: IfMatch) -> int | None:
@@ -151,7 +164,59 @@ def _page(db: Session, model, ticket_id: UUID, page: int, size: int, order_field
         .offset((page - 1) * size)
         .limit(size)
     ).all()
+    field = {
+        TicketComment: ("author_id", "author_name"),
+        TicketEvent: ("actor_id", "actor_name"),
+        TicketResolution: ("engineer_id", "engineer_name"),
+    }.get(model)
+    if field:
+        names = _names(db, [getattr(item, field[0]) for item in items])
+        items = [{**item.__dict__, field[1]: names.get(getattr(item, field[0]))} for item in items]
     return {"items": items, "page": page, "size": size, "total": total}
+
+
+def _names(db: Session, ids: list[UUID | None]) -> dict[UUID, str]:
+    valid = {user_id for user_id in ids if user_id is not None}
+    if not valid:
+        return {}
+    return dict(db.execute(select(User.id, User.display_name).where(User.id.in_(valid))).all())
+
+
+def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketView]:
+    names = _names(
+        db,
+        [value for ticket in items for value in (ticket.created_by, ticket.assigned_engineer_id)],
+    )
+    return [
+        TicketView.model_validate(item).model_copy(
+            update={
+                "created_by_name": names.get(item.created_by),
+                "assigned_engineer_name": names.get(item.assigned_engineer_id),
+            }
+        )
+        for item in items
+    ]
+
+
+def _readable(db: Session, identity: AuthContext, ticket_id: UUID) -> Ticket:
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
+    if not has_permission(db, identity.user, Permission.TICKET_READ) and not (
+        has_permission(db, identity.user, Permission.TICKET_READ_OWN)
+        and ticket.created_by == identity.user.id
+    ):
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
+    return ticket
+
+
+def _mutation_scope(db: Session, identity: AuthContext, ticket_id: UUID) -> None:
+    if not (
+        has_permission(db, identity.user, Permission.TICKET_READ)
+        or has_permission(db, identity.user, Permission.TICKET_READ_OWN)
+    ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    _readable(db, identity, ticket_id)
 
 
 @router.post("", status_code=201, response_model=TicketView)
@@ -190,8 +255,11 @@ def listing(
         unassigned=unassigned,
         account_no=account_no,
         ticket_type=ticket_type,
+        visible_to=None
+        if has_permission(db, identity.user, Permission.TICKET_READ)
+        else identity.user.id,
     )
-    return {"items": items, "page": page, "size": size, "total": total}
+    return {"items": _ticket_views(db, items), "page": page, "size": size, "total": total}
 
 
 @router.get("/assignable-engineers", response_model=Page[AssignableEngineerView])
@@ -201,7 +269,7 @@ def assignable_engineers(
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    conditions = (User.role == Role.ENGINEER, User.is_active.is_(True))
+    conditions = (User.is_active.is_(True), User.role == Role.ENGINEER)
     total = db.scalar(select(func.count()).select_from(User).where(*conditions)) or 0
     rows = (
         db.execute(
@@ -224,7 +292,20 @@ def recent_events(
     page: FeedPageNumber = 1,
     size: FeedPageSize = 20,
 ):
-    total = db.scalar(select(func.count()).select_from(TicketEvent)) or 0
+    conditions = (
+        []
+        if has_permission(db, identity.user, Permission.TICKET_READ)
+        else [Ticket.created_by == identity.user.id]
+    )
+    total = (
+        db.scalar(
+            select(func.count())
+            .select_from(TicketEvent)
+            .join(Ticket, Ticket.id == TicketEvent.ticket_id)
+            .where(*conditions)
+        )
+        or 0
+    )
     rows = (
         db.execute(
             select(
@@ -237,6 +318,7 @@ def recent_events(
                 TicketEvent.occurred_at,
             )
             .join(Ticket, Ticket.id == TicketEvent.ticket_id)
+            .where(*conditions)
             .order_by(TicketEvent.occurred_at.desc(), TicketEvent.id.desc())
             .offset((page - 1) * size)
             .limit(size)
@@ -244,13 +326,41 @@ def recent_events(
         .mappings()
         .all()
     )
-    return {"items": [dict(row) for row in rows], "page": page, "size": size, "total": total}
+    names = _names(db, [row["actor_id"] for row in rows])
+    return {
+        "items": [{**row, "actor_name": names.get(row["actor_id"])} for row in rows],
+        "page": page,
+        "size": size,
+        "total": total,
+    }
 
 
 @router.get("/{ticket_id}", response_model=TicketDetail)
 def get_one(ticket_id: UUID, response: Response, identity: ReadDep, db: SessionDep):
+    _readable(db, identity, ticket_id)
     ticket = ticket_detail(db, ticket_id)
+    names = _names(db, [ticket.created_by, ticket.assigned_engineer_id])
+    ticket = ticket.model_copy(
+        update={
+            "created_by_name": names.get(ticket.created_by),
+            "assigned_engineer_name": names.get(ticket.assigned_engineer_id),
+        }
+    )
     _etag(response, ticket)
+    return ticket
+
+
+@router.patch("/{ticket_id}", response_model=TicketView)
+def edit(
+    ticket_id: UUID,
+    payload: EditTicket,
+    response: Response,
+    identity: CsrfIdentityDep,
+    db: SessionDep,
+    if_match: IfMatch = None,
+):
+    ticket = edit_ticket(db, identity.user.id, ticket_id, payload, _version(if_match))
+    _etag(response, TicketView.model_validate(ticket))
     return ticket
 
 
@@ -263,6 +373,7 @@ def assign(
     db: SessionDep,
     if_match: IfMatch = None,
 ):
+    _mutation_scope(db, identity, ticket_id)
     ticket = assign_engineer(
         db, identity.user.id, ticket_id, payload.engineer_id, _version(if_match)
     )
@@ -278,6 +389,7 @@ def start(
     db: SessionDep,
     if_match: IfMatch = None,
 ):
+    _mutation_scope(db, identity, ticket_id)
     ticket = start_ticket(db, identity.user.id, ticket_id, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
@@ -292,6 +404,7 @@ def field_work(
     db: SessionDep,
     if_match: IfMatch = None,
 ):
+    _mutation_scope(db, identity, ticket_id)
     ticket = request_field_work(db, identity.user.id, ticket_id, payload, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
@@ -299,6 +412,7 @@ def field_work(
 
 @router.post("/{ticket_id}/comments", status_code=201, response_model=CommentView)
 def comment(ticket_id: UUID, payload: AddComment, identity: CommentDep, db: SessionDep):
+    _mutation_scope(db, identity, ticket_id)
     return add_comment(db, identity.user.id, ticket_id, payload)
 
 
@@ -310,7 +424,7 @@ def comments(
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    ticket_detail(db, ticket_id)
+    _readable(db, identity, ticket_id)
     return _page(db, TicketComment, ticket_id, page, size, TicketComment.created_at)
 
 
@@ -321,23 +435,25 @@ def diagnostic(
     identity: DiagnoseDep,
     db: SessionDep,
 ):
+    _mutation_scope(db, identity, ticket_id)
     return add_diagnostic(db, identity.user.id, ticket_id, payload)
 
 
 @router.get("/{ticket_id}/manual-diagnostics", response_model=Page[DiagnosticView])
 def diagnostics(
     ticket_id: UUID,
-    identity: ReadDep,
+    identity: DiagnosticReadDep,
     db: SessionDep,
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    ticket_detail(db, ticket_id)
+    _readable(db, identity, ticket_id)
     return _page(db, DiagnosticSnapshot, ticket_id, page, size, DiagnosticSnapshot.recorded_at)
 
 
 @router.post("/{ticket_id}/decisions", status_code=201, response_model=DecisionView)
 def decision(ticket_id: UUID, payload: AddDecision, identity: DecisionDep, db: SessionDep):
+    _mutation_scope(db, identity, ticket_id)
     return add_decision(db, identity.user.id, ticket_id, payload)
 
 
@@ -349,7 +465,7 @@ def decisions(
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    ticket_detail(db, ticket_id)
+    _readable(db, identity, ticket_id)
     return _page(db, TicketResolution, ticket_id, page, size, TicketResolution.created_at)
 
 
@@ -362,6 +478,7 @@ def close(
     db: SessionDep,
     if_match: IfMatch = None,
 ):
+    _mutation_scope(db, identity, ticket_id)
     ticket = close_ticket(db, identity.user.id, ticket_id, payload.decision_id, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
@@ -375,7 +492,7 @@ def history(
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    ticket_detail(db, ticket_id)
+    _readable(db, identity, ticket_id)
     return _page(db, TicketEvent, ticket_id, page, size, TicketEvent.occurred_at)
 
 
@@ -387,5 +504,5 @@ def audit_events(
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    ticket_detail(db, ticket_id)
+    _readable(db, identity, ticket_id)
     return _page(db, TicketAudit, ticket_id, page, size, TicketAudit.occurred_at)

@@ -15,8 +15,9 @@ from app.modules.diagnostics.correlation import CorrelationEngine, DiagnosticRep
 from app.modules.diagnostics.factory import get_correlation_engine, get_onu_runtime
 from app.modules.diagnostics.onu import BdcomOnuReader, OnuResult
 from app.modules.diagnostics.onu_correlation import lookup_onu_candidates
+from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
-from app.modules.identity.roles import Permission, Role, permissions_for
+from app.modules.identity.roles import Permission
 from app.modules.tickets.models import (
     ConnectionSnapshot,
     DiagnosticCheck,
@@ -58,8 +59,8 @@ EngineDep = Annotated[CorrelationEngine, Depends(engine_dependency)]
 IfMatch = Annotated[str | None, Header(alias="If-Match")]
 
 
-def _engineer(identity: CsrfIdentityDep) -> UUID:
-    if Permission.DIAGNOSTICS_RUN not in permissions_for(Role(identity.user.role)):
+def _engineer(identity: CsrfIdentityDep, db: SessionDep) -> UUID:
+    if not has_permission(db, identity.user, Permission.DIAGNOSTICS_RUN):
         raise ApiError(403, "forbidden", "Permission denied")
     return identity.user.id
 
@@ -83,12 +84,16 @@ def _still_engineer(db: SessionDep, actor_id: UUID) -> None:
         .with_for_update()
         .execution_options(populate_existing=True)
     ).scalar_one_or_none()
-    if (
-        not user
-        or not user.is_active
-        or Permission.DIAGNOSTICS_RUN not in permissions_for(Role(user.role))
-    ):
+    if not user or not user.is_active or not has_permission(db, user, Permission.DIAGNOSTICS_RUN):
         raise ApiError(403, "forbidden", "Permission denied")
+
+
+def _ticket_visible(db: SessionDep, user: User, ticket: Ticket) -> None:
+    if has_permission(db, user, Permission.TICKET_READ):
+        return
+    if has_permission(db, user, Permission.TICKET_READ_OWN) and ticket.created_by == user.id:
+        return
+    raise ApiError(404, "ticket_not_found", "Ticket not found")
 
 
 def _version(raw: str | None) -> int:
@@ -109,7 +114,7 @@ def check_lookup(
     db: SessionDep,
     engine: EngineDep,
 ) -> DiagnosticReport:
-    actor_id = _engineer(identity)
+    actor_id = _engineer(identity, db)
     snapshot = db.get(SubscriberSnapshot, lookup_id)
     if snapshot is None or snapshot.requested_by != actor_id:
         raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
@@ -133,11 +138,12 @@ def check_ticket(
     engine: EngineDep,
     if_match: IfMatch = None,
 ) -> TicketCheckResult:
-    actor_id = _engineer(identity)
+    actor_id = _engineer(identity, db)
     expected = _version(if_match)
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise ApiError(404, "ticket_not_found", "Ticket not found")
+    _ticket_visible(db, identity.user, ticket)
     if ticket.subscriber_snapshot_id is None or ticket.connection_snapshot_id is None:
         raise ApiError(409, "connection_required", "Ticket has no confirmed connection")
     if ticket.status == "CLOSED":
@@ -166,6 +172,7 @@ def check_ticket(
         or current.connection_snapshot_id != connection_id
     ):
         raise ApiError(409, "version_conflict", "Ticket was changed; reload it")
+    _ticket_visible(db, db.get(User, actor_id), current)
     expires = datetime.now(UTC) + timedelta(minutes=15)
     check = DiagnosticCheck(
         ticket_id=ticket_id,
@@ -194,7 +201,11 @@ def confirm_check(
     db: SessionDep,
     if_match: IfMatch = None,
 ):
-    actor_id = _engineer(identity)
+    actor_id = _engineer(identity, db)
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
+    _ticket_visible(db, identity.user, ticket)
     item = confirm_monitoring_check(db, actor_id, ticket_id, payload.check_id, _version(if_match))
     response.headers["Cache-Control"] = "no-store"
     return item
@@ -212,7 +223,7 @@ def subscriber_onu(
     db: SessionDep,
     runtime: OnuRuntimeDep,
 ) -> OnuResult:
-    actor_id = _engineer(identity)
+    actor_id = _engineer(identity, db)
     snapshot = db.get(SubscriberSnapshot, lookup_id)
     if snapshot is None or snapshot.requested_by != actor_id:
         raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
@@ -243,10 +254,11 @@ def ticket_onu(
     db: SessionDep,
     runtime: OnuRuntimeDep,
 ) -> OnuResult:
-    actor_id = _engineer(identity)
+    actor_id = _engineer(identity, db)
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise ApiError(404, "ticket_not_found", "Ticket not found")
+    _ticket_visible(db, identity.user, ticket)
     if ticket.connection_snapshot_id is None:
         raise ApiError(409, "connection_required", "Ticket has no confirmed connection")
     connection = db.get(ConnectionSnapshot, ticket.connection_snapshot_id)

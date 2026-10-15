@@ -12,8 +12,8 @@ from app.core.config import get_settings
 from app.core.security import ensure_non_root_runtime
 from app.db.engine import get_engine
 from app.modules.identity.crypto import hash_password, normalize_login, validate_password
-from app.modules.identity.models import User
-from app.modules.identity.roles import Role
+from app.modules.identity.models import User, UserPermission
+from app.modules.identity.roles import Role, permissions_for
 from app.modules.identity.service import ADMIN_LOCK, audit
 
 
@@ -50,10 +50,15 @@ def main() -> int:
             display_name=display_name,
             role=Role.ADMIN,
             password_hash=hash_password(password),
+            permissions_customized=True,
         )
         db.add(user)
         try:
             db.flush()
+            db.add_all(
+                UserPermission(user_id=user.id, permission=permission)
+                for permission in permissions_for(Role.ADMIN)
+            )
             audit(db, "admin_bootstrap", "success", actor=user.id, target=user.id)
             db.commit()
         except IntegrityError:

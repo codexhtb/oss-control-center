@@ -1,5 +1,6 @@
 """Transactional identity operations and persistent login throttling."""
 
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import ApiError
+from app.modules.identity.access import effective_permissions, has_permission
 from app.modules.identity.crypto import (
     fingerprint,
     hash_password,
@@ -20,9 +22,15 @@ from app.modules.identity.crypto import (
     normalize_login,
     verify_password,
 )
-from app.modules.identity.models import AuthSession, IdentityAuditEvent, LoginBucket, User
+from app.modules.identity.models import (
+    AuthSession,
+    IdentityAuditEvent,
+    LoginBucket,
+    User,
+    UserPermission,
+)
 from app.modules.identity.roles import Permission, Role, permissions_for
-from app.modules.identity.schemas import CreateUserRequest
+from app.modules.identity.schemas import CreateUserRequest, UpdateUserRequest
 
 SESSION_LIFETIME = timedelta(hours=8)
 LOGIN_WINDOW = timedelta(minutes=15)
@@ -57,6 +65,7 @@ def audit(
     target: UUID | None = None,
     login_digest: str | None = None,
     source_digest: str | None = None,
+    details: dict | None = None,
 ) -> None:
     db.add(
         IdentityAuditEvent(
@@ -66,6 +75,7 @@ def audit(
             target_user_id=target,
             login_digest=login_digest,
             source_digest=source_digest,
+            details=details,
         )
     )
 
@@ -211,7 +221,7 @@ def _ensure_actor_can_manage(db: Session, actor: User) -> None:
     if (
         current is None
         or not current.is_active
-        or Permission.IDENTITY_MANAGE not in permissions_for(Role(current.role))
+        or not has_permission(db, current, Permission.IDENTITY_MANAGE)
     ):
         raise ApiError(403, "forbidden", "Permission denied")
 
@@ -228,7 +238,20 @@ def _ensure_admin_remains(db: Session, target: User) -> None:
         other_admins = db.scalar(
             select(func.count())
             .select_from(User)
-            .where(User.role == Role.ADMIN, User.is_active.is_(True), User.id != target.id)
+            .where(
+                User.role == Role.ADMIN,
+                User.is_active.is_(True),
+                User.id != target.id,
+                (User.permissions_customized.is_(False))
+                | (
+                    select(UserPermission.user_id)
+                    .where(
+                        UserPermission.user_id == User.id,
+                        UserPermission.permission == Permission.IDENTITY_MANAGE,
+                    )
+                    .exists()
+                ),
+            )
         )
         if not other_admins:
             raise ApiError(409, "last_admin", "Last active administrator cannot be changed")
@@ -243,24 +266,135 @@ def _revoke_user_sessions(db: Session, target: User, actor: User) -> None:
     audit(db, "sessions_revoked", "success", actor=actor.id, target=target.id)
 
 
-def create_user(db: Session, actor: User, request: CreateUserRequest) -> User:
+def create_user(db: Session, actor: User, request: CreateUserRequest) -> tuple[User, str | None]:
     _lock_admin_changes(db)
     _ensure_actor_can_manage(db, actor)
+    temporary_password = secrets.token_urlsafe(24)
+    grants = (
+        set(request.permissions)
+        if request.permissions is not None
+        else set(permissions_for(request.role))
+    )
     user = User(
         login=request.login,
         display_name=request.display_name,
         role=request.role,
-        password_hash=hash_password(request.password.get_secret_value()),
+        password_hash=hash_password(temporary_password),
+        must_change_password=True,
+        permissions_customized=True,
     )
     db.add(user)
     try:
         db.flush()
-        audit(db, "user_created", "success", actor=actor.id, target=user.id)
+        db.add_all(UserPermission(user_id=user.id, permission=value) for value in grants)
+        audit(
+            db,
+            "user_created",
+            "success",
+            actor=actor.id,
+            target=user.id,
+            details={
+                "login": user.login,
+                "display_name": user.display_name,
+                "role": user.role,
+                "permissions": sorted(grants),
+            },
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
         raise ApiError(409, "user_conflict", "User could not be created") from None
-    return user
+    return user, temporary_password
+
+
+def update_user(db: Session, actor: User, user_id: UUID, payload: UpdateUserRequest) -> User:
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    target = _get_target_for_update(db, user_id)
+    changed = {}
+    for field in ("login", "display_name"):
+        value = getattr(payload, field)
+        if value is not None and value != getattr(target, field):
+            changed[field] = {"before": getattr(target, field), "after": value}
+            setattr(target, field, value)
+    if not changed:
+        raise ApiError(409, "no_change", "No fields changed")
+    target.updated_at = utc_now()
+    audit(db, "user_updated", "success", actor=actor.id, target=target.id, details=changed)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ApiError(409, "user_conflict", "User could not be updated") from None
+    return target
+
+
+def set_user_permissions(db: Session, actor: User, user_id: UUID, grants: set[Permission]) -> User:
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    target = _get_target_for_update(db, user_id)
+    previous = effective_permissions(db, target)
+    if target.role == Role.ADMIN and target.is_active and Permission.IDENTITY_MANAGE not in grants:
+        _ensure_admin_remains(db, target)
+    if previous == grants:
+        return target
+    db.query(UserPermission).filter(UserPermission.user_id == target.id).delete()
+    db.add_all(UserPermission(user_id=target.id, permission=value) for value in grants)
+    target.permissions_customized = True
+    target.updated_at = utc_now()
+    audit(
+        db,
+        "permissions_changed",
+        "success",
+        actor=actor.id,
+        target=target.id,
+        details={"before": sorted(previous), "after": sorted(grants)},
+    )
+    db.commit()
+    return target
+
+
+def reset_password(db: Session, actor: User, user_id: UUID) -> str:
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    target = _get_target_for_update(db, user_id)
+    temporary_password = secrets.token_urlsafe(24)
+    target.password_hash = hash_password(temporary_password)
+    target.must_change_password = True
+    target.updated_at = utc_now()
+    _revoke_user_sessions(db, target, actor)
+    audit(db, "password_reset", "success", actor=actor.id, target=target.id)
+    db.commit()
+    return temporary_password
+
+
+def change_own_password(db: Session, identity: AuthContext, current: str, new: str) -> None:
+    user = _get_target_for_update(db, identity.user.id)
+    if not verify_password(user.password_hash, current):
+        audit(db, "password_change", "denied", actor=user.id, target=user.id)
+        db.commit()
+        raise ApiError(403, "invalid_password", "Current password is incorrect")
+    if verify_password(user.password_hash, new):
+        raise ApiError(422, "same_password", "New password must differ")
+    user.password_hash = hash_password(new)
+    user.must_change_password = False
+    user.updated_at = utc_now()
+    _revoke_user_sessions(db, user, user)
+    audit(db, "password_change", "success", actor=user.id, target=user.id)
+    db.commit()
+
+
+def reactivate_user(db: Session, actor: User, user_id: UUID) -> User:
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    target = _get_target_for_update(db, user_id)
+    if target.is_active:
+        raise ApiError(409, "already_active", "User is already active")
+    target.is_active = True
+    target.updated_at = utc_now()
+    audit(db, "user_reactivated", "success", actor=actor.id, target=target.id)
+    db.commit()
+    return target
 
 
 def deactivate_user(db: Session, actor: User, user_id: UUID) -> User:

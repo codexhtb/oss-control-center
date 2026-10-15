@@ -14,12 +14,15 @@ PostgreSQL — единственный source of truth для обращени�
 
 **OSS Diagnostics:** `0012_oss_diagnostics` добавляет immutable `diagnostic_checks` для неподтверждённого server-side preview связанной заявки. `diagnostic_snapshots.check_id` уникально связывает подтверждённый `AUTOMATED` snapshot с check; исторические `MANUAL` snapshots имеют `NULL`. Сохранение события истории и аудита выполняется вместе со snapshot. Кратность IP-групп и исходные строки NetUP не изменяются; см. [границу диагностики](oss-diagnostics.md).
 
+**Identity и редактирование, `0013_identity_permissions`:** новые поля `app_users.must_change_password` и `permissions_customized`, таблица `app_user_permissions` с составным PK `(user_id, permission)` и FK на пользователя, `identity_audit_events.details JSONB`. Исторические пользователи получают явные гранты по прежней роли, их пароли и сессии сохраняются. Новые заявки и snapshots не мигрируются. Редактирование темы и описания использует существующие `tickets.version`, `ticket_history`, `audit_events`; новых таблиц заявок нет. История перед/после хранится в защищённом `ticket_history.event_data`, удаление истории запрещено. Последний активный admin с `users.manage` защищён серверной блокировкой и отложенным trigger при прямом SQL удалении гранта.
+
 ## ERD
 
 ```mermaid
 erDiagram
   app_users ||--o{ tickets : creates
   app_users ||--o{ auth_sessions : opens
+  app_users ||--o{ app_user_permissions : granted
   app_users ||--o{ identity_audit_events : acts
   app_users ||--o{ subscriber_snapshots : requests
   subscriber_snapshots ||--o{ connection_snapshots : contains

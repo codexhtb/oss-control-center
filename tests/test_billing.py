@@ -204,7 +204,7 @@ def test_finance_permission_and_subscriber_history_across_lookups(
     )
 
     login(billing_client, "finance_admin")
-    assert lookup(billing_client, "MOCK-ETH-001").status_code == 403
+    assert lookup(billing_client, "MOCK-ETH-001").status_code == 200
 
 
 def test_subscriber_history_includes_other_account_of_same_source(
@@ -240,9 +240,12 @@ def test_subscriber_history_includes_other_account_of_same_source(
     assert history.status_code == 200
     assert history.json()["total"] == 1
     assert history.json()["items"][0]["id"] == created.json()["id"]
-    assert billing_client.get(
-        f"/api/v1/subscriber-lookups/{second.json()['lookup_id']}/tickets?page=0"
-    ).status_code == 422
+    assert (
+        billing_client.get(
+            f"/api/v1/subscriber-lookups/{second.json()['lookup_id']}/tickets?page=0"
+        ).status_code
+        == 422
+    )
 
 
 @pytest.mark.parametrize(
@@ -358,10 +361,10 @@ def test_lookup_errors_rbac_and_size_limit(
     assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").status_code == 404
     assert lookup(billing_client, "MOCK-EPON-001").status_code == 200
     login(billing_client, "admin")
-    assert lookup(billing_client, "MOCK-ETH-001").status_code == 403
-    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").status_code == 403
+    assert lookup(billing_client, "MOCK-ETH-001").status_code == 200
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}").status_code == 404
     with Session(billing_engine) as db:
-        assert db.scalar(select(func.count()).select_from(SubscriberSnapshot)) == 2
+        assert db.scalar(select(func.count()).select_from(SubscriberSnapshot)) == 3
 
 
 def test_multiple_choices_snapshot_confirmation_and_ticket_flow(
@@ -549,7 +552,7 @@ def test_lookup_rechecks_role_after_remote_wait_without_holding_actor_lock(
                 db.execute(text("SET LOCAL lock_timeout = '1000ms'"))
                 current = db.get(User, operator.id, with_for_update=True)
                 assert current is not None
-                current.role = Role.ADMIN
+                current.is_active = False
                 db.commit()
         finally:
             release.set()
@@ -659,7 +662,7 @@ def test_synthetic_netup_http_snapshot_ticket_round_trip(
     login(billing_client, "netup_engineer")
     assert len(lookup(billing_client, "202").json()["subscriber"]["contacts"]) == 2
     login(billing_client, "netup_admin")
-    assert lookup(billing_client, "202").status_code == 403
+    assert lookup(billing_client, "202").status_code == 200
 
 
 def test_upgrade_existing_ticket_from_0003(
