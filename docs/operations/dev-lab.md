@@ -221,6 +221,37 @@ sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml up -d'
 backup базы и проверить восстановление. Дамп содержит даже синтетические
 учётные данные и хеши, поэтому хранить его с режимом `0600` вне Git.
 
+## Phase 3: управление сотрудниками и редактирование заявок
+
+Миграция `0013_identity_permissions` переносит разрешения действующих
+пользователей, не меняя их пароли или сессии. До применения к
+`oss_control_dev` нужен защищённый `pg_dump --format=custom` и пробное
+восстановление в отдельной базе `oss_test_*`. Дамп хранится в
+`.dev-secrets/backups/` с правом `0600`; это конфиденциальная копия данных.
+Старую `oss_control` не мигрировать.
+
+Проверка конфигурации и запуск миграции только для dev-проекта:
+
+```bash
+sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml -f compose.monitoring.dev.yaml -f compose.bdcom.dev.yaml config --quiet'
+sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml -f compose.monitoring.dev.yaml -f compose.bdcom.dev.yaml run --rm --no-deps api alembic upgrade head'
+sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml -f compose.monitoring.dev.yaml -f compose.bdcom.dev.yaml up -d --no-deps api web'
+```
+
+`sh dev/run_phase3_browser_e2e.sh` запускается через `sg docker -c`.
+Скрипт создаёт одноразовую `oss_test_phase3_browser_*`, применяет все
+миграции, временно направляет только dev API в эту базу, выполняет Chromium
+с проверкой администрирования, первого входа, редактирования и немедленного
+отзыва прав, затем возвращает API к `oss_control_dev` и удаляет тестовую
+базу. Он не создаёт тестовые заявки в постоянной dev-БД. После выполнения
+проверьте `GET /api/v1/health/ready` и ревизию Alembic dev-БД.
+
+Временный пароль сотрудника показывается администратору только в ответе
+создания или сброса, после первого входа требует смены; PostgreSQL хранит
+лишь Argon2id-хеш. Временные пароли Chromium-теста генерируются в памяти и
+исчезают вместе с тестовой базой. Секреты dev-окружения и их резервные копии
+учитываются по [правилам владельца](secret-management.md).
+
 ## Границы текущего UI
 
 Stage 3C содержит карточку Subscriber 360 с provenance, несколькими услугами,

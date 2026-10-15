@@ -2,6 +2,8 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+browser_script=${OSS_BROWSER_SCRIPT:-$project_dir/dev/browser_e2e.cjs}
+test -r "$browser_script"
 install -d -m 700 "$project_dir/.dev-secrets/screenshots"
 if [ -f "$project_dir/.dev-secrets/netup-runtime.env" ]; then
   billing_mode=${OSS_BILLING_MODE:-NETUP}
@@ -36,7 +38,7 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/credentials/bezhan-password,dst=/run/bezhan-password,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/screenshots,dst=/run/screenshots" \
-  --mount "type=bind,src=$project_dir/dev/browser_e2e.cjs,dst=/run/browser_e2e.cjs,readonly" \
+  --mount "type=bind,src=$browser_script,dst=/run/browser_e2e.cjs,readonly" \
   oss-control-dev-browser:local bash -euc '
     mkdir -p "$HOME/.pki/nssdb"
     certutil -N -d "sql:$HOME/.pki/nssdb" --empty-password

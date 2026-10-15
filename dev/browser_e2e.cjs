@@ -31,7 +31,7 @@ async function login(browser, username, role) {
   await page.getByRole('heading', { name: /Добрый день/ }).waitFor()
   const session = (await context.cookies(`${origin}/api/v1/auth/me`)).find((cookie) => cookie.name === 'oss_session')
   if (!session || !session.httpOnly || !session.secure || session.sameSite !== 'Strict') throw new Error(`${role}: session cookie policy failed`)
-  expectStatus(await context.request.get(`${origin}/api/v1/tickets`), role === 'admin' ? 403 : 200, `${role} RBAC`)
+  expectStatus(await context.request.get(`${origin}/api/v1/tickets`), 200, `${role} RBAC`)
   return { context, page }
 }
 async function csrfToken(context) {
@@ -279,14 +279,15 @@ async function main() {
     await engineer.context.close()
 
     const admin = await login(browser, 'dev-admin', 'admin')
-    if (await admin.page.getByRole('link', { name: 'Новая заявка' }).count()) throw new Error('Admin sees ServiceDesk')
-    if (await admin.page.getByRole('link', { name: 'Абоненты' }).count()) throw new Error('Admin sees Subscriber 360')
+    if (!(await admin.page.getByRole('link', { name: 'Новая заявка' }).count())) throw new Error('Admin lacks ServiceDesk')
+    if (!(await admin.page.getByRole('link', { name: 'Абоненты' }).count())) throw new Error('Admin lacks Subscriber 360')
+    if (!(await admin.page.getByRole('link', { name: 'Пользователи' }).count())) throw new Error('Admin lacks user administration')
     await admin.context.close()
-    console.log('admin: ServiceDesk access denied')
+    console.log('admin: individual full-access grants passed')
 
     const bezhan = await login(browser, 'bezhan', 'engineer')
     const user = await (await bezhan.context.request.get(`${origin}/api/v1/auth/me`)).json()
-    if (user.user.role !== 'engineer' || user.permissions.includes('identity.manage')) throw new Error('Engineer permissions mismatch')
+    if (user.user.role !== 'engineer' || user.permissions.includes('users.manage')) throw new Error('Engineer permissions mismatch')
     await bezhan.page.getByRole('button', { name: 'Выйти' }).click()
     await bezhan.page.getByRole('heading', { name: 'Вход в систему' }).waitFor()
     await bezhan.page.locator('#username').fill('bezhan')
