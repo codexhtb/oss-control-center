@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { expect, it, vi } from 'vitest'
 import { OnuCard } from './OnuCard'
 import type { OnuResult } from './types'
+import { diagnosticSummary } from './onu-actions'
 
 it('shows GPON Serial without fabricating a MAC and keeps source times separate', () => {
   render(<OnuCard result={{
@@ -110,4 +111,83 @@ it('shows missing optical measurements and times explicitly without inventing a 
   expect(screen.queryByText('dBm')).not.toBeInTheDocument()
   expect(screen.queryByText('Ранее даты получения')).not.toBeInTheDocument()
   expect(screen.queryByText('Online')).not.toBeInTheDocument()
+})
+
+const confirmed: OnuResult = {
+  ...sample, association: 'MATCHED_BY_RULE',
+  match: { netup_port: 7, pon_port: 1, vlan: 101, olt_mapping_basis: 'manual_verified',
+    billing_observed_at: null, billing_source: 'NETUP', onu_source: 'LIBRENMS_BDCOM' },
+}
+
+it('copies exact confirmed EPON fields and a summary without a stale online reason', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  render(<OnuCard result={{ ...confirmed, candidates: [{ ...confirmed.candidates[0]!, reason: 'power-off' }] }} onRefresh={async () => confirmed} />)
+  for (const [label, value] of [
+    ['OLT', 'synthetic-olt'], ['интерфейс ONU', 'EPON0/1:17'],
+    ['MAC ONU', '02:00:00:00:00:01'], ['VLAN', '101'],
+  ]) {
+    fireEvent.click(screen.getByRole('button', { name: `Скопировать ${label}` }))
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(value))
+  }
+  expect(screen.queryByRole('button', { name: 'Скопировать Serial ONU' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать сводку' }))
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(diagnosticSummary(confirmed.candidates[0]!, 101, true)))
+  const summary = vi.mocked(writeText).mock.lastCall![0] as string
+  expect(summary).toContain('MAC: 02:00:00:00:00:01')
+  expect(summary).toContain('ONU Rx: -20 dBm')
+  expect(summary).toContain('Оптика измерена: 01.10.2026 04:10:00')
+  expect(summary).not.toContain('power-off')
+  expect(summary).not.toContain('IP:')
+  expect(summary).toContain('NetUP: историческая лабораторная копия')
+  expect(screen.getByRole('status')).toHaveTextContent('Скопировано')
+})
+
+it('copies GPON Serial, omits absent MAC and includes only current offline reason', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  const gpon: OnuResult = { ...confirmed, candidates: [{ ...confirmed.candidates[0]!,
+    pon_type: 'GPON', interface: 'GPON0/3:7', mac: null, serial: 'SYNTHETIC-SERIAL',
+    state: 'OFFLINE', reason: 'power-off', onu_tx_dbm: null, optical_measured_at: null,
+  }] }
+  render(<OnuCard result={gpon} onRefresh={async () => confirmed} />)
+  expect(screen.queryByRole('button', { name: 'Скопировать MAC ONU' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать Serial ONU' }))
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('SYNTHETIC-SERIAL'))
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать сводку' }))
+  await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
+  const summary = vi.mocked(writeText).mock.lastCall![0] as string
+  expect(summary).toContain('Serial: SYNTHETIC-SERIAL')
+  expect(summary).toContain('Причина отключения: power-off')
+  expect(summary).toContain('ONU Tx: Нет измерения')
+  expect(summary).toContain('Оптика измерена: Время неизвестно')
+  expect(summary).not.toContain('MAC:')
+})
+
+it('does not offer copying for ambiguous or unavailable ONU data', () => {
+  const { rerender } = render(<OnuCard result={sample} onRefresh={async () => confirmed} />)
+  expect(screen.queryByRole('button', { name: /Скопировать/ })).not.toBeInTheDocument()
+  rerender(<OnuCard result={{ ...confirmed, availability: 'UNAVAILABLE' }} onRefresh={async () => confirmed} />)
+  expect(screen.queryByRole('button', { name: /Скопировать/ })).not.toBeInTheDocument()
+  rerender(<OnuCard result={{ ...confirmed, candidates: [confirmed.candidates[0]!, confirmed.candidates[0]!] }} onRefresh={async () => confirmed} />)
+  expect(screen.queryByRole('button', { name: /Скопировать/ })).not.toBeInTheDocument()
+})
+
+it('refreshes once per click, reports success or source error, and preserves source timestamps', async () => {
+  let resolveRefresh!: () => void
+  const onRefresh = vi.fn(() => new Promise<OnuResult>((resolve) => { resolveRefresh = () => resolve(confirmed) }))
+  const { rerender } = render(<OnuCard result={confirmed} onRefresh={onRefresh} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить данные' }))
+  expect(screen.getByRole('button', { name: 'Обновляем…' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Обновляем…' }))
+  expect(onRefresh).toHaveBeenCalledTimes(1)
+  resolveRefresh()
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Данные обновлены'))
+  expect(screen.getByText('Наблюдение состояния ONU').parentElement).toHaveTextContent('10.10.2026 11:30:00')
+  rerender(<OnuCard result={confirmed} onRefresh={async () => { throw new Error('synthetic failure') }} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить данные' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Источник недоступен'))
+  rerender(<OnuCard result={confirmed} onRefresh={async () => ({ ...confirmed, availability: 'UNAVAILABLE' })} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить данные' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Источник недоступен'))
 })

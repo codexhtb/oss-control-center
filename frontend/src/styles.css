@@ -492,6 +492,12 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .onu-identifiers { grid-template-columns: 1fr 1fr 1fr; padding: 10px 0 13px; }
 .onu-identifiers .subscriber-fact > span { color: #b0c1c9; }
 .onu-identifiers .subscriber-fact > strong { color: #e2ecef; font-variant-numeric: tabular-nums; }
+.onu-copy { display: inline-flex; vertical-align: middle; align-items: center; justify-content: center; width: 25px; height: 25px; margin-left: 4px; padding: 0; border: 0; border-radius: 5px; color: #b9cbd0; background: transparent; }
+.onu-copy:hover { color: var(--accent); background: #273932; }
+.onu-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.onu-quick-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 12px; min-height: 28px; }
+.onu-quick-actions .button { min-height: 28px; padding: 2px 7px; font-size: 12px; font-weight: 600; }
+.onu-quick-actions [role="status"] { min-height: 1em; color: #adddcf; font-size: 11px; }
 .onu-optics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .onu-optic { display: grid; gap: 5px; }
 .onu-optic > span { font-size: 12px; color: #bfced4; }
