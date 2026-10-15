@@ -6,6 +6,7 @@ import { ApiError, errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { LoginPage } from '../features/auth/LoginPage'
+import { PasswordChangePage } from '../features/auth/PasswordChangePage'
 import { useSession } from '../features/auth/use-session'
 import { AppShell } from '../layout/AppShell'
 import { AccountPage } from '../pages/AccountPage'
@@ -14,6 +15,7 @@ import { TicketListPage } from '../pages/TicketListPage'
 import { TicketCreatePage } from '../pages/TicketCreatePage'
 import { TicketDetailPage } from '../pages/TicketDetailPage'
 import { SubscriberPage } from '../pages/SubscriberPage'
+import { UsersPage } from '../pages/UsersPage'
 import { queryClient } from './query-client'
 
 function AppRoutes() {
@@ -48,16 +50,19 @@ function AppRoutes() {
     )
   }
   if (!session.data) return <LoginPage onAuthenticated={sessionChanged} />
+  if (session.data.user.must_change_password) return <PasswordChangePage onChanged={sessionChanged} />
+  const canReadTickets = session.data.permissions.includes('tickets.read.all') || session.data.permissions.includes('tickets.read.own')
   return (
     <AppShell session={session.data} onLoggedOut={sessionChanged}>
       <Routes>
         <Route path="/" element={<WorkspacePage session={session.data} />} />
         <Route path="/account" element={<AccountPage session={session.data} />} />
-        <Route path="/tickets" element={session.data.permissions.includes('ticket.read') ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
-        <Route path="/tickets/new" element={session.data.permissions.includes('ticket.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
-        <Route path="/tickets/:id" element={session.data.permissions.includes('ticket.read') ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />
-        <Route path="/subscribers" element={session.data.permissions.includes('subscriber.read') ? <SubscriberPage session={session.data} /> : <Navigate to="/" replace />} />
-        <Route path="/subscribers/:lookupId" element={session.data.permissions.includes('subscriber.read') ? <SubscriberPage session={session.data} /> : <Navigate to="/" replace />} />
+        <Route path="/tickets" element={canReadTickets ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
+        <Route path="/tickets/new" element={session.data.permissions.includes('tickets.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
+        <Route path="/tickets/:id" element={canReadTickets ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />
+        <Route path="/users" element={session.data.permissions.includes('users.manage') ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/subscribers" element={session.data.permissions.includes('subscribers.read') ? <SubscriberPage session={session.data} /> : <Navigate to="/" replace />} />
+        <Route path="/subscribers/:lookupId" element={session.data.permissions.includes('subscribers.read') ? <SubscriberPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppShell>

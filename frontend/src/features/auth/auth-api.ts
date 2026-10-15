@@ -9,4 +9,8 @@ export const authApi = {
       json: { login, password },
     }),
   logout: () => apiRequest<{ status: 'logged_out' }>('/api/v1/auth/logout', { method: 'POST' }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    apiRequest<{ status: string }>('/api/v1/auth/password', {
+      method: 'POST', json: { current_password: currentPassword, new_password: newPassword },
+    }),
 }

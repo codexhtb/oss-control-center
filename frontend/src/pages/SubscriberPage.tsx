@@ -65,7 +65,7 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
   const sourceDate = subscriber.field_meta.billing_account?.observed_at || card.fetched_at
   return <>
     <div className="subscriber-heading"><div><p className="eyebrow">КАРТОЧКА АБОНЕНТА</p><h1>{subscriber.full_name || subscriber.organization_name || 'Имя неизвестно'}</h1><div className="subscriber-heading__meta"><span>ЛС {subscriber.billing_account}</span><span>Источник {card.source}</span><span><Clock3 size={14} /> {formatDate(sourceDate)}</span></div></div>
-      {session.permissions.includes('ticket.create') && <Link className="button button--primary" to={`/tickets/new?lookup=${encodeURIComponent(card.lookup_id)}`}>Создать заявку <ArrowRight size={16} /></Link>}
+      {session.permissions.includes('tickets.create') && <Link className="button button--primary" to={`/tickets/new?lookup=${encodeURIComponent(card.lookup_id)}`}>Создать заявку <ArrowRight size={16} /></Link>}
     </div>
     {subscriber.field_meta.billing_account?.quality === 'STALE' && <Notice tone="error">Данные лабораторной копии устарели. Сведения о состоянии услуг и балансе относятся к дате источника.</Notice>}
     {card.is_expired && <Notice tone="error">Для создания заявки карточку нужно обновить повторным поиском.</Notice>}
@@ -76,7 +76,7 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
       <div className="account-list">{card.accounts.length ? card.accounts.map((account) => <div key={account.account_id}><strong>ЛС {account.account_id}</strong><span>{account.is_primary ? 'Основной' : 'Дополнительный'}</span><Origin meta={account.field_meta.account_id} /></div>) : <p className="muted">Счета не представлены источником</p>}</div>
       <h3>Договоры</h3>{card.contracts.length ? card.contracts.map((contract) => <p key={contract.contract_id}>{contract.label || contract.contract_id}</p>) : <p className="muted">Номер договора UNKNOWN</p>}
     </section></div>
-    {session.permissions.includes('subscriber.finance.read') && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Финансовые сведения</h2><span className="subscriber-section-note">Только данные биллинга · не состояние подключения</span></div>
+    {session.permissions.includes('subscribers.finance.read') && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Финансовые сведения</h2><span className="subscriber-section-note">Только данные биллинга · не состояние подключения</span></div>
       {card.financial_accounts.length ? <div className="subscriber-facts subscriber-facts--three">{card.financial_accounts.map((account) => <div key={account.account_id} className="finance-account"><h3>ЛС {account.account_id}</h3><Fact label="Баланс · единица UTM5" value={account.balance} meta={account.field_meta.balance} /><Fact label="Кредит · единица UTM5" value={account.credit} meta={account.field_meta.credit} /><Fact label="Блокировка счёта" value={account.account_blocked === null ? null : account.account_blocked ? 'Да' : 'Нет'} meta={account.field_meta.account_blocked} /></div>)}</div> : <p className="muted">Финансовые данные UNKNOWN</p>}
     </section>}
     <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Услуги и тарифы</h2><span className="subscriber-section-note">Состояние на дату источника</span></div>

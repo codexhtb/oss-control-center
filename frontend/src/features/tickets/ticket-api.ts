@@ -20,6 +20,10 @@ export const ticketApi = {
   get: (id: string, signal?: AbortSignal) => apiRequest<TicketDetail>(ticketPath(id), { signal }),
   create: (payload: CreateTicketInput) =>
     apiRequest<Ticket>('/api/v1/tickets', { method: 'POST', json: payload }),
+  edit: (id: string, version: number, subject: string, description: string) =>
+    apiRequest<Ticket>(ticketPath(id), {
+      method: 'PATCH', json: { subject, description }, ifMatch: `"${version}"`,
+    }),
   engineers: (signal?: AbortSignal) =>
     apiRequest<Page<Engineer>>('/api/v1/tickets/assignable-engineers?size=100', { signal }),
   recentEvents: (size = 8, signal?: AbortSignal) =>

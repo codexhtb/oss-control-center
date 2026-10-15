@@ -22,7 +22,9 @@ export interface Ticket {
   connection_snapshot_id: string | null
   selected_service_id: string | null
   created_by: string
+  created_by_name?: string | null
   assigned_engineer_id: string | null
+  assigned_engineer_name?: string | null
   closed_by: string | null
   closed_decision_id: string | null
   closed_at: string | null
@@ -132,6 +134,7 @@ export interface TicketEvent {
   ticket_id: string
   event_type: string
   actor_id: string | null
+  actor_name?: string | null
   ticket_version: number
   occurred_at: string
   event_data: Record<string, unknown>
@@ -145,6 +148,7 @@ export interface TicketComment {
   id: string
   ticket_id: string
   author_id: string
+  author_name?: string | null
   body: string
   created_at: string
 }

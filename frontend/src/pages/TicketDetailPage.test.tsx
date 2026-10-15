@@ -32,8 +32,8 @@ function session(role: 'operator' | 'engineer'): MeResponse {
       display_name: 'Тестовый пользователь', role, is_active: true,
       created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     permissions: role === 'engineer'
-      ? ['subscriber.read', 'ticket.read', 'ticket.comment', 'ticket.start', 'ticket.assign', 'ticket.manual_diagnostic', 'diagnostics.run', 'ticket.decision', 'ticket.close']
-      : ['subscriber.read', 'ticket.read', 'ticket.comment'],
+      ? ['subscribers.read', 'tickets.read.all', 'tickets.comment', 'tickets.start', 'tickets.assign', 'tickets.diagnose', 'diagnostics.run', 'tickets.resolve', 'tickets.close']
+      : ['subscribers.read', 'tickets.read.all', 'tickets.comment'],
   }
 }
 

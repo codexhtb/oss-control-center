@@ -1,21 +1,25 @@
 export type Role = 'operator' | 'engineer' | 'admin'
 
 export type Permission =
-  | 'subscriber.read'
-  | 'subscriber.finance.read'
-  | 'ticket.read'
-  | 'ticket.create'
-  | 'ticket.comment'
-  | 'ticket.start'
-  | 'ticket.assign'
-  | 'ticket.field_work'
-  | 'ticket.manual_diagnostic'
+  | 'subscribers.read'
+  | 'subscribers.finance.read'
+  | 'tickets.read.all'
+  | 'tickets.read.own'
+  | 'tickets.edit.all'
+  | 'tickets.edit.own'
+  | 'tickets.create'
+  | 'tickets.comment'
+  | 'tickets.start'
+  | 'tickets.assign'
+  | 'tickets.field_work'
+  | 'tickets.diagnose'
   | 'diagnostics.run'
-  | 'ticket.decision'
-  | 'ticket.close'
-  | 'ticket.audit.read'
-  | 'field_dispatch.send'
-  | 'identity.manage'
+  | 'diagnostics.read'
+  | 'tickets.resolve'
+  | 'tickets.close'
+  | 'audit.read'
+  | 'users.manage'
+  | 'users.read'
 
 export interface User {
   id: string
@@ -23,6 +27,7 @@ export interface User {
   display_name: string
   role: Role
   is_active: boolean
+  must_change_password?: boolean
   created_at: string
   updated_at: string
 }

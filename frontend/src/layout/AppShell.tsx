@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Activity, ArrowRight, LayoutGrid, LogOut, PanelLeftClose, Search, Shield, Ticket, UserRound } from 'lucide-react'
+import { Activity, ArrowRight, LayoutGrid, LogOut, PanelLeftClose, Search, Shield, Ticket, UserRound, Users } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import type { MeResponse, Role } from '../shared/api/types'
@@ -48,11 +48,12 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
           <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}>
             <LayoutGrid size={18} /> <span>Обзор</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>
-          {session.permissions.includes('ticket.read') && <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Ticket size={18} /> <span>Заявки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
-          {session.permissions.includes('subscriber.read') && <NavLink to="/subscribers" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Search size={18} /> <span>Абоненты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
+          {(session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own')) && <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Ticket size={18} /> <span>Заявки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
+          {session.permissions.includes('subscribers.read') && <NavLink to="/subscribers" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Search size={18} /> <span>Абоненты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           <NavLink to="/account" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}>
             <UserRound size={18} /> <span>Мой доступ</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>
+          {session.permissions.includes('users.manage') && <NavLink to="/users" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Users size={18} /> <span>Пользователи</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
         </nav>
         <div className="sidebar__spacer" />
         <div className="sidebar__environment"><Activity size={15} /><span>Внутренний контур OSS</span></div>
@@ -64,7 +65,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
       <div className="shell-main">
         <header className="topbar">
           <div className="topbar__context"><span className="topbar__product">OSS CONTROL CENTER</span><span className="topbar__divider">/</span><span>Рабочее пространство</span></div>
-          <div className="topbar__right"><span className="topbar__secure"><Shield size={14} /> Защищённая сессия</span><span className="topbar__user">{session.user.login}</span></div>
+          <div className="topbar__right"><span className="topbar__secure"><Shield size={14} /> Защищённая сессия</span><span className="topbar__user">{session.user.display_name}</span></div>
         </header>
         <main id="main-content" className="main-content">
           {logout.isError && <Notice tone="error">Не удалось завершить сессию. {errorText(logout.error)}</Notice>}

@@ -17,7 +17,7 @@ const user: MeResponse = {
   user: { id: '00000000-0000-4000-8000-000000000001', login: 'synthetic',
     display_name: 'Тестовый оператор', role: 'operator', is_active: true,
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
-  permissions: ['ticket.read'],
+  permissions: ['tickets.read.all'],
 }
 
 function renderWorkspace(session: MeResponse) {
@@ -48,8 +48,8 @@ it('takes dashboard totals and recent events from ServiceDesk API', async () => 
 })
 
 it('does not request ServiceDesk information for technical admin', async () => {
-  renderWorkspace({ ...user, user: { ...user.user, role: 'admin' }, permissions: ['identity.manage'] })
-  expect(await screen.findByText(/Техническая роль администратора/)).toBeInTheDocument()
+  renderWorkspace({ ...user, user: { ...user.user, role: 'admin' }, permissions: ['users.manage'] })
+  expect(await screen.findByText(/Для просмотра заявок необходимо разрешение/)).toBeInTheDocument()
   expect(ticketApi.list).not.toHaveBeenCalled()
   expect(ticketApi.recentEvents).not.toHaveBeenCalled()
 })

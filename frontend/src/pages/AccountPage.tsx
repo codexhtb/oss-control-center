@@ -4,26 +4,31 @@ import { Panel } from '../shared/ui/Panel'
 import { roleLabel } from '../layout/AppShell'
 
 const permissionLabels: Partial<Record<Permission, string>> = {
-  'subscriber.read': 'Просмотр Subscriber 360',
-  'ticket.read': 'Просмотр заявок',
-  'ticket.create': 'Создание заявок',
-  'ticket.comment': 'Комментарии',
-  'ticket.start': 'Начало работы',
-  'ticket.assign': 'Назначение инженера',
-  'ticket.field_work': 'Запрос выездных работ',
-  'ticket.manual_diagnostic': 'Ручная диагностика',
+  'subscribers.read': 'Просмотр Subscriber 360',
+  'subscribers.finance.read': 'Финансовые сведения абонента',
+  'tickets.read.all': 'Просмотр заявок',
+  'tickets.read.own': 'Просмотр своих заявок',
+  'tickets.edit.all': 'Редактирование всех заявок',
+  'tickets.edit.own': 'Редактирование своих заявок',
+  'tickets.create': 'Создание заявок',
+  'tickets.comment': 'Комментарии',
+  'tickets.start': 'Начало работы',
+  'tickets.assign': 'Назначение инженера',
+  'tickets.field_work': 'Запрос выездных работ',
+  'tickets.diagnose': 'Ручная диагностика',
   'diagnostics.run': 'Проверка мониторинга',
-  'ticket.decision': 'Решения',
-  'ticket.close': 'Закрытие заявок',
-  'ticket.audit.read': 'Чтение аудита заявки',
-  'field_dispatch.send': 'Field Dispatch — функция следующего этапа',
-  'identity.manage': 'Управление учётными записями',
+  'diagnostics.read': 'Чтение диагностики',
+  'tickets.resolve': 'Решения',
+  'tickets.close': 'Закрытие заявок',
+  'audit.read': 'Чтение аудита заявки',
+  'users.manage': 'Управление учётными записями',
+  'users.read': 'Просмотр сотрудников',
 }
 
 export function AccountPage({ session }: { session: MeResponse }) {
   return (
     <div className="page page--account">
-      <div className="page-heading"><div><p className="eyebrow">УЧЁТНАЯ ЗАПИСЬ / ДОСТУП</p><h1>Мой доступ</h1><p className="page-heading__description">Роль и права получены из текущей серверной сессии.</p></div></div>
+      <div className="page-heading"><div><p className="eyebrow">УЧЁТНАЯ ЗАПИСЬ / ДОСТУП</p><h1>Мой доступ</h1><p className="page-heading__description">Разрешения получены с сервера и действуют для текущей учётной записи.</p></div></div>
       <div className="account-grid">
         <Panel className="identity-panel">
           <div className="panel-icon panel-icon--accent"><Fingerprint size={22} /></div>

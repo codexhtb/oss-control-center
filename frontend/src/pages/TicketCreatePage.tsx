@@ -63,7 +63,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
       navigate(`/tickets/${ticket.id}`)
     },
   })
-  const canCreate = session.permissions.includes('ticket.create')
+  const canCreate = session.permissions.includes('tickets.create')
   const linked = type === 'SUBSCRIBER_LINKED'
   const eligibleServices = card?.services.filter((service) => service.account_id === card.subscriber.billing_account) ?? []
   const ambiguousService = eligibleServices.length > 1

@@ -20,7 +20,7 @@ const operator: MeResponse = {
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   },
-  permissions: ['subscriber.read', 'ticket.read', 'ticket.create', 'ticket.comment'],
+  permissions: ['subscribers.read', 'tickets.read.all', 'tickets.create', 'tickets.comment'],
 }
 
 beforeEach(() => {
@@ -52,14 +52,14 @@ describe('session shell', () => {
     expect(vi.mocked(authApi.login)).toHaveBeenCalledWith('synthetic-operator', 'test-only')
   })
 
-  it('uses server permissions and never exposes ticket actions to admin', async () => {
+  it('uses individual permissions even for a restricted admin account', async () => {
     vi.mocked(authApi.me).mockResolvedValue({
       ...operator,
       user: { ...operator.user, role: 'admin' },
-      permissions: ['identity.manage'],
+      permissions: ['users.manage'],
     })
     render(<App />)
-    expect(await screen.findByText(/Техническая роль администратора/)).toBeInTheDocument()
+    expect(await screen.findByText(/Для просмотра заявок необходимо разрешение/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Заявки/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('link', { name: /Мой доступ/ }))
     await waitFor(() => expect(screen.getByText('Управление учётными записями')).toBeInTheDocument())

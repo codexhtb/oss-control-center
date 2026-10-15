@@ -48,7 +48,7 @@ const card: SubscriberCard = {
 function session(role: 'operator' | 'engineer'): MeResponse {
   return {
     user: { id: '00000000-0000-4000-8000-000000000003', login: role, display_name: role, role, is_active: true, created_at: timestamp, updated_at: timestamp },
-    permissions: role === 'operator' ? ['subscriber.read', 'subscriber.finance.read', 'ticket.create'] : ['subscriber.read', 'ticket.create', 'diagnostics.run'],
+    permissions: role === 'operator' ? ['subscribers.read', 'subscribers.finance.read', 'tickets.create'] : ['subscribers.read', 'tickets.create', 'diagnostics.run'],
   }
 }
 

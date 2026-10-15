@@ -21,6 +21,7 @@ export const priorityLabel: Record<TicketPriority, string> = {
 
 export const eventLabel: Record<string, string> = {
   ticket_created: 'Заявка создана',
+  ticket_edited: 'Заявка отредактирована',
   engineer_assigned: 'Назначен инженер',
   ticket_started: 'Работа начата',
   comment_added: 'Добавлен комментарий',

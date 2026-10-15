@@ -84,7 +84,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
               {!mutation.isPending && <ArrowRight size={17} aria-hidden="true" />}
             </Button>
           </form>
-          <p className="login-card__foot">Доступ определяется назначенной ролью. Самостоятельная регистрация недоступна.</p>
+          <p className="login-card__foot">Доступ определяется назначенными разрешениями. Самостоятельная регистрация недоступна.</p>
         </div>
       </div>
       <div className="login-footer">OSS CONTROL CENTER <span>•</span> ВНУТРЕННИЙ КОНТУР</div>

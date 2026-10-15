@@ -463,3 +463,12 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .onu-candidate__heading { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
 .onu-candidate .subscriber-facts { margin-bottom: .4rem; }
 .onu-candidate p { margin: .45rem 0 0; font-size: .8rem; }
+.permission-editor { display: grid; gap: 12px; width: 100%; }
+.permission-editor fieldset { min-width: 0; margin: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.permission-editor legend { padding: 0 5px; color: #dce9e5; font-size: 12px; font-weight: 650; }
+.permission-editor__grid { display: grid; gap: 8px; }
+.permission-editor__item { display: flex; align-items: center; gap: 8px; color: #b7c9c6; font-size: 12px; }
+.permission-editor__item input { accent-color: #78c9a7; }
+.user-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.temporary-password { display: inline-block; margin: 12px 0; padding: 10px 12px; border: 1px solid #577667; border-radius: 7px; color: #e8f5ed; font-size: 15px; overflow-wrap: anywhere; }
+.fact-item pre { max-height: 180px; overflow: auto; color: #9fb9b1; font-size: 11px; white-space: pre-wrap; }
