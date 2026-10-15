@@ -11,7 +11,7 @@ async function main() {
       ['bezhan', fs.readFileSync('/run/bezhan-password', 'utf8').trim()],
       ['dev-admin', users['dev-admin']],
     ]) {
-      const context = await browser.newContext({ ignoreHTTPSErrors: false, viewport: { width: 1600, height: 900 } })
+      const context = await browser.newContext({ ignoreHTTPSErrors: false, viewport: { width: 1600, height: 900 }, reducedMotion: 'reduce' })
       await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin })
       const page = await context.newPage()
       let mutationAttempted = false
@@ -56,7 +56,41 @@ async function main() {
       })
       if (position !== 'sticky') throw new Error('Desktop panel is not sticky')
       await panel.screenshot({ path: `/run/screenshots/ticket38-actions-${me.user.role}.png`, mask: [panel.locator('dd')] })
+      for (const [width, height] of [[1366, 768], [1440, 900], [1920, 1080], [390, 844]]) {
+        await page.setViewportSize({ width, height })
+        await page.evaluate(() => window.scrollTo(0, 0))
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+        const geometry = await page.evaluate(() => {
+          const rail = document.querySelector('.ticket-action-rail')
+          const main = document.querySelector('.ticket-detail-main')
+          const viewport = document.documentElement.clientWidth
+          return {
+            documentWidth: document.documentElement.scrollWidth,
+            viewport,
+            railPosition: getComputedStyle(rail).position,
+            railHeight: rail.clientHeight,
+            railContentHeight: rail.scrollHeight,
+            mainLeft: Math.round(main.getBoundingClientRect().left),
+            mainRight: Math.round(main.getBoundingClientRect().right),
+            clipped: [...document.querySelectorAll('.onu-identity, .onu-identifiers strong, .subscriber-summary, .ticket-action-panel')]
+              .filter((node) => node.getBoundingClientRect().width > 0 && node.scrollWidth > node.clientWidth + 2)
+              .map((node) => node.className || node.tagName).slice(0, 8),
+          }
+        })
+        if (geometry.documentWidth > geometry.viewport + 1 || geometry.mainLeft < 0 || geometry.mainRight > geometry.viewport + 1 || geometry.clipped.length) throw new Error(`Ticket content overflows at ${width}x${height}`)
+        if (width > 1150 && (geometry.railPosition !== 'sticky' || geometry.railHeight > height - 24)) throw new Error(`Ticket action panel obscures content at ${width}x${height}`)
+        if (width <= 1150 && geometry.railPosition !== 'static') throw new Error(`Ticket action panel should join document flow at ${width}x${height}`)
+        console.log(`Responsive ${me.user.role} ${width}x${height}: no page/identifier overflow; action panel ${geometry.railPosition}`)
+        await page.screenshot({ path: `/run/screenshots/ticket38-page-${me.user.role}-${width}x${height}.png`, mask: [
+          page.locator('.ticket-detail-heading h1'), page.locator('.ticket-description'), page.locator('.subscriber-summary'),
+          page.locator('.fact-list'), page.locator('.history-list'), page.locator('.ticket-meta dd'),
+          page.locator('.topbar__user'), page.locator('.onu-identity'), page.locator('.onu-identifiers'),
+        ] })
+      }
+      await page.setViewportSize({ width: 1600, height: 900 })
       const diagnostics = page.locator('section.detail-panel').filter({ has: page.getByRole('heading', { name: 'Диагностика подключения', exact: true }) })
+      const emptyCommentAction = page.getByRole('button', { name: 'Сохранить комментарий' })
+      if (await emptyCommentAction.count() && !await emptyCommentAction.isDisabled()) throw new Error('Empty comment action is unexpectedly enabled')
       const candidate = diagnostics.locator('.onu-candidate')
       await candidate.waitFor()
       const item = onu.candidates[0]
@@ -105,9 +139,11 @@ async function main() {
       if (onu.limitations.includes('netup_topology_stale')) await diagnostics.getByText('NetUP: историческая лабораторная копия.', { exact: true }).waitFor({ state: 'visible' })
       const oltDetails = diagnostics.locator('details').filter({ has: page.getByText('Проверка OLT в мониторинге', { exact: true }) })
       if (await oltDetails.evaluate((node) => node.open)) throw new Error('OLT checks open by default')
-      await oltDetails.locator(':scope > summary').click()
+      await oltDetails.locator(':scope > summary').focus()
+      await oltDetails.locator(':scope > summary').press('Enter')
+      if (!await oltDetails.evaluate((node) => node.open)) throw new Error('OLT disclosure cannot be opened with keyboard')
       if (ticket.status !== 'CLOSED') await oltDetails.getByRole('button', { name: 'Проверить OLT', exact: true }).waitFor({ state: 'visible' })
-      await oltDetails.locator(':scope > summary').click()
+      await oltDetails.locator(':scope > summary').press('Enter')
       await diagnostics.screenshot({ path: `/run/screenshots/ticket38-diagnostics-${me.user.role}.png`, mask: [identifiers.locator('strong'), candidate.locator('.onu-identity strong')] })
       for (const width of [820, 390]) {
         await page.setViewportSize({ width, height: 844 })
@@ -121,7 +157,41 @@ async function main() {
         const rx = await candidate.getByRole('group', { name: 'ONU Rx', exact: true }).boundingBox()
         const oltRx = await candidate.getByRole('group', { name: 'OLT Rx', exact: true }).boundingBox()
         if (!rx || !oltRx || Math.abs(rx.y - oltRx.y) > 1 || rx.x >= oltRx.x) throw new Error(`Rx values are not adjacent at ${width}`)
+        if (width === 390) await diagnostics.screenshot({ path: `/run/screenshots/ticket38-diagnostics-${me.user.role}-390.png`, mask: [candidate.locator('.onu-identity'), identifiers] })
       }
+      const longNamesFit = await candidate.evaluate((node) => {
+        const interfaceName = node.querySelector('.onu-identity strong')
+        const serial = node.querySelector('.onu-identifiers .subscriber-fact:nth-child(2) strong')
+        interfaceName.textContent = `GPON0/3:${'9'.repeat(90)}`
+        serial.textContent = `SYNTHETIC-SERIAL-${'A'.repeat(90)}`
+        return [interfaceName, serial].every((item) => item.scrollWidth <= item.clientWidth + 2)
+          && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+      })
+      if (!longNamesFit) throw new Error('Long ONU identifiers are clipped on mobile')
+      if (deletable) {
+        const more = panel.locator('details.ticket-action-panel__more')
+        await more.locator(':scope > summary').focus()
+        await more.locator(':scope > summary').press('Enter')
+        if (!await more.evaluate((node) => node.open)) throw new Error('More actions cannot be opened with keyboard')
+        await more.getByRole('button', { name: 'Удалить', exact: true }).press('Enter')
+        const reason = more.getByRole('textbox', { name: 'Причина (необязательно)' })
+        if (!await reason.evaluate((node) => node === document.activeElement)) throw new Error('Delete confirmation did not receive focus')
+        await reason.press('Escape')
+        if (!await more.getByRole('button', { name: 'Удалить', exact: true }).evaluate((node) => node === document.activeElement)) throw new Error('Cancel did not restore focus')
+      }
+      await page.setViewportSize({ width: 1366, height: 768 })
+      const assignDisclosure = panel.locator('details.ticket-action-disclosure').filter({ hasText: 'Назначить инженера' })
+      if (await assignDisclosure.count()) {
+        await assignDisclosure.locator(':scope > summary').focus()
+        await assignDisclosure.locator(':scope > summary').press('Enter')
+        if (!await assignDisclosure.evaluate((node) => node.open)) throw new Error('Assignment disclosure cannot be opened with keyboard')
+      }
+      const shortScreen = await panel.evaluate((node) => {
+        const rail = node.getBoundingClientRect()
+        const main = document.querySelector('.ticket-detail-main').getBoundingClientRect()
+        return { top: rail.top, bottom: rail.bottom, height: node.clientHeight, scrollHeight: node.scrollHeight, mainRight: main.right, railLeft: rail.left }
+      })
+      if (shortScreen.height > 744 || shortScreen.mainRight + 12 > shortScreen.railLeft || shortScreen.top < 0 || shortScreen.bottom > 768) throw new Error('Expanded actions overlap content on a short laptop screen')
       let subscriberChecked = false
       if (ticket.subscriber_snapshot_id && ticket.connection_snapshot_id) {
         const lookupResponse = await context.request.get(`${origin}/api/v1/subscriber-lookups/${ticket.subscriber_snapshot_id}`)

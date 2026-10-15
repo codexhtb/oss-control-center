@@ -138,6 +138,9 @@ it('shows an engineer a monitoring result and requires a separate confirm action
 it('shows PON diagnostics in one section and keeps equipment checks available on demand', async () => {
   vi.mocked(ticketApi.get).mockResolvedValue({
     ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'IN_PROGRESS',
+    account_no: 'SYNTHETIC-ACCOUNT',
+    subscriber: { full_name: 'Синтетический абонент', organization_name: null, phone: null,
+      actual_address: null, fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
     connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
     selected_connection: { id: '00000000-0000-4000-8000-000000000041',
       access_type: 'UNKNOWN', device: 'synthetic-olt', port: '7', vlan: '101',
@@ -163,6 +166,11 @@ it('shows PON diagnostics in one section and keeps equipment checks available on
   renderDetail('engineer')
   expect(await screen.findByText(/EPON0\/1:17/)).toBeInTheDocument()
   expect(screen.getAllByRole('heading', { name: 'Диагностика подключения' })).toHaveLength(1)
+  const diagnosticsHeading = screen.getByRole('heading', { name: 'Диагностика подключения' })
+  const subscriberHeading = screen.getByRole('heading', { name: 'Абонент и подключение' })
+  const commentHeading = screen.getByRole('heading', { name: 'Комментарии' })
+  expect(diagnosticsHeading.compareDocumentPosition(subscriberHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(subscriberHeading.compareDocumentPosition(commentHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'BDCOM ONU' })).not.toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Мониторинг подключения' })).not.toBeInTheDocument()
   expect(screen.queryByText('power-off')).not.toBeInTheDocument()
@@ -218,6 +226,10 @@ it('groups metadata and permitted OPEN actions in one panel, with deletion behin
   fireEvent.click(panel.getByText('Дополнительно'))
   fireEvent.click(panel.getByRole('button', { name: 'Удалить' }))
   expect(panel.getByRole('group', { name: 'Подтверждение удаления' })).toHaveTextContent('№73 «Проверка OSS»')
+  expect(panel.getByRole('textbox', { name: 'Причина (необязательно)' })).toHaveFocus()
+  fireEvent.keyDown(panel.getByRole('group', { name: 'Подтверждение удаления' }), { key: 'Escape' })
+  await waitFor(() => expect(panel.getByRole('button', { name: 'Удалить' })).toHaveFocus())
+  fireEvent.click(panel.getByRole('button', { name: 'Удалить' }))
   expect(ticketApi.remove).not.toHaveBeenCalled()
   fireEvent.change(panel.getByRole('textbox', { name: 'Причина (необязательно)' }), { target: { value: 'Дубликат' } })
   fireEvent.click(panel.getByRole('button', { name: 'Подтвердить удаление' }))
