@@ -33,6 +33,7 @@ docker run --rm --user 1001:1001 --shm-size=1g --cap-drop=ALL \
   --env OSS_BDCOM_EXPECT_CONNECTED \
   --env OSS_ONU_MATCH_ONLY \
   --env OSS_EXPECT_PON_TYPE \
+  --env OSS_DISPOSABLE_DB \
   "$@" \
   --mount "type=bind,src=$project_dir/.dev-secrets/certs/ca.crt,dst=/run/dev-ca.crt,readonly" \
   --mount "type=bind,src=$project_dir/.dev-secrets/users.json,dst=/run/dev-users.json,readonly" \

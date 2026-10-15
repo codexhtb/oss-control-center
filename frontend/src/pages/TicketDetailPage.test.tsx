@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ticketApi } from '../features/tickets/ticket-api'
@@ -11,6 +11,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
   decisions: vi.fn(), engineers: vi.fn(), start: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
+  assign: vi.fn(), requestFieldWork: vi.fn(), addDecision: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
 
 const ticketId = '00000000-0000-4000-8000-000000000010'
@@ -38,13 +39,13 @@ function session(role: 'operator' | 'engineer'): MeResponse {
   }
 }
 
-function renderDetail(role: 'operator' | 'engineer') {
+function renderDetail(role: 'operator' | 'engineer', customSession?: MeResponse) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/tickets/${ticketId}`]}><Routes><Route path="/tickets/:id" element={<TicketDetailPage session={session(role)} />} /><Route path="/subscribers/:lookupId" element={<div>Карточка абонента открыта</div>} /></Routes></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[`/tickets/${ticketId}`]}><Routes><Route path="/tickets/:id" element={<TicketDetailPage session={customSession || session(role)} />} /><Route path="/subscribers/:lookupId" element={<div>Карточка абонента открыта</div>} /></Routes></MemoryRouter></QueryClientProvider>)
 }
 
 beforeEach(() => {
-  for (const fn of [ticketApi.get, ticketApi.comments, ticketApi.history, ticketApi.diagnostics, ticketApi.decisions, ticketApi.engineers, ticketApi.start, ticketApi.addComment, ticketApi.lookup, ticketApi.checkTicket, ticketApi.confirmCheck, ticketApi.ticketOnu]) vi.mocked(fn).mockReset()
+  for (const fn of Object.values(ticketApi)) vi.mocked(fn).mockReset()
   vi.mocked(ticketApi.get).mockResolvedValue(base)
   vi.mocked(ticketApi.comments).mockResolvedValue(empty)
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
@@ -178,4 +179,80 @@ it('keeps equipment monitoring primary for a confirmed Ethernet connection', asy
   expect(screen.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
   expect(screen.queryByText('Дополнительные проверки оборудования')).not.toBeInTheDocument()
   expect(ticketApi.ticketOnu).not.toHaveBeenCalled()
+})
+
+it('groups metadata and permitted OPEN actions in one panel, with deletion behind confirmation', async () => {
+  const admin: MeResponse = { ...session('engineer'), user: { ...session('engineer').user, role: 'admin' },
+    permissions: [...session('engineer').permissions, 'tickets.delete.all'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, created_by_name: 'Автор теста', assigned_engineer_name: 'Инженер теста', assigned_engineer_id: 'engineer-id' })
+  vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [{ id: 'other-engineer', display_name: 'Другой инженер' }], page: 1, size: 100, total: 1 })
+  vi.mocked(ticketApi.assign).mockResolvedValue(base)
+  vi.mocked(ticketApi.remove).mockResolvedValue({ ...base, deleted_at: base.updated_at })
+  renderDetail('engineer', admin)
+  const panel = within(await screen.findByRole('complementary', { name: 'Управление заявкой' }))
+  expect(panel.getByRole('heading', { name: 'Заявка #73' })).toBeInTheDocument()
+  expect(panel.getByText('Автор теста')).toBeInTheDocument()
+  expect(panel.getByText('Инженер теста')).toBeInTheDocument()
+  expect(panel.getByText('Открыта')).toBeInTheDocument()
+  expect(panel.queryByRole('button', { name: 'Записать решение' })).not.toBeInTheDocument()
+  expect(panel.queryByRole('button', { name: 'Закрыть заявку' })).not.toBeInTheDocument()
+  fireEvent.click(panel.getByText('Назначить инженера'))
+  fireEvent.change(await panel.findByRole('combobox', { name: 'Активный инженер' }), { target: { value: 'other-engineer' } })
+  fireEvent.click(panel.getByRole('button', { name: 'Назначить' }))
+  await waitFor(() => expect(ticketApi.assign).toHaveBeenCalledWith(ticketId, 'other-engineer', 3))
+  expect(panel.getByRole('button', { name: 'Удалить' })).not.toBeVisible()
+  fireEvent.click(panel.getByText('Дополнительно'))
+  fireEvent.click(panel.getByRole('button', { name: 'Удалить' }))
+  expect(panel.getByRole('group', { name: 'Подтверждение удаления' })).toHaveTextContent('№73 «Проверка OSS»')
+  expect(ticketApi.remove).not.toHaveBeenCalled()
+  fireEvent.change(panel.getByRole('textbox', { name: 'Причина (необязательно)' }), { target: { value: 'Дубликат' } })
+  fireEvent.click(panel.getByRole('button', { name: 'Подтвердить удаление' }))
+  await waitFor(() => expect(ticketApi.remove).toHaveBeenCalledWith(ticketId, 3, 'Дубликат'))
+})
+
+it('focuses the decision form and closes only after a saved decision using the fresh version', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  const decision = { id: 'decision-id', ticket_id: ticketId, engineer_id: session('engineer').user.id,
+    decision_text: 'Результат', performed_actions: 'Проверка', created_at: base.created_at }
+  vi.mocked(ticketApi.addDecision).mockImplementation(async () => {
+    vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', version: 4 })
+    vi.mocked(ticketApi.decisions).mockResolvedValue({ ...empty, items: [decision], total: 1 })
+    return decision
+  })
+  vi.mocked(ticketApi.close).mockResolvedValue({ ...base, status: 'CLOSED', version: 5 })
+  renderDetail('engineer')
+  const panel = within(await screen.findByRole('complementary', { name: 'Управление заявкой' }))
+  expect(panel.queryByRole('button', { name: /Взять в работу/ })).not.toBeInTheDocument()
+  expect(panel.queryByText('Закрытие заявки')).not.toBeInTheDocument()
+  fireEvent.click(panel.getByRole('button', { name: 'Записать решение' }))
+  const input = screen.getByRole('textbox', { name: 'Итоговое решение' })
+  expect(input).toHaveFocus()
+  fireEvent.change(input, { target: { value: 'Результат' } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Выполненные действия' }), { target: { value: 'Проверка' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить решение' }))
+  await waitFor(() => expect(ticketApi.addDecision).toHaveBeenCalledWith(ticketId, 'Результат', 'Проверка'))
+  fireEvent.click(await panel.findByText('Закрытие заявки'))
+  fireEvent.click(panel.getByRole('button', { name: 'Закрыть заявку' }))
+  await waitFor(() => expect(ticketApi.close).toHaveBeenCalledWith(ticketId, 'decision-id', 4))
+})
+
+it.each(['operator', 'admin'] as const)('uses grants rather than role name for %s', async (role) => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  renderDetail('operator', { ...session('operator'), user: { ...session('operator').user, role } })
+  const panel = within(await screen.findByRole('complementary', { name: 'Управление заявкой' }))
+  expect(panel.queryByText('Назначить инженера')).not.toBeInTheDocument()
+  expect(panel.queryByText('Выездные работы')).not.toBeInTheDocument()
+  for (const button of panel.queryAllByRole('button')) expect(button).not.toBeVisible()
+  expect(panel.queryByText('Дополнительно')).not.toBeInTheDocument()
+})
+
+it.each([true, false])('applies delete.own to ownership, own=%s, including CLOSED tickets', async (own) => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'CLOSED', created_by: own ? base.created_by : 'another-author' })
+  const staff = session('engineer')
+  renderDetail('engineer', { ...staff, permissions: [...staff.permissions, 'tickets.delete.own'] })
+  const panel = within(await screen.findByRole('complementary', { name: 'Управление заявкой' }))
+  for (const button of panel.queryAllByRole('button')) expect(button).not.toBeVisible()
+  expect(panel.queryByText('Назначить инженера')).not.toBeInTheDocument()
+  expect(panel.queryByText('Выездные работы')).not.toBeInTheDocument()
+  expect(panel.queryByText('Дополнительно') !== null).toBe(own)
 })

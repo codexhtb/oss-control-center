@@ -73,6 +73,7 @@ async function main() {
     await login(staffPage, staffLogin, changedPassword)
 
     const own = await createTicket(staffPage, 'Своя тестовая заявка')
+    await staffPage.getByText('Дополнительно', { exact: true }).click()
     await staffPage.getByRole('button', { name: 'Удалить', exact: true }).click()
     await staffPage.getByText(new RegExp(`Удалить заявку №${own.number}`)).waitFor()
     const ownDelete = staffPage.waitForResponse((response) => response.url().endsWith(`/api/v1/tickets/${own.id}`) && response.request().method() === 'DELETE')
@@ -98,6 +99,7 @@ async function main() {
     expectStatus(await admin.request.get(`${origin}/api/v1/tickets/${own.id}`), 200, 'Restored ticket visible')
 
     await adminPage.goto(`${origin}/tickets/${foreign.id}`)
+    await adminPage.getByText('Дополнительно', { exact: true }).click()
     await adminPage.getByRole('button', { name: 'Удалить', exact: true }).click()
     const foreignDelete = adminPage.waitForResponse((response) => response.url().endsWith(`/api/v1/tickets/${foreign.id}`) && response.request().method() === 'DELETE')
     await adminPage.getByRole('button', { name: 'Подтвердить удаление' }).click()

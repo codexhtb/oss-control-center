@@ -104,6 +104,7 @@ async function checkNetupLabLookup(page, expectFinance = true, returnCard = fals
 async function processTicket(page, ticket, engineerId) {
   await page.goto(`${origin}/tickets/${ticket.id}`)
   await page.getByRole('heading', { name: ticket.subject }).waitFor()
+  await page.getByText('Назначить инженера', { exact: true }).click()
   await page.getByRole('combobox', { name: 'Активный инженер' }).selectOption(engineerId)
   await postResponse(page, `/tickets/${ticket.id}/assignment`, 'Назначить')
   const stale = await page.context().request.post(`${origin}/api/v1/tickets/${ticket.id}/start`, {
@@ -115,10 +116,11 @@ async function processTicket(page, ticket, engineerId) {
   await postResponse(page, `/tickets/${ticket.id}/manual-diagnostics`, 'Записать диагностику', 201)
   await page.getByRole('textbox', { name: 'Итоговое решение' }).fill('Синтетическое решение инженера.')
   await page.getByRole('textbox', { name: 'Выполненные действия' }).fill('Синтетические выполненные действия.')
-  await postResponse(page, `/tickets/${ticket.id}/decisions`, 'Записать решение', 201)
+  await postResponse(page, `/tickets/${ticket.id}/decisions`, 'Сохранить решение', 201)
+  await page.getByText('Закрытие заявки', { exact: true }).click()
   await page.getByRole('combobox', { name: 'Решение для закрытия' }).selectOption({ index: 1 })
   await postResponse(page, `/tickets/${ticket.id}/close`, 'Закрыть заявку')
-  await page.getByText(/Заявка закрыта инженером/).waitFor()
+  await page.getByRole('complementary', { name: 'Управление заявкой' }).getByText(/Закрыта .*История доступна/).waitFor()
   const saved = await page.request.get(`${origin}/api/v1/tickets/${ticket.id}`)
   expectStatus(saved, 200, 'Ticket reload')
   if ((await saved.json()).status !== 'CLOSED') throw new Error('Closed status was not persisted')

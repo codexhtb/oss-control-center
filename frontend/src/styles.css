@@ -424,6 +424,23 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .action-panel { border-color: #4a7162; background: #1a2a28; }
 .close-panel { border-color: #4e655d; background: #202b29; }
 .closed-note { padding: 16px; border: 1px solid #3c4c50; border-radius: 9px; background: #1d282b; color: #a9b9bd; font-size: 11px; line-height: 1.6; }
+.ticket-action-rail { max-height: calc(100dvh - 40px); overflow-y: auto; scrollbar-width: thin; overscroll-behavior-y: contain; }
+.ticket-action-panel { display: grid; gap: 14px; padding: 18px; }
+.ticket-action-panel__header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ticket-action-panel__header h2 { margin: 0; font-size: 15px; color: #e8f1f0; }
+.ticket-action-panel__state { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.ticket-action-panel .ticket-meta > div { padding: 8px 0; }
+.ticket-action-panel__actions { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ticket-action-panel .button { min-height: 34px; padding: 7px 10px; font-size: 12px; justify-content: center; }
+.ticket-action-disclosure { font-size: 12px; }
+.ticket-action-disclosure > summary { padding: 8px 0; cursor: pointer; font-weight: 600; color: #c9dad6; }
+.ticket-action-disclosure[open] > summary { margin-bottom: 5px; }
+.ticket-action-form { display: grid; gap: 12px; }
+.ticket-action-form .field { min-width: 0; }
+.ticket-action-form .field select { max-width: 100%; }
+.ticket-action-panel__more { border-top: 1px solid var(--line); padding-top: 6px; }
+.ticket-action-panel .ticket-danger-action { color: #ffaaa1; }
+@media (max-width: 1150px) { .ticket-detail-layout > .ticket-action-rail { position: static; grid-row: 1; grid-template-columns: 1fr; max-height: none; overflow: visible; } }
 .dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-bottom: 20px; }
 .metric-card { position: relative; display: grid; gap: 7px; min-height: 133px; padding: 19px 20px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); transition: border-color .16s, transform .16s; }
 .metric-card:hover { border-color: #5a8a79; transform: translateY(-2px); }
