@@ -11,6 +11,7 @@ from app.core.errors import ApiError
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role
+from app.modules.tickets.duplicates import active_count, lock_subscriber
 from app.modules.tickets.models import (
     ConnectionSnapshot,
     DiagnosticCheck,
@@ -252,8 +253,18 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
     snapshot_id = None
     selected_service = None
     selected = None
+    duplicate_reason = payload.duplicate_reason
     if payload.ticket_type == TicketType.SUBSCRIBER_LINKED:
         account_no, snapshot_id, selected_service, selected = _linked_source(db, actor_id, payload)
+        snapshot = db.get(SubscriberSnapshot, snapshot_id)
+        lock_subscriber(db, snapshot)
+        if active_count(db, snapshot):
+            if payload.duplicate_reason is None:
+                raise ApiError(
+                    409,
+                    "active_ticket_exists",
+                    "An active ticket exists for this subscriber; check it before creating another",
+                )
     ticket = Ticket(
         ticket_type=payload.ticket_type,
         account_no=account_no,
@@ -271,7 +282,10 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
     db.add(ticket)
     try:
         db.flush()
-        _fact(db, ticket, actor_id, "ticket_created", {"status": TicketStatus.OPEN})
+        event_data = {"status": TicketStatus.OPEN}
+        if duplicate_reason is not None:
+            event_data["duplicate_reason"] = duplicate_reason
+        _fact(db, ticket, actor_id, "ticket_created", event_data)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -349,6 +363,16 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         or ticket.subject != payload.subject
         or ticket.priority != payload.priority
     ):
+        raise ApiError(409, "request_id_conflict", "Request ID was used for different content")
+    created_event = db.scalar(
+        select(TicketEvent).where(
+            TicketEvent.ticket_id == ticket.id, TicketEvent.event_type == "ticket_created"
+        )
+    )
+    recorded_reason = (
+        created_event.event_data.get("duplicate_reason") if created_event is not None else None
+    )
+    if recorded_reason != payload.duplicate_reason:
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")
     if payload.ticket_type != TicketType.SUBSCRIBER_LINKED:
         return ticket, False

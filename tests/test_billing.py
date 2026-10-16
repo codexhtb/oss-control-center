@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Event
+from threading import Barrier, Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -34,9 +34,15 @@ from app.modules.billing.provider import BillingAccount, BillingUnavailable, Fin
 from app.modules.billing.quality import DataQuality, FieldOrigin
 from app.modules.billing.service import create_lookup
 from app.modules.identity.crypto import hash_password
-from app.modules.identity.models import User
-from app.modules.identity.roles import Role
-from app.modules.tickets.models import ConnectionSnapshot, SubscriberSnapshot, Ticket, TicketAudit
+from app.modules.identity.models import User, UserPermission
+from app.modules.identity.roles import Permission, Role
+from app.modules.tickets.models import (
+    ConnectionSnapshot,
+    SubscriberSnapshot,
+    Ticket,
+    TicketAudit,
+    TicketEvent,
+)
 from app.modules.tickets.schemas import CreateTicket
 from app.modules.tickets.service import create_ticket, ticket_detail
 
@@ -240,6 +246,18 @@ def test_subscriber_history_includes_other_account_of_same_source(
     assert history.status_code == 200
     assert history.json()["total"] == 1
     assert history.json()["items"][0]["id"] == created.json()["id"]
+    active = billing_client.get(
+        f"/api/v1/subscriber-lookups/{second.json()['lookup_id']}/active-tickets"
+    )
+    assert active.status_code == 200
+    assert active.json()["total_visible"] == 1
+    assert active.json()["items"][0]["id"] == created.json()["id"]
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(second.json())
+        ).json()["code"]
+        == "active_ticket_exists"
+    )
     assert (
         billing_client.get(
             f"/api/v1/subscriber-lookups/{second.json()['lookup_id']}/tickets?page=0"
@@ -765,3 +783,187 @@ def test_upgrade_existing_ticket_from_0003(
             }
     finally:
         engine.dispose()
+
+
+def test_active_ticket_warning_override_and_inactive_tickets(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    admin = seed_user(billing_engine, "duplicate_admin", Role.ADMIN)
+    login(billing_client, admin.login)
+    card = lookup(billing_client, "MOCK-ETH-001").json()
+    path = f"/api/v1/subscriber-lookups/{card['lookup_id']}/active-tickets"
+    assert billing_client.get(path).json()["total_visible"] == 0
+    first = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+    )
+    assert first.status_code == 201
+    result = billing_client.get(path)
+    assert result.status_code == 200
+    assert result.headers["Cache-Control"] == "no-store"
+    assert result.json()["items"][0]["number"] == first.json()["number"]
+    assert result.json()["total_visible"] == 1
+    rejected = billing_client.post(
+        "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "active_ticket_exists"
+    assert "number" not in rejected.json()
+    payload = {**ticket_payload(card), "duplicate_reason": "Separate synthetic issue"}
+    second = billing_client.post("/api/v1/tickets", headers=csrf(billing_client), json=payload)
+    assert second.status_code == 201
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=payload
+        ).status_code
+        == 200
+    )
+    assert (
+        billing_client.post(
+            "/api/v1/tickets",
+            headers=csrf(billing_client),
+            json={**payload, "duplicate_reason": "Changed reason"},
+        ).json()["code"]
+        == "request_id_conflict"
+    )
+    assert billing_client.get(path).json()["total_visible"] == 2
+    assert billing_client.get(f"{path}?size=1&page=2").json()["total_visible"] == 2
+    assert billing_client.get(f"{path}?size=51").status_code == 422
+    assert (
+        billing_client.post(
+            "/api/v1/tickets",
+            headers=csrf(billing_client),
+            json={**ticket_payload(card), "duplicate_reason": "  "},
+        ).status_code
+        == 422
+    )
+    assert (
+        billing_client.post(
+            "/api/v1/tickets",
+            headers=csrf(billing_client),
+            json={
+                "ticket_type": "MANUAL",
+                "description": "Manual",
+                "duplicate_reason": "Other",
+                "client_request_id": str(uuid4()),
+            },
+        ).status_code
+        == 422
+    )
+    with Session(billing_engine) as db:
+        event = db.scalar(
+            select(TicketEvent).where(
+                TicketEvent.ticket_id == UUID(second.json()["id"]),
+                TicketEvent.event_type == "ticket_created",
+            )
+        )
+        assert event.event_data["duplicate_reason"] == "Separate synthetic issue"
+    start = billing_client.post(
+        f"/api/v1/tickets/{first.json()['id']}/start",
+        headers={**csrf(billing_client), "If-Match": '"1"'},
+    )
+    assert start.status_code == 200
+    assert {item["status"] for item in billing_client.get(path).json()["items"]} == {
+        "OPEN",
+        "IN_PROGRESS",
+    }
+    decision = billing_client.post(
+        f"/api/v1/tickets/{first.json()['id']}/decisions",
+        headers=csrf(billing_client),
+        json={"decision_text": "Synthetic resolution", "performed_actions": "Verified"},
+    )
+    assert decision.status_code == 201
+    version = billing_client.get(f"/api/v1/tickets/{first.json()['id']}").json()["version"]
+    closed = billing_client.post(
+        f"/api/v1/tickets/{first.json()['id']}/close",
+        headers={**csrf(billing_client), "If-Match": f'"{version}"'},
+        json={"decision_id": decision.json()["id"]},
+    )
+    assert closed.status_code == 200
+    deleted = billing_client.request(
+        "DELETE",
+        f"/api/v1/tickets/{second.json()['id']}",
+        headers={**csrf(billing_client), "If-Match": '"1"'},
+        json={},
+    )
+    assert deleted.status_code == 200
+    assert billing_client.get(path).json()["total_visible"] == 0
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+        ).status_code
+        == 201
+    )
+
+
+def test_hidden_active_ticket_does_not_disclose_details(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    owner = seed_user(billing_engine, "duplicate_owner", Role.OPERATOR)
+    restricted = seed_user(billing_engine, "duplicate_restricted", Role.OPERATOR)
+    login(billing_client, owner.login)
+    owner_card = lookup(billing_client, "MOCK-ETH-001").json()
+    first = billing_client.post(
+        "/api/v1/tickets",
+        headers=csrf(billing_client),
+        json={**ticket_payload(owner_card), "subject": "Private synthetic subject"},
+    )
+    assert first.status_code == 201
+    with Session(billing_engine) as db:
+        user = db.get(User, restricted.id)
+        user.permissions_customized = True
+        db.add_all(
+            UserPermission(user_id=restricted.id, permission=permission)
+            for permission in (
+                Permission.SUBSCRIBER_READ,
+                Permission.TICKET_CREATE,
+                Permission.TICKET_READ_OWN,
+            )
+        )
+        db.commit()
+    login(billing_client, restricted.login)
+    card = lookup(billing_client, "MOCK-ETH-001").json()
+    response = billing_client.get(f"/api/v1/subscriber-lookups/{card['lookup_id']}/active-tickets")
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["has_hidden_active"] is True
+    assert "Private synthetic subject" not in response.text
+    assert "number" not in response.json()
+    assert (
+        billing_client.post(
+            "/api/v1/tickets", headers=csrf(billing_client), json=ticket_payload(card)
+        ).json()["code"]
+        == "active_ticket_exists"
+    )
+    assert billing_client.get(f"/api/v1/tickets/{first.json()['id']}").status_code == 404
+
+
+def test_parallel_linked_creates_are_serialized_by_subscriber(
+    billing_engine: Engine,
+) -> None:
+    actors = [seed_user(billing_engine, f"parallel_duplicate_{n}", Role.OPERATOR) for n in (1, 2)]
+    snapshots = []
+    for actor in actors:
+        with Session(billing_engine) as db:
+            snapshots.append(create_lookup(db, actor.id, "MOCK-ETH-001", MockBillingProvider()).id)
+    gate = Barrier(2)
+
+    def create_one(index: int) -> int:
+        with Session(billing_engine) as db:
+            payload = CreateTicket(
+                lookup_id=snapshots[index],
+                description="Concurrent synthetic issue",
+                client_request_id=uuid4(),
+            )
+            gate.wait(timeout=10)
+            try:
+                create_ticket(db, actors[index].id, payload)
+                return 201
+            except ApiError as exc:
+                assert exc.code == "active_ticket_exists"
+                return exc.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(create_one, (0, 1)))
+    assert sorted(outcomes) == [201, 409]
+    with Session(billing_engine) as db:
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 1

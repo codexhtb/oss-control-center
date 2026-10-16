@@ -247,8 +247,27 @@ export type CreateTicketInput = {
       lookup_id: string
       selected_service_id?: string
       connection_snapshot_id?: string
+      duplicate_reason?: string
     }
 )
+
+export interface ActiveTicketSummary {
+  id: string
+  number: number
+  subject: string | null
+  status: TicketStatus
+  created_at: string
+  assigned_engineer_name: string | null
+  description: string
+}
+
+export interface ActiveTickets {
+  items: ActiveTicketSummary[]
+  page: number
+  size: number
+  total_visible: number
+  has_hidden_active: boolean
+}
 
 export interface TicketFilters {
   page: number

@@ -37,6 +37,9 @@ services:
     environment:
       POSTGRES_DB: $browser_db
 YAML
+if [ "${OSS_DISPOSABLE_BILLING_PROVIDER:-}" = "MOCK" ]; then
+  printf '      BILLING_PROVIDER: MOCK\n' >> "$browser_override"
+fi
 chmod 600 "$browser_override"
 compose -f "$browser_override" config --quiet
 compose -f "$browser_override" up -d --no-deps --wait --force-recreate api

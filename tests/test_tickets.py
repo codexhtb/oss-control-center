@@ -621,6 +621,7 @@ def create(
     snapshot: SubscriberSnapshot,
     connection: ConnectionSnapshot | None = None,
     request_id=None,
+    duplicate_reason: str | None = None,
 ):
     return client.post(
         "/api/v1/tickets",
@@ -630,6 +631,7 @@ def create(
             "connection_snapshot_id": str(connection.id) if connection else None,
             "description": "Synthetic connectivity issue",
             "client_request_id": str(request_id or uuid4()),
+            **({"duplicate_reason": duplicate_reason} if duplicate_reason else {}),
         },
     )
 
@@ -728,7 +730,10 @@ def test_single_connection_replay_and_page_boundary(
     assert first.json()["connection_snapshot_id"] == str(connections[0].id)
     replay = create(ticket_client, snapshot, request_id=first_request)
     assert replay.status_code == 200, replay.text
-    assert create(ticket_client, snapshot).status_code == 201
+    assert (
+        create(ticket_client, snapshot, duplicate_reason="Separate synthetic issue").status_code
+        == 201
+    )
     first_page = ticket_client.get("/api/v1/tickets", params={"page": 1, "size": 1}).json()
     second_page = ticket_client.get("/api/v1/tickets", params={"page": 2, "size": 1}).json()
     assert first_page["total"] == second_page["total"] == 2
@@ -988,6 +993,8 @@ def test_three_types_http_creation_rbac_and_filters(
             }
             if kind == TicketType.SUBSCRIBER_LINKED:
                 payload["lookup_id"] = str(snapshot.id)
+                if actor == engineer:
+                    payload["duplicate_reason"] = "Separate synthetic request"
             response = ticket_client.post(
                 "/api/v1/tickets", headers=csrf(ticket_client), json=payload
             )
@@ -1037,6 +1044,20 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
     operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
     snapshot, _ = seed_snapshot(ticket_engine, operator)
     login(ticket_client, operator.login)
+    old_payload = {
+        "lookup_id": str(snapshot.id),
+        "description": "Legacy synthetic request",
+        "client_request_id": str(uuid4()),
+    }
+    old = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=old_payload)
+    assert old.status_code == 201, old.text
+    assert old.json()["subject"] is None
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets", headers=csrf(ticket_client), json=old_payload
+        ).status_code
+        == 200
+    )
     for kind in TicketType:
         payload = {
             "ticket_type": kind.value,
@@ -1046,6 +1067,7 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
         }
         if kind == TicketType.SUBSCRIBER_LINKED:
             payload["lookup_id"] = str(snapshot.id)
+            payload["duplicate_reason"] = "Separate synthetic issue"
         created = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
         assert created.status_code == 201, created.text
         ticket_id = created.json()["id"]
@@ -1068,20 +1090,6 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
             == 409
         )
         assert ticket_client.post("/api/v1/tickets", json=payload).status_code == 403
-    old_payload = {
-        "lookup_id": str(snapshot.id),
-        "description": "Legacy synthetic request",
-        "client_request_id": str(uuid4()),
-    }
-    old = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=old_payload)
-    assert old.status_code == 201, old.text
-    assert old.json()["subject"] is None
-    assert (
-        ticket_client.post(
-            "/api/v1/tickets", headers=csrf(ticket_client), json=old_payload
-        ).status_code
-        == 200
-    )
     invalid = ("", "   ", " leading", "trailing ", "line\nbreak", "control\x7f", "x" * 161)
     for subject in invalid:
         response = ticket_client.post(

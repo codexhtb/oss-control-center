@@ -1,6 +1,6 @@
 import { apiRequest } from '../../shared/api/client'
 import type {
-  CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
+  ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
   Ticket, TicketComment, TicketDetail, TicketEvent, TicketFilters,
 } from './types'
 
@@ -48,6 +48,8 @@ export const ticketApi = {
     apiRequest<SubscriberCard>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}`, { signal }),
   subscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<Ticket>>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/tickets`, { page, size: 10 }), { signal }),
+  activeSubscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>
+    apiRequest<ActiveTickets>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/active-tickets`, { page, size: 20 }), { signal }),
   checkSubscriber: (lookupId: string, connectionId: string) =>
     apiRequest<DiagnosticReport>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/diagnostics/check`, {
       method: 'POST', json: { connection_snapshot_id: connectionId },

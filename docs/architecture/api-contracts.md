@@ -88,6 +88,7 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /subscriber-lookups` | Оператор, инженер + CSRF | `{account_no}` | `200` Subscriber 360 + `lookup_id`; сохраняет immutable snapshot с `source=MOCK`, временем, автором поиска, сроком действия 15 минут и внутренними ID подключений; аудит чтения. Не найдено — `404`, источник недоступен — `503` без успешной карточки |
 | `GET /subscriber-lookups/{lookup_id}` | Автор поиска, оператор или инженер | — | Сохранённая карточка без повторного обращения к провайдеру; истечение срока отражается `is_expired` |
 | `GET /subscriber-lookups/{lookup_id}/tickets` | Автор поиска с `subscriber.read` и `ticket.read` | `page` (≥1), `size` (1–50) | Страница связанных заявок того же `subscriber_id` и источника; при отсутствии ID — точное совпадение ЛС. История заявок хранится бессрочно. |
+| `GET /subscriber-lookups/{lookup_id}/active-tickets` | Автор поиска с `subscribers.read` | `page` (1–1000), `size` (1–50) | `items` с номером, темой, статусом, временем, исполнителем и кратким описанием доступных активных заявок; `total_visible`, `has_hidden_active`. Недоступные заявки не раскрываются. `Cache-Control: no-store`. |
 | `POST /tickets` | Оператор, инженер | Linked: `{ticket_type?:"SUBSCRIBER_LINKED", lookup_id, selected_service_id?, connection_snapshot_id?, description, subject?, client_request_id, priority?}`; manual/internal: `{ticket_type:"MANUAL"|"INTERNAL", description, subject?, client_request_id, priority?}` | `201` заявка `OPEN`; повтор идентичного запроса `200`, другой запрос с тем же ID `409`; заявка, история и аудит атомарны. Для linked сохраняются проверки владельца, срока и выбора услуги/подключения |
 | `GET /tickets` | Оператор, инженер | Фильтры `status`, `priority`, `number`, `assignee`, `unassigned`, `account_no`, `ticket_type`; `page`, `size` | Страница сводок; `total`, `page`, `size`. `unassigned=true` означает `assigned_engineer_id IS NULL`; вместе с `assignee` даёт `422` |
 | `GET /tickets/assignable-engineers` | Инженер | `page`, `size` (1–100) | Только активные пользователи с ролью `engineer`: `id`, `display_name`; `total`, `page`, `size`. Логин, хэш и контакты не выдаются |
@@ -108,6 +109,13 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /tickets/{ticket_id}/close` | Инженер | `{decision_id}` + `If-Match` | `IN_PROGRESS → CLOSED` только с решением той же заявки; `closed_by`, `closed_at`, история и аудит в транзакции |
 | `GET /tickets/{ticket_id}/history` | Оператор, инженер | Пагинация | Хронология фактов с источником и временем; внешних Telegram сообщений в Phase 1 нет |
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
+
+**Phase 5.1, linked-заявки:** `duplicate_reason?: string` (непустая, до 500
+символов) требуется, если для точного абонентского ключа уже есть `OPEN` или
+`IN_PROGRESS` заявка. Иначе `409 active_ticket_exists` без сведений о чужих
+обращениях. Причина хранится в `ticket_created.event_data`; для `MANUAL` и
+`INTERNAL` поле запрещено. Проверка выполняется под транзакционной блокировкой
+и сохраняет прежнюю идемпотентность `client_request_id`.
 
 Ответ ONU GET содержит `source=BDCOM`, `retrieved_at`, `availability`,
 `association=UNCONFIRMED | MATCHED_BY_RULE`, необязательный `match`

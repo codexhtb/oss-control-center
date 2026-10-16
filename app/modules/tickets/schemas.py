@@ -23,6 +23,7 @@ class CreateTicket(StrictModel):
     subject: str | None = Field(default=None, max_length=160)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
+    duplicate_reason: str | None = Field(default=None, min_length=1, max_length=500)
 
     @field_validator("subject")
     @classmethod
@@ -31,6 +32,15 @@ class CreateTicket(StrictModel):
             return None
         if not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value):
             raise ValueError("subject must be nonblank, trimmed and contain no control characters")
+        return value
+
+    @field_validator("duplicate_reason")
+    @classmethod
+    def validate_duplicate_reason(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value)
+        ):
+            raise ValueError("duplicate_reason must be trimmed and contain no control characters")
         return value
 
     @model_validator(mode="after")
@@ -44,6 +54,8 @@ class CreateTicket(StrictModel):
             forbidden = {"lookup_id", "connection_snapshot_id", "selected_service_id"}
             if forbidden & self.model_fields_set:
                 raise ValueError("billing fields are forbidden for MANUAL and INTERNAL")
+            if "duplicate_reason" in self.model_fields_set:
+                raise ValueError("duplicate_reason is only valid for SUBSCRIBER_LINKED")
         return self
 
 
@@ -192,6 +204,25 @@ class TicketDetail(TicketView):
     subscriber: SubscriberView | None
     selected_connection: ConnectionView | None
     technical_state: str = "UNKNOWN"
+
+
+class ActiveTicketSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    number: int
+    subject: str | None
+    status: TicketStatus
+    created_at: datetime
+    assigned_engineer_name: str | None = None
+    description: str
+
+
+class ActiveTickets(BaseModel):
+    items: list[ActiveTicketSummary]
+    page: int
+    size: int
+    total_visible: int
+    has_hidden_active: bool
 
 
 class Page[T](BaseModel):
