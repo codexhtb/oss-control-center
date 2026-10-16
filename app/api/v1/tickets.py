@@ -42,6 +42,7 @@ from app.modules.tickets.schemas import (
     Page,
     PurgeTicket,
     RecentEventView,
+    ResolveTicket,
     TicketDetail,
     TicketListView,
     TicketView,
@@ -60,6 +61,7 @@ from app.modules.tickets.service import (
     purge_ticket,
     release_ticket,
     request_field_work,
+    resolve_ticket,
     restore_ticket,
     start_ticket,
     ticket_detail,
@@ -678,6 +680,21 @@ def close(
 ):
     _mutation_scope(db, identity, ticket_id)
     ticket = close_ticket(db, identity.user.id, ticket_id, payload.decision_id, _version(if_match))
+    _etag(response, TicketView.model_validate(ticket))
+    return ticket
+
+
+@router.post("/{ticket_id}/resolve", response_model=TicketView)
+def resolve(
+    ticket_id: UUID,
+    payload: ResolveTicket,
+    response: Response,
+    identity: DecisionDep,
+    db: SessionDep,
+    if_match: IfMatch = None,
+):
+    _mutation_scope(db, identity, ticket_id)
+    ticket = resolve_ticket(db, identity.user.id, ticket_id, payload, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
 

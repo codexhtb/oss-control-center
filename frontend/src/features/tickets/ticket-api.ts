@@ -104,6 +104,10 @@ export const ticketApi = {
     apiRequest<Decision>(`${ticketPath(id)}/decisions`, {
       method: 'POST', json: { decision_text: decisionText, performed_actions: performedActions },
     }),
+  resolve: (id: string, decisionText: string, performedActions: string, version: number) =>
+    apiRequest<Ticket>(`${ticketPath(id)}/resolve`, {
+      method: 'POST', json: { decision_text: decisionText, performed_actions: performedActions }, ifMatch: `"${version}"`,
+    }),
   close: (id: string, decisionId: string, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/close`, {
       method: 'POST', json: { decision_id: decisionId }, ifMatch: `"${version}"`,

@@ -6,6 +6,8 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 browser_db="oss_test_phase55_browser_$(date -u +%Y%m%d%H%M%S)"
 browser_override="$project_dir/.dev-secrets/phase55-browser.compose.yaml"
+browser_script=${OSS_BROWSER_SCRIPT:-$project_dir/dev/browser_phase55.cjs}
+test -r "$browser_script"
 created=0
 switched=0
 
@@ -50,5 +52,5 @@ compose -f "$browser_override" config --quiet
 switched=1
 compose -f "$browser_override" up -d --no-deps --wait --force-recreate api
 
-OSS_BROWSER_SCRIPT="$project_dir/dev/browser_phase55.cjs" OSS_BILLING_MODE=MOCK OSS_DISPOSABLE_DB="$browser_db" \
+OSS_BROWSER_SCRIPT="$browser_script" OSS_BILLING_MODE=MOCK OSS_DISPOSABLE_DB="$browser_db" \
   sh "$project_dir/dev/run_browser_e2e.sh"

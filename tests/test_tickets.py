@@ -42,8 +42,8 @@ from app.modules.tickets.models import (
     TicketPurgeAudit,
     TicketResolution,
 )
-from app.modules.tickets.schemas import CreateTicket
-from app.modules.tickets.service import claim_ticket, create_ticket, start_ticket
+from app.modules.tickets.schemas import AddDecision, CreateTicket
+from app.modules.tickets.service import claim_ticket, create_ticket, resolve_ticket, start_ticket
 from app.modules.tickets.status import TicketStatus, TicketType
 
 ORIGIN = "https://oss.example.test"
@@ -447,10 +447,16 @@ def test_purge_closed_linked_ticket_preserves_source_snapshot(
     )
     assert decided.status_code == 201, decided.text
     version = ticket_client.get(path).json()["version"]
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+        json={"decision_text": "Synthetic resolution", "performed_actions": "Synthetic action"},
+    )
+    assert resolved.status_code == 200, resolved.text
     closed = ticket_client.post(
         path + "/close",
-        headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
-        json={"decision_id": decided.json()["id"]},
+        headers={**csrf(ticket_client), "If-Match": f'"{resolved.json()["version"]}"'},
+        json={"decision_id": resolved.json()["resolved_decision_id"]},
     )
     assert closed.status_code == 200, closed.text
     deleted = ticket_client.delete(
@@ -827,6 +833,13 @@ def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestCl
     )
     assert decision.status_code == 201, decision.text
     version = ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()["version"]
+    resolved = ticket_client.post(
+        f"/api/v1/tickets/{ticket_id}/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+        json={"decision_text": "Further work complete", "performed_actions": "Checked connection"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    version = resolved.json()["version"]
     assert (
         ticket_client.post(
             f"/api/v1/tickets/{ticket_id}/close",
@@ -846,7 +859,7 @@ def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestCl
     closed = ticket_client.post(
         f"/api/v1/tickets/{ticket_id}/close",
         headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
-        json={"decision_id": decision.json()["id"]},
+        json={"decision_id": resolved.json()["resolved_decision_id"]},
     )
     assert closed.status_code == 200, closed.text
     assert closed.json()["status"] == "CLOSED"
@@ -859,8 +872,8 @@ def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestCl
         ).status_code
         == 409
     )
-    assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/history").json()["total"] == 8
-    assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/audit").json()["total"] == 8
+    assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/history").json()["total"] == 9
+    assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/audit").json()["total"] == 9
     login(ticket_client, "admin")
     assert ticket_client.get(f"/api/v1/tickets/{ticket_id}").status_code == 200
     assert (
@@ -1314,7 +1327,7 @@ def test_manual_internal_lifecycle_without_billing(
                 headers={**csrf(ticket_client), "If-Match": f'"{started.json()["version"]}"'},
                 json={"decision_id": str(uuid4())},
             ).status_code
-            == 422
+            == 409
         )
         diagnostic = ticket_client.post(
             f"/api/v1/tickets/{ticket_id}/manual-diagnostics",
@@ -1330,6 +1343,13 @@ def test_manual_internal_lifecycle_without_billing(
         )
         assert decision.status_code == 201, decision.text
         current = ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()
+        resolved = ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/resolve",
+            headers={**csrf(ticket_client), "If-Match": f'"{current["version"]}"'},
+            json={"decision_text": "Finished", "performed_actions": "Checked manually"},
+        )
+        assert resolved.status_code == 200, resolved.text
+        current = resolved.json()
         assert (
             ticket_client.post(
                 f"/api/v1/tickets/{ticket_id}/close",
@@ -1341,12 +1361,12 @@ def test_manual_internal_lifecycle_without_billing(
         closed = ticket_client.post(
             f"/api/v1/tickets/{ticket_id}/close",
             headers={**csrf(ticket_client), "If-Match": f'"{current["version"]}"'},
-            json={"decision_id": decision.json()["id"]},
+            json={"decision_id": resolved.json()["resolved_decision_id"]},
         )
         assert closed.status_code == 200, closed.text
         assert closed.json()["status"] == "CLOSED"
-        assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/history").json()["total"] == 7
-        assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/audit").json()["total"] == 7
+        assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/history").json()["total"] == 8
+        assert ticket_client.get(f"/api/v1/tickets/{ticket_id}/audit").json()["total"] == 8
         with Session(ticket_engine) as db:
             item = db.get(Ticket, UUID(ticket_id))
             assert item.ticket_type == kind
@@ -2280,10 +2300,16 @@ def test_claim_permissions_closed_deleted_and_admin_reassignment(
     )
     assert decision.status_code == 201, decision.text
     current_version = ticket_client.get(path).json()["version"]
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers=headers(current_version),
+        json={"decision_text": "Synthetic resolution", "performed_actions": "Synthetic work"},
+    )
+    assert resolved.status_code == 200, resolved.text
     closed = ticket_client.post(
         path + "/close",
-        headers=headers(current_version),
-        json={"decision_id": decision.json()["id"]},
+        headers=headers(resolved.json()["version"]),
+        json={"decision_id": resolved.json()["resolved_decision_id"]},
     )
     assert closed.status_code == 200
     assert (
@@ -2306,3 +2332,208 @@ def test_claim_permissions_closed_deleted_and_admin_reassignment(
         ticket_client.post(f"/api/v1/tickets/{deleted['id']}/claim", headers=headers(1)).status_code
         == 404
     )
+
+
+def test_resolved_verdict_permissions_history_and_queues(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "resolution_operator", Role.OPERATOR)
+    editor = seed_user(ticket_engine, "resolution_editor", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "resolution_engineer", Role.ENGINEER)
+    other = seed_user(ticket_engine, "resolution_other", Role.ENGINEER)
+    grant_ticket_permission(ticket_engine, editor, Permission.TICKET_EDIT_ALL)
+    login(ticket_client, operator.login)
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic verdict")
+    path = f"/api/v1/tickets/{ticket['id']}"
+
+    login(ticket_client, engineer.login)
+    claimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200, claimed.text
+    version = claimed.json()["version"]
+    payload = {"decision_text": "Synthetic line repaired", "performed_actions": "Synthetic check"}
+    login(ticket_client, other.login)
+    foreign = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+        json=payload,
+    )
+    assert foreign.status_code == 403
+    login(ticket_client, engineer.login)
+    assert (
+        ticket_client.post(
+            path + "/resolve", headers={"If-Match": f'"{version}"'}, json=payload
+        ).status_code
+        == 403
+    )
+    assert (
+        ticket_client.post(path + "/resolve", headers=csrf(ticket_client), json=payload).status_code
+        == 428
+    )
+    assert (
+        ticket_client.post(
+            path + "/resolve",
+            headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+            json={**payload, "decision_text": "   "},
+        ).status_code
+        == 422
+    )
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+        json=payload,
+    )
+    assert resolved.status_code == 200, resolved.text
+    data = resolved.json()
+    assert data["status"] == "RESOLVED"
+    assert data["resolved_by"] == str(engineer.id)
+    assert data["resolved_at"] and data["resolved_decision_id"]
+    assert data["closed_at"] is None
+    with Session(ticket_engine) as db:
+        with pytest.raises(DBAPIError):
+            db.execute(
+                text("UPDATE tickets SET resolved_decision_id = :wrong WHERE id = :ticket_id"),
+                {"wrong": uuid4(), "ticket_id": UUID(ticket["id"])},
+            )
+        db.rollback()
+    assert ticket_client.get(path).json()["status"] == "RESOLVED"
+    assert ticket_client.get("/api/v1/tickets", params={"status": "RESOLVED"}).json()["total"] == 1
+    assert ticket_client.get("/api/v1/tickets", params={"active_only": True}).json()["total"] == 0
+    assert (
+        ticket_client.get(
+            "/api/v1/tickets", params={"active_only": True, "assignee": str(engineer.id)}
+        ).json()["total"]
+        == 0
+    )
+    assert ticket_client.get("/api/v1/tickets", params={"q": "line repaired"}).json()["total"] == 1
+    assert (
+        ticket_client.post(
+            path + "/resolve",
+            headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
+            json=payload,
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(
+            path + "/claim", headers={**csrf(ticket_client), "If-Match": f'"{data["version"]}"'}
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(
+            path + "/release", headers={**csrf(ticket_client), "If-Match": f'"{data["version"]}"'}
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(
+            path + "/assignment",
+            headers={**csrf(ticket_client), "If-Match": f'"{data["version"]}"'},
+            json={"engineer_id": str(other.id)},
+        ).status_code
+        == 409
+    )
+    decisions = ticket_client.get(path + "/decisions").json()
+    assert (
+        decisions["total"] == 1
+        and decisions["items"][0]["decision_text"] == payload["decision_text"]
+    )
+    assert [
+        item["event_type"] for item in ticket_client.get(path + "/history").json()["items"]
+    ].count("ticket_resolved") == 1
+    assert [item["action"] for item in ticket_client.get(path + "/audit").json()["items"]].count(
+        "ticket_resolved"
+    ) == 1
+
+    login(ticket_client, editor.login)
+    assert (
+        ticket_client.post(
+            path + "/resolve",
+            headers={**csrf(ticket_client), "If-Match": f'"{data["version"]}"'},
+            json=payload,
+        ).status_code
+        == 403
+    )
+    edited = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": f'"{data["version"]}"'},
+        json={"description": "Synthetic corrected description"},
+    )
+    assert edited.status_code == 200, edited.text
+    login(ticket_client, engineer.login)
+    revision = ticket_client.post(
+        path + "/decisions",
+        headers=csrf(ticket_client),
+        json={"decision_text": "Synthetic revised verdict", "performed_actions": "Second check"},
+    )
+    assert revision.status_code == 201, revision.text
+    latest = ticket_client.get(path).json()
+    assert latest["resolved_decision_id"] == revision.json()["id"]
+    assert latest["resolved_at"] == data["resolved_at"]
+    assert ticket_client.get(path + "/decisions").json()["total"] == 2
+    assert (
+        ticket_client.post(
+            path + "/close",
+            headers={**csrf(ticket_client), "If-Match": f'"{latest["version"]}"'},
+            json={"decision_id": data["resolved_decision_id"]},
+        ).status_code
+        == 422
+    )
+    closed = ticket_client.post(
+        path + "/close",
+        headers={**csrf(ticket_client), "If-Match": f'"{latest["version"]}"'},
+        json={"decision_id": revision.json()["id"]},
+    )
+    assert closed.status_code == 200 and closed.json()["status"] == "CLOSED"
+
+
+def test_concurrent_resolution_records_only_one_verdict(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    creator = seed_user(ticket_engine, "race_resolution_creator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "race_resolution_engineer", Role.ENGINEER)
+    login(ticket_client, creator.login)
+    ticket = make_manual_ticket(ticket_client)
+    login(ticket_client, engineer.login)
+    claimed = ticket_client.post(
+        f"/api/v1/tickets/{ticket['id']}/claim",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+    )
+    assert claimed.status_code == 200, claimed.text
+    payload = AddDecision(decision_text="Synthetic recovered service", performed_actions="Checked")
+
+    def attempt(_index: int) -> str:
+        with Session(ticket_engine) as db:
+            try:
+                resolve_ticket(
+                    db, engineer.id, UUID(ticket["id"]), payload, claimed.json()["version"]
+                )
+                return "resolved"
+            except ApiError as error:
+                return error.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, (1, 2)))
+    assert sorted(outcomes) == ["resolved", "version_conflict"]
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketResolution)
+                .where(TicketResolution.ticket_id == UUID(ticket["id"]))
+            )
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(
+                    TicketEvent.ticket_id == UUID(ticket["id"]),
+                    TicketEvent.event_type == "ticket_resolved",
+                )
+            )
+            == 1
+        )

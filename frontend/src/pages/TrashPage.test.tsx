@@ -18,6 +18,7 @@ const ticket: Ticket = {
   subscriber_snapshot_id: null, connection_snapshot_id: null, selected_service_id: null,
   created_by: '00000000-0000-4000-8000-000000000051', assigned_engineer_id: null,
   closed_by: null, closed_decision_id: null, closed_at: null,
+  resolved_by: null, resolved_decision_id: null, resolved_at: null,
   deleted_at: '2026-01-01T00:00:00Z', deleted_by: '00000000-0000-4000-8000-000000000051',
   delete_reason: null, version: 3,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',

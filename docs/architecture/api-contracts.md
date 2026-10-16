@@ -1,5 +1,14 @@
 # API contracts — Phase 1
 
+**Phase 5.6:** `TicketView` и `TicketDetail` дополнены nullable
+`resolved_by`, `resolved_at`, `resolved_decision_id`; для прежних закрытых
+заявок они могут быть `null`. Фильтр `status=RESOLVED` работает в общем реестре.
+`active_only=true` остаётся фильтром **инженерной работы** (`OPEN` и
+`IN_PROGRESS`), тогда как поиск активных связанных обращений в
+`/subscriber-lookups/{id}/active-tickets` включает `RESOLVED` до закрытия.
+`POST /resolve` требует CSRF/Origin и `If-Match`; текст вердикта и действий
+строго валидируется, но не попадает в общий access log.
+
 ## Phase 5.5 — инженерные очереди и взятие заявки
 
 `GET /api/v1/tickets?active_only=true&unassigned=true` возвращает очередь «Ожидают инженера», а `active_only=true&assignee=<current_user_id>` — «Взяты мной». Обе выборки используют текущие `OPEN` и `IN_PROGRESS`, исключают soft-deleted заявки, применяют существующие права чтения, поиск, остальные фильтры и серверную пагинацию. `total` используется для счётчиков; отдельной таблицы очередей нет. Для строк в работе `work_started_at` добавляется только если последним событием назначения/начала/освобождения является `engineer_claimed` или `ticket_started` от нынешнего исполнителя. Если это нельзя доказать, поле равно `null`.
@@ -129,8 +138,9 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /tickets/{ticket_id}/diagnostics/confirm` | Инженер | `{check_id}` + `If-Match` | `201` автоматический snapshot, история и аудит при `IN_PROGRESS` |
 | `GET /subscriber-lookups/{lookup_id}/connections/{connection_id}/onu` | Инженер, автор lookup | UUID в пути | Read-only BDCOM ONU; составной ключ OLT+PON+VLAN или неподтверждённые кандидаты |
 | `GET /tickets/{ticket_id}/onu` | Инженер | UUID в пути | Read-only BDCOM ONU кандидаты для подтверждённого connection snapshot |
-| `POST /tickets/{ticket_id}/decisions` | Инженер | `{decision_text, performed_actions}` | `201` новая неизменяемая версия решения, история и аудит; требуется `IN_PROGRESS` |
-| `POST /tickets/{ticket_id}/close` | Инженер | `{decision_id}` + `If-Match` | `IN_PROGRESS → CLOSED` только с решением той же заявки; `closed_by`, `closed_at`, история и аудит в транзакции |
+| `POST /tickets/{ticket_id}/decisions` | `tickets.resolve` | `{decision_text, performed_actions}` | `201` новая неизменяемая версия вердикта, история и аудит; допускается `IN_PROGRESS` или `RESOLVED`. В `RESOLVED` текущая ссылка `resolved_decision_id` переходит на новую версию без изменения `resolved_at` |
+| `POST /tickets/{ticket_id}/resolve` | `tickets.resolve`, назначенный инженер или admin с правом | `{decision_text, performed_actions}` + `If-Match` | Атомарно создаёт неизменяемый вердикт и переводит `IN_PROGRESS → RESOLVED`; возвращает `resolved_by`, `resolved_at`, `resolved_decision_id`, историю и аудит. Пустой вердикт, повтор и устаревшая версия отклоняются |
+| `POST /tickets/{ticket_id}/close` | `tickets.close` | `{decision_id}` + `If-Match` | `RESOLVED → CLOSED` только с текущим `resolved_decision_id`; `closed_by`, `closed_at`, история и аудит в транзакции. Старый прямой переход из `IN_PROGRESS` запрещён |
 | `GET /tickets/{ticket_id}/history` | Оператор, инженер | Пагинация | Хронология фактов с источником и временем; внешних Telegram сообщений в Phase 1 нет |
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
 

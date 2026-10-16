@@ -220,12 +220,15 @@ def purge_ticket(
         text("SELECT set_config('oss.purge_actor_id', :actor_id, true)"),
         {"actor_id": str(actor_id)},
     )
-    if ticket.closed_decision_id is not None:
-        # Break the closed ticket / decision FK cycle inside this one transaction.
+    if ticket.closed_decision_id is not None or ticket.resolved_decision_id is not None:
+        # Break both ticket / decision FK cycles inside this one transaction.
         ticket.status = TicketStatus.IN_PROGRESS
         ticket.closed_decision_id = None
         ticket.closed_by = None
         ticket.closed_at = None
+        ticket.resolved_decision_id = None
+        ticket.resolved_by = None
+        ticket.resolved_at = None
         db.flush()
     for model in (
         DiagnosticSnapshot,
@@ -609,7 +612,8 @@ def assign_engineer(
         raise ApiError(422, "invalid_engineer", "Assignee must be an active engineer")
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
-    _open(ticket)
+    if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
+        raise ApiError(409, "invalid_transition", "Only active work can be assigned")
     if (
         ticket.assigned_engineer_id is not None
         and ticket.assigned_engineer_id != engineer_id
@@ -635,7 +639,8 @@ def claim_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | No
     if actor.role != Role.ENGINEER:
         raise ApiError(403, "forbidden", "Only an engineer can claim a ticket")
     ticket = _ticket(db, ticket_id, lock=True)
-    _open(ticket)
+    if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
+        raise ApiError(409, "invalid_transition", "Only active work can be claimed")
     # A retry after a successful response is a read: it must not duplicate the audit fact.
     if ticket.assigned_engineer_id == actor_id and ticket.status == TicketStatus.IN_PROGRESS:
         return ticket
@@ -664,7 +669,8 @@ def release_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | 
         raise ApiError(403, "forbidden", "Only an engineer can release a ticket")
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
-    _open(ticket)
+    if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
+        raise ApiError(409, "invalid_transition", "Only active work can be released")
     if ticket.assigned_engineer_id != actor_id:
         raise ApiError(409, "not_ticket_assignee", "Only the assigned engineer can release ticket")
     ticket.assigned_engineer_id = None
@@ -805,10 +811,16 @@ def confirm_monitoring_check(
 def add_decision(
     db: Session, actor_id: UUID, ticket_id: UUID, payload: AddDecision
 ) -> TicketResolution:
-    _actor(db, actor_id, Permission.TICKET_DECISION)
+    actor = _actor(db, actor_id, Permission.TICKET_DECISION)
     ticket = _ticket(db, ticket_id, lock=True)
-    if ticket.status != TicketStatus.IN_PROGRESS:
+    if ticket.status not in (TicketStatus.IN_PROGRESS, TicketStatus.RESOLVED):
         raise ApiError(409, "invalid_transition", "Start ticket before recording a decision")
+    if (
+        ticket.status == TicketStatus.RESOLVED
+        and ticket.assigned_engineer_id != actor_id
+        and actor.role != Role.ADMIN
+    ):
+        raise ApiError(403, "forbidden", "Only the assigned engineer can revise the verdict")
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,
@@ -817,11 +829,44 @@ def add_decision(
     )
     db.add(item)
     db.flush()
+    if ticket.status == TicketStatus.RESOLVED:
+        ticket.resolved_decision_id = item.id
     _changed(ticket)
     _fact(db, ticket, actor_id, "decision_recorded", {"decision_id": str(item.id)})
     db.commit()
     db.refresh(item)
     return item
+
+
+def resolve_ticket(
+    db: Session, actor_id: UUID, ticket_id: UUID, payload: AddDecision, version: int | None
+) -> Ticket:
+    actor = _actor(db, actor_id, Permission.TICKET_DECISION)
+    ticket = _ticket(db, ticket_id, lock=True)
+    _version(ticket, version)
+    if ticket.status != TicketStatus.IN_PROGRESS:
+        raise ApiError(409, "invalid_transition", "Only in-progress tickets can be resolved")
+    if ticket.assigned_engineer_id != actor_id and actor.role != Role.ADMIN:
+        raise ApiError(403, "forbidden", "Only the assigned engineer can resolve this ticket")
+    if not payload.decision_text.strip() or not payload.performed_actions.strip():
+        raise ApiError(422, "empty_decision", "Engineer verdict and actions are required")
+    item = TicketResolution(
+        ticket_id=ticket_id,
+        engineer_id=actor_id,
+        decision_text=payload.decision_text.strip(),
+        performed_actions=payload.performed_actions.strip(),
+    )
+    db.add(item)
+    db.flush()
+    ticket.status = TicketStatus.RESOLVED
+    ticket.resolved_by = actor_id
+    ticket.resolved_at = datetime.now(UTC)
+    ticket.resolved_decision_id = item.id
+    _changed(ticket)
+    _fact(db, ticket, actor_id, "ticket_resolved", {"decision_id": str(item.id)})
+    db.commit()
+    db.refresh(ticket)
+    return ticket
 
 
 def close_ticket(
@@ -830,11 +875,13 @@ def close_ticket(
     _actor(db, actor_id, Permission.TICKET_CLOSE)
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
-    if ticket.status != TicketStatus.IN_PROGRESS:
-        raise ApiError(409, "invalid_transition", "Only in-progress tickets can be closed")
+    if ticket.status != TicketStatus.RESOLVED:
+        raise ApiError(409, "invalid_transition", "Only resolved tickets can be closed")
     decision = db.get(TicketResolution, decision_id)
     if decision is None or decision.ticket_id != ticket_id:
         raise ApiError(422, "invalid_decision", "Decision must belong to ticket")
+    if decision_id != ticket.resolved_decision_id:
+        raise ApiError(422, "invalid_decision", "Close with the current resolved verdict")
     ticket.status = TicketStatus.CLOSED
     ticket.closed_by = actor_id
     ticket.closed_at = datetime.now(UTC)

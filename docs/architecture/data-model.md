@@ -1,5 +1,16 @@
 # Модель данных и ERD
 
+**Phase 5.6 — `0016_ticket_resolved`:** `tickets.status` дополнен `RESOLVED`;
+nullable `resolved_by`, `resolved_at`, `resolved_decision_id` фиксируют первый
+инженерный переход и текущую неизменяемую версию вердикта. Составной FK
+`(resolved_decision_id, id) → ticket_decisions(id, ticket_id)` не допускает
+чужого решения. CHECK требует полного набора полей у `RESOLVED` и отсутствия
+их у `OPEN`/`IN_PROGRESS`. Для исторических `CLOSED` допускается полный NULL,
+так как прежний workflow не фиксировал отдельное инженерное решение; новые
+закрытия возможны только после `RESOLVED`. Переход и аудит атомарны. Активная
+инженерная очередь по прежнему ограничена `OPEN`/`IN_PROGRESS`, а проверка
+дублей включает и `RESOLVED`. Новых таблиц решений не вводится.
+
 **Phase 5.5:** новая миграция и таблица не требуются. Очереди вычисляются по `tickets.status`, `assigned_engineer_id`, `deleted_at` с существующим индексом `(assigned_engineer_id,status,created_at)`. Claim/release обновляют только назначение, существующий статус и версию заявки; append-only `ticket_history`/`audit_events` фиксируют действие в той же транзакции. Время начала работы для реестра выводится из последнего относящегося к назначению события на странице выдачи; исторические данные не заполняются догадкой.
 
 **Phase 5.4:** миграция не требуется. Поиск использует существующие `tickets`, неизменяемый `subscriber_snapshots` и `ticket_decisions`. `EXISTS` по решениям не размножает строки заявок; источник имени остаётся историческим snapshot. Имеющиеся B-tree индексы помогают точным фильтрам; поиск по подстроке на текущей малой dev-БД выполняется последовательным чтением. Новые индексы рассматриваются после измерений на существенно большем объёме данных.
@@ -203,7 +214,7 @@ erDiagram
 | `identity_audit_events` — 1.2A | Append-only UUID `id`, nullable актор и цель, действие, результат, HMAC логина/источника при входе, время. Без паролей, токенов и полных персональных данных. |
 | `subscriber_snapshots` | `id` (= `lookup_id` в API), `account_no`, nullable `subscriber_id`, `source ∈ {MOCK, NETUP}`, `fetched_at`, `requested_by`, `expires_at`, nullable ФИО, название организации, телефон, email, договоры и услуги в JSONB, `field_meta` с источником, временем и качеством существенных полей. Phase 1 пишет только `MOCK`. Финансовые данные не входят в техническое состояние. |
 | `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable адрес, устройство, порт, VLAN, IP-группа, ONU ID и `field_meta`. ONU не требуется и не создаётся для Ethernet или неизвестного типа. Несколько подключений сохраняются раздельно. |
-| `tickets` | `id`, уникальный `number`, nullable `account_no`, `subscriber_snapshot_id`, `connection_snapshot_id`, `selected_service_id`, `subject VARCHAR(160)`, обязательное `description`, `status ∈ {OPEN, IN_PROGRESS, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. `subject` добавлен в `0009` без заполнения исторических строк; CHECK запрещает пустое значение и управляющие символы. Для linked выбранные услуга и подключение проверяются по неизменяемому snapshot; при неоднозначности выбор явный. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
+| `tickets` | `id`, уникальный `number`, nullable `account_no`, `subscriber_snapshot_id`, `connection_snapshot_id`, `selected_service_id`, `subject VARCHAR(160)`, обязательное `description`, `status ∈ {OPEN, IN_PROGRESS, RESOLVED, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `resolved_by`/`resolved_at`/`resolved_decision_id` и `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. `subject` добавлен в `0009` без заполнения исторических строк; CHECK запрещает пустое значение и управляющие символы. Для linked выбранные услуга и подключение проверяются по неизменяемому snapshot; при неоднозначности выбор явный. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
 | `ticket_comments` | `id`, `ticket_id`, `author_id`, `body`, `created_at`. Записи не подменяют решение или автоматические данные. |
 | `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `performed_actions`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
 | `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, обязательный `recorded_by` для ручной проверки. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |

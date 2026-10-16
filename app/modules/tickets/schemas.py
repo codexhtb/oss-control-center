@@ -193,6 +193,10 @@ class CloseTicket(StrictModel):
     decision_id: UUID
 
 
+class ResolveTicket(AddDecision):
+    pass
+
+
 class ConnectionView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -251,6 +255,9 @@ class TicketView(BaseModel):
     closed_by: UUID | None
     closed_decision_id: UUID | None
     closed_at: datetime | None
+    resolved_by: UUID | None
+    resolved_decision_id: UUID | None
+    resolved_at: datetime | None
     deleted_at: datetime | None = None
     deleted_by: UUID | None = None
     delete_reason: str | None = None

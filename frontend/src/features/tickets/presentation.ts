@@ -9,6 +9,7 @@ export const typeLabel: Record<TicketType, string> = {
 export const statusLabel: Record<TicketStatus, string> = {
   OPEN: 'Открыта',
   IN_PROGRESS: 'В работе',
+  RESOLVED: 'Решено',
   CLOSED: 'Закрыта',
 }
 
@@ -29,6 +30,7 @@ export const eventLabel: Record<string, string> = {
   comment_added: 'Добавлен комментарий',
   manual_diagnostic_added: 'Записана диагностика',
   decision_recorded: 'Записано решение',
+  ticket_resolved: 'Инженерное решение принято',
   field_work_requested: 'Запрошены выездные работы',
   ticket_closed: 'Заявка закрыта',
   ticket_deleted: 'Заявка перемещена в корзину',

@@ -19,7 +19,7 @@ def _conditions(snapshot: SubscriberSnapshot):
     return (
         Ticket.ticket_type == TicketType.SUBSCRIBER_LINKED,
         Ticket.deleted_at.is_(None),
-        Ticket.status.in_((TicketStatus.OPEN, TicketStatus.IN_PROGRESS)),
+        Ticket.status.in_((TicketStatus.OPEN, TicketStatus.IN_PROGRESS, TicketStatus.RESOLVED)),
         SubscriberSnapshot.source == snapshot.source,
         identity,
     )

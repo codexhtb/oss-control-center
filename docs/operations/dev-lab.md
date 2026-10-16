@@ -1,5 +1,15 @@
 # Изолированное HTTPS dev-окружение OSS Control Center
 
+Phase 5.6: перед применением `0016_ticket_resolved` к `oss_control_dev`
+создайте `pg_dump -Fc` в `.dev-secrets/backups/` (каталог `0700`, файл `0600`),
+восстановите дамп в отдельную `oss_test_*` базу и сравните количество заявок,
+пользователей и `alembic_version`. После проверки запускайте Alembic только в
+Compose project `oss-control-dev`. Мутационную браузерную проверку перехода
+можно повторить существующим безопасным runner:
+`OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_phase56.cjs sh dev/run_phase55_browser_e2e.sh`
+через `sg docker -c`; runner возвращает API на постоянную БД перед удалением
+одноразовой тестовой базы.
+
 Dev-стек запускается как Compose project `oss-control-dev`. Он использует собственные
 контейнеры, базу `oss_control_dev` и volume `oss-control-dev_dev_postgres_data`.
 Рабочие `oss-control-center-api-1`, `oss-control-center-postgres-1`, база

@@ -353,6 +353,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .status-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-chip--open { border-color: #466056; color: #9ce0bf; background: #1d302b; }
 .status-chip--in_progress { border-color: #695d45; color: #f0c886; background: #332c23; }
+.status-chip--resolved { border-color: #426573; color: #9ed8eb; background: #20313a; }
 .status-chip--closed { border-color: #3a4951; color: #9baeb6; background: #243039; }
 .priority { display: inline-flex; align-items: center; gap: 8px; }
 .priority::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #8b9ca5; }

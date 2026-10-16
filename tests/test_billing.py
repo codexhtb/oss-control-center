@@ -456,10 +456,16 @@ def test_multiple_choices_snapshot_confirmation_and_ticket_flow(
         json={"decision_text": "Synthetic decision", "performed_actions": "Synthetic check"},
     )
     assert decision.status_code == 201
+    resolved = billing_client.post(
+        f"/api/v1/tickets/{ticket_id}/resolve",
+        headers={**csrf(billing_client), "If-Match": '"4"'},
+        json={"decision_text": "Synthetic decision", "performed_actions": "Synthetic check"},
+    )
+    assert resolved.status_code == 200, resolved.text
     closed = billing_client.post(
         f"/api/v1/tickets/{ticket_id}/close",
-        headers={**csrf(billing_client), "If-Match": '"4"'},
-        json={"decision_id": decision.json()["id"]},
+        headers={**csrf(billing_client), "If-Match": f'"{resolved.json()["version"]}"'},
+        json={"decision_id": resolved.json()["resolved_decision_id"]},
     )
     assert closed.status_code == 200 and closed.json()["status"] == "CLOSED"
     with Session(billing_engine) as db:
@@ -472,7 +478,7 @@ def test_multiple_choices_snapshot_confirmation_and_ticket_flow(
                 .select_from(TicketAudit)
                 .where(TicketAudit.ticket_id == ticket.id)
             )
-            == 5
+            == 6
         )
 
 
@@ -874,10 +880,19 @@ def test_active_ticket_warning_override_and_inactive_tickets(
     )
     assert decision.status_code == 201
     version = billing_client.get(f"/api/v1/tickets/{first.json()['id']}").json()["version"]
+    resolved = billing_client.post(
+        f"/api/v1/tickets/{first.json()['id']}/resolve",
+        headers={**csrf(billing_client), "If-Match": f'"{version}"'},
+        json={"decision_text": "Synthetic resolution", "performed_actions": "Verified"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    unresolved = billing_client.get(path).json()
+    assert unresolved["total_visible"] == 2
+    assert "RESOLVED" in {item["status"] for item in unresolved["items"]}
     closed = billing_client.post(
         f"/api/v1/tickets/{first.json()['id']}/close",
-        headers={**csrf(billing_client), "If-Match": f'"{version}"'},
-        json={"decision_id": decision.json()["id"]},
+        headers={**csrf(billing_client), "If-Match": f'"{resolved.json()["version"]}"'},
+        json={"decision_id": resolved.json()["resolved_decision_id"]},
     )
     assert closed.status_code == 200
     deleted = billing_client.request(

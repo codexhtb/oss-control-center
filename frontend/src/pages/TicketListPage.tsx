@@ -10,7 +10,7 @@ import { ticketApi } from '../features/tickets/ticket-api'
 import { formatDate, priorityLabel, statusLabel, ticketTitle, typeLabel } from '../features/tickets/presentation'
 import type { TicketFilters, TicketPriority, TicketStatus, TicketType } from '../features/tickets/types'
 
-const statuses: TicketStatus[] = ['OPEN', 'IN_PROGRESS', 'CLOSED']
+const statuses: TicketStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']
 const types: TicketType[] = ['SUBSCRIBER_LINKED', 'MANUAL', 'INTERNAL']
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
 type Queue = 'all' | 'waiting' | 'mine'
@@ -148,7 +148,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
         next.delete('active_only')
         if (value) next.set('status', value)
         else next.delete('status')
-        if (value === 'CLOSED') next.delete('queue')
+        if (value === 'CLOSED' || value === 'RESOLVED') next.delete('queue')
       }
       next.delete('page')
       return next
@@ -164,7 +164,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
       next.delete('assignee')
       next.delete('unassigned')
       next.delete('active_only')
-      if (value !== 'all' && next.get('status') === 'CLOSED') next.delete('status')
+      if (value !== 'all' && ['CLOSED', 'RESOLVED'].includes(next.get('status') || '')) next.delete('status')
       return next
     })
   }

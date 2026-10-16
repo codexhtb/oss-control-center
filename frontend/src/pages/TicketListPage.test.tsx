@@ -26,6 +26,7 @@ const ticket: Ticket = {
   priority: 'HIGH', account_no: null, subscriber_snapshot_id: null,
   connection_snapshot_id: null, selected_service_id: null, created_by: session.user.id,
   assigned_engineer_id: null, closed_by: null, closed_decision_id: null, closed_at: null,
+  resolved_by: null, resolved_decision_id: null, resolved_at: null,
   deleted_at: null, deleted_by: null, delete_reason: null,
   version: 1, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 }
@@ -130,6 +131,18 @@ it('does not fabricate an account number when linked data is incomplete', async 
   renderList()
   expect(await screen.findByText('Абонент не указан')).toBeInTheDocument()
   expect(screen.queryByText(/ЛС /)).not.toBeInTheDocument()
+})
+
+it('filters resolved tickets in the registry without putting them in work queues', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({
+    items: [{ ...ticket, status: 'RESOLVED' }], page: 1, size: 20, total: 1,
+  })
+  renderList('/tickets?status=RESOLVED')
+  expect(await screen.findByText('Решено')).toBeInTheDocument()
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    expect.objectContaining({ status: 'RESOLVED', page: 1 }), expect.anything(),
+  ))
+  expect(screen.getByRole('combobox', { name: 'Статус' })).toHaveValue('RESOLVED')
 })
 
 it('debounces the universal search and hides stale results while the query changes', async () => {

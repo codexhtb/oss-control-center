@@ -1,5 +1,5 @@
 export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'INTERNAL'
-export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'CLOSED'
+export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'
 export type TicketPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
 
 export interface Page<T> {
@@ -33,6 +33,9 @@ export interface Ticket {
   closed_by: string | null
   closed_decision_id: string | null
   closed_at: string | null
+  resolved_by: string | null
+  resolved_decision_id: string | null
+  resolved_at: string | null
   deleted_at: string | null
   deleted_by: string | null
   delete_reason: string | null
@@ -237,6 +240,7 @@ export interface Decision {
   id: string
   ticket_id: string
   engineer_id: string
+  engineer_name?: string | null
   decision_text: string
   performed_actions: string
   created_at: string

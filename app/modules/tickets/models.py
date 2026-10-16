@@ -134,8 +134,17 @@ class Ticket(Base):
             name="fk_tickets_closed_decision",
             use_alter=True,
         ),
+        ForeignKeyConstraint(
+            ["resolved_decision_id", "id"],
+            ["ticket_decisions.id", "ticket_decisions.ticket_id"],
+            ondelete="RESTRICT",
+            name="fk_tickets_resolved_decision",
+            use_alter=True,
+        ),
         UniqueConstraint("created_by", "client_request_id", name="uq_tickets_creator_request"),
-        CheckConstraint("status IN ('OPEN', 'IN_PROGRESS', 'CLOSED')", name="ck_tickets_status"),
+        CheckConstraint(
+            "status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')", name="ck_tickets_status"
+        ),
         CheckConstraint(
             "priority IN ('LOW', 'NORMAL', 'HIGH', 'URGENT')", name="ck_tickets_priority"
         ),
@@ -180,6 +189,16 @@ class Ticket(Base):
             "(status <> 'CLOSED' AND closed_by IS NULL AND closed_at IS NULL "
             "AND closed_decision_id IS NULL)",
             name="ck_tickets_close_fields",
+        ),
+        CheckConstraint(
+            "(status IN ('OPEN', 'IN_PROGRESS') AND resolved_by IS NULL "
+            "AND resolved_at IS NULL AND resolved_decision_id IS NULL) OR "
+            "(status = 'RESOLVED' AND resolved_by IS NOT NULL "
+            "AND resolved_at IS NOT NULL AND resolved_decision_id IS NOT NULL) OR "
+            "(status = 'CLOSED' AND ((resolved_by IS NULL AND resolved_at IS NULL "
+            "AND resolved_decision_id IS NULL) OR (resolved_by IS NOT NULL "
+            "AND resolved_at IS NOT NULL AND resolved_decision_id IS NOT NULL)))",
+            name="ck_tickets_resolution_fields",
         ),
         Index("ix_tickets_status_created", "status", "created_at", "id"),
         Index("ix_tickets_priority_created", "priority", "created_at"),
@@ -227,6 +246,11 @@ class Ticket(Base):
     )
     closed_decision_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
+    resolved_decision_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
