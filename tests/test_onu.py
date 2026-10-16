@@ -81,10 +81,13 @@ def test_gpon_surrogate_key_is_never_rendered_as_mac() -> None:
 
 
 def test_online_onu_does_not_present_previous_disconnection_reason() -> None:
-    item = normalize_candidate({**gpon_row(), "reason": "power-off"}, {})
+    item = normalize_candidate(
+        {**gpon_row(), "reason": "power-off", "last_deregister": datetime(2026, 10, 9, 4)}, {}
+    )
     assert item is not None
     assert item.state == "ONLINE"
     assert item.reason is None
+    assert item.disconnection_at is None
 
 
 def test_offline_onu_keeps_disconnection_reason() -> None:
@@ -107,6 +110,42 @@ def test_epon_mac_and_deregistered_are_preserved() -> None:
     assert item.mac == "02:00:00:00:00:01"
     assert item.serial is None
     assert item.state == "DEREGISTERED"
+
+
+def test_epon_uses_current_snmp_deregistration_time_only() -> None:
+    base = {
+        **gpon_row(),
+        "pon_type": "EPON",
+        "mac": "02:00:00:00:00:01",
+        "state": "deregistered",
+        "last_register": datetime(2026, 10, 9, 10),
+        "last_deregister": datetime(2026, 10, 10, 11),
+    }
+    item = normalize_candidate(base, {})
+    assert item is not None
+    assert item.disconnection_at == "2026-10-10 11:00:00"
+    assert item.disconnection_time_basis == "EPON_DEREGISTRATION"
+    for row in (
+        {**base, "last_deregister": datetime(2026, 10, 8)},
+        {**base, "last_deregister": datetime(2026, 10, 11)},
+        {**base, "last_deregister": None},
+        {**base, "state": "online"},
+    ):
+        candidate = normalize_candidate(row, {})
+        assert candidate is not None and candidate.disconnection_at is None
+
+
+def test_gpon_only_reports_initial_offline_detection_not_generic_change_time() -> None:
+    first = datetime(2026, 10, 10, 10)
+    base = {**gpon_row(), "state": "offline", "first_seen": first, "changed_at": first}
+    item = normalize_candidate(base, {})
+    assert item is not None
+    assert item.disconnection_at == "2026-10-10 10:00:00"
+    assert item.disconnection_time_basis == "FIRST_OBSERVED_OFFLINE"
+    changed = normalize_candidate({**base, "changed_at": datetime(2026, 10, 10, 11)}, {})
+    assert changed is not None and changed.disconnection_at is None
+    online = normalize_candidate({**base, "state": "online"}, {})
+    assert online is not None and online.disconnection_at is None
 
 
 def test_vlan_only_produces_unconfirmed_candidate() -> None:

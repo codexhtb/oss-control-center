@@ -42,13 +42,6 @@ function FullMonitoringReport({ report }: { report: DiagnosticReport }) {
   </div>
 }
 
-export function MonitoringReport({ report, scope = 'connection' }: { report: DiagnosticReport; scope?: 'connection' | 'olt' }) {
-  if (scope === 'connection') return <FullMonitoringReport report={report} />
-  return <div className="monitoring-report monitoring-report--olt">
-    <p className="muted">Проверка OLT: {formatDate(report.checked_at)}. Доступность устройства оценивается отдельно от состояния ONU.</p>
-    {report.observations.length ? <div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Источник</th><th>Объект проверки</th><th>Результат</th><th>Наблюдение</th></tr></thead><tbody>
-      {report.observations.map((item, index) => <tr key={`${item.source}-${index}`}><td>{item.source}</td><td>{item.measured_object.startsWith('device:') || item.measured_object === 'host' || item.measured_object === 'mapped_device' || item.measured_object === 'mapped_host' ? 'Устройство OLT' : item.measured_object.startsWith('interface:') ? 'Интерфейс оборудования' : item.measured_object.startsWith('service:') ? 'Сервис мониторинга' : 'Объект мониторинга'}</td><td>{result[item.result] || 'Неизвестно'}{item.quality !== 'KNOWN' && <small className="monitoring-quality">{quality[item.quality]}</small>}</td><td>{item.observed_at ? formatDate(item.observed_at) : 'Время неизвестно'}</td></tr>)}
-    </tbody></table></div> : <p className="muted">Наблюдений об OLT нет.</p>}
-    <details className="diagnostic-details"><summary>Технические сведения проверки</summary><FullMonitoringReport report={report} /></details>
-  </div>
+export function MonitoringReport({ report }: { report: DiagnosticReport }) {
+  return <FullMonitoringReport report={report} />
 }

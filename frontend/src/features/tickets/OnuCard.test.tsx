@@ -18,10 +18,10 @@ it('shows GPON Serial without fabricating a MAC and keeps source times separate'
   expect(screen.getByText('SYNTHETIC-SERIAL')).toBeInTheDocument()
   expect(screen.getByText('Отсутствует')).toBeInTheDocument()
   expect(screen.getByText(/Кандидаты для проверки инженером/)).toBeInTheDocument()
-  expect(screen.getByText('Наблюдение состояния ONU').parentElement).toHaveTextContent('10.10.2026 12:00:00')
-  expect(screen.getByText('Измерение оптики').parentElement).toHaveTextContent('09.10.2026 04:10:00')
-  expect(screen.getByText(/часовой пояс не подтверждён/)).toBeVisible()
-  expect(screen.queryByText('Ранее даты получения')).not.toBeInTheDocument()
+  expect(screen.queryByText('Наблюдение состояния ONU')).not.toBeInTheDocument()
+  expect(screen.getByText('Оптика измерена').parentElement).toHaveTextContent('09.10.2026 04:10:00')
+  expect(screen.queryByText('Источники и актуальность')).not.toBeInTheDocument()
+  expect(screen.queryByText('Старое измерение')).not.toBeInTheDocument()
 })
 
 it('shows a confirmed composite-key match with NetUP provenance', () => {
@@ -37,7 +37,7 @@ it('shows a confirmed composite-key match with NetUP provenance', () => {
       inventory_polled_at: '2026-10-10 12:00:00', optical_measured_at: '2026-10-09 04:10:00',
     }],
   }} />)
-  expect(screen.getByText(/порт 14 → PON 1, VLAN 101/)).toBeInTheDocument()
+  expect(screen.queryByText(/порт 14 → PON 1, VLAN 101/)).not.toBeInTheDocument()
   expect(screen.getByText('SYNTHETIC-SERIAL')).toBeInTheDocument()
   expect(screen.getByText('Online')).toBeInTheDocument()
   expect(screen.getByRole('group', { name: 'ONU Rx' })).toHaveTextContent('-20.5 dBm')
@@ -66,6 +66,25 @@ it('does not show an old power-off reason for an online ONU, but shows it when o
   expect(screen.getByText('power-off')).toBeInTheDocument()
 })
 
+it('labels EPON event time and GPON initial detection differently, and hides old online time', () => {
+  const epon: OnuResult = { ...confirmed, candidates: [{ ...confirmed.candidates[0]!,
+    state: 'DEREGISTERED', disconnection_at: '2026-10-10 10:00:00',
+    disconnection_time_basis: 'EPON_DEREGISTRATION',
+  }] }
+  const view = render(<OnuCard result={epon} />)
+  expect(screen.getByText('Время отключения:')).toHaveTextContent('Время отключения:')
+  expect(screen.getByText('Время отключения:').parentElement).toHaveTextContent('10.10.2026 10:00:00')
+  expect(diagnosticSummary(epon.candidates[0]!, 101)).toContain('Время отключения: 10.10.2026 10:00:00')
+  view.rerender(<OnuCard result={{ ...epon, candidates: [{ ...epon.candidates[0]!, pon_type: 'GPON',
+    state: 'OFFLINE', mac: null, serial: 'SYNTHETIC-SERIAL', disconnection_time_basis: 'FIRST_OBSERVED_OFFLINE',
+  }] }} />)
+  expect(screen.getByText('Отключение обнаружено:')).toBeVisible()
+  expect(screen.queryByText('Время отключения:')).not.toBeInTheDocument()
+  view.rerender(<OnuCard result={{ ...epon, candidates: [{ ...epon.candidates[0]!, state: 'ONLINE' }] }} />)
+  expect(screen.queryByText('Время отключения:')).not.toBeInTheDocument()
+  expect(screen.queryByText('Отключение обнаружено:')).not.toBeInTheDocument()
+})
+
 it('does not present a disconnected source as a working ONU', () => {
   render(<OnuCard result={{
     source: 'BDCOM', retrieved_at: '2026-10-10T12:00:00Z',
@@ -74,7 +93,7 @@ it('does not present a disconnected source as a working ONU', () => {
   }} />)
   expect(screen.getByText(/Источник BDCOM ONU не подключён/)).toBeInTheDocument()
   expect(screen.queryByText('Online')).not.toBeInTheDocument()
-  expect(screen.getByText('NetUP: историческая лабораторная копия.')).toBeVisible()
+  expect(screen.queryByText('NetUP: историческая лабораторная копия.')).not.toBeInTheDocument()
 })
 
 const sample: OnuResult = {
@@ -94,9 +113,9 @@ it('keeps Rx values together, Tx third, and reports old optical dates without ch
   expect(screen.getByRole('group', { name: 'ONU Tx' })).toHaveTextContent('2.5 dBm')
   expect(screen.getByText('Online')).toBeVisible()
   expect(screen.getByText('По опросу ONU')).toBeVisible()
-  expect(screen.getByText('Ранее даты получения')).toBeVisible()
-  expect(screen.getByText('Ранее даты получения').parentElement).toHaveTextContent('Измерение оптики')
-  expect(screen.getAllByText('NetUP: историческая лабораторная копия.')).toHaveLength(1)
+  expect(screen.getByText('Старое измерение')).toBeVisible()
+  expect(screen.getByText('Старое измерение').parentElement).toHaveTextContent('Оптика измерена')
+  expect(screen.queryByText('NetUP: историческая лабораторная копия.')).not.toBeInTheDocument()
   expect(screen.getByText('101')).toBeVisible()
   expect(screen.getAllByText(/Привязка к абоненту не подтверждена/)[0]).toBeVisible()
 })
@@ -107,9 +126,9 @@ it('shows missing optical measurements and times explicitly without inventing a 
     inventory_polled_at: null, optical_measured_at: null,
   }] }} />)
   expect(screen.getAllByText('Нет измерения')).toHaveLength(3)
-  expect(screen.getAllByText('Время неизвестно')).toHaveLength(2)
+  expect(screen.getAllByText('Время неизвестно')).toHaveLength(1)
   expect(screen.queryByText('dBm')).not.toBeInTheDocument()
-  expect(screen.queryByText('Ранее даты получения')).not.toBeInTheDocument()
+  expect(screen.queryByText('Старое измерение')).not.toBeInTheDocument()
   expect(screen.queryByText('Online')).not.toBeInTheDocument()
 })
 
@@ -132,14 +151,14 @@ it('copies exact confirmed EPON fields and a summary without a stale online reas
   }
   expect(screen.queryByRole('button', { name: 'Скопировать Serial ONU' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Скопировать сводку' }))
-  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(diagnosticSummary(confirmed.candidates[0]!, 101, true)))
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(diagnosticSummary(confirmed.candidates[0]!, 101)))
   const summary = vi.mocked(writeText).mock.lastCall![0] as string
   expect(summary).toContain('MAC: 02:00:00:00:00:01')
   expect(summary).toContain('ONU Rx: -20 dBm')
   expect(summary).toContain('Оптика измерена: 01.10.2026 04:10:00')
   expect(summary).not.toContain('power-off')
   expect(summary).not.toContain('IP:')
-  expect(summary).toContain('NetUP: историческая лабораторная копия')
+  expect(summary).not.toContain('NetUP: историческая лабораторная копия')
   expect(screen.getByRole('status')).toHaveTextContent('Скопировано')
 })
 
@@ -183,7 +202,7 @@ it('refreshes once per click, reports success or source error, and preserves sou
   expect(onRefresh).toHaveBeenCalledTimes(1)
   resolveRefresh()
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Данные обновлены'))
-  expect(screen.getByText('Наблюдение состояния ONU').parentElement).toHaveTextContent('10.10.2026 11:30:00')
+  expect(screen.getByText('Оптика измерена').parentElement).toHaveTextContent('01.10.2026 04:10:00')
   rerender(<OnuCard result={confirmed} onRefresh={async () => { throw new Error('synthetic failure') }} />)
   fireEvent.click(screen.getByRole('button', { name: 'Обновить данные' }))
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Источник недоступен'))

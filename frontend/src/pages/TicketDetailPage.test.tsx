@@ -112,6 +112,9 @@ it('shows an engineer a monitoring result and requires a separate confirm action
     account_no: 'synthetic-account',
     subscriber_snapshot_id: '00000000-0000-4000-8000-000000000040',
     connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041',
+      access_type: 'ETHERNET', device: 'synthetic-switch', port: '1', vlan: '101',
+      onu_id: null, address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
     subscriber: { full_name: 'Синтетический абонент', organization_name: null, phone: null,
       actual_address: null, fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
   }
@@ -175,17 +178,11 @@ it('shows PON diagnostics in one section and keeps equipment checks available on
   expect(screen.queryByRole('heading', { name: 'Мониторинг подключения' })).not.toBeInTheDocument()
   expect(screen.queryByText('power-off')).not.toBeInTheDocument()
   expect(screen.getByRole('group', { name: 'ONU Rx' })).toHaveTextContent('-21 dBm')
-  const extra = screen.getByText('Проверка OLT в мониторинге').closest('details')!
-  expect(extra.open).toBe(false)
-  fireEvent.click(screen.getByText('Проверка OLT в мониторинге'))
-  expect(extra.open).toBe(true)
-  fireEvent.click(screen.getByRole('button', { name: 'Проверить OLT' }))
-  await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
-  expect(await screen.findByText('Устройство OLT')).toBeVisible()
-  expect(screen.getByText('device:1')).not.toBeVisible()
-  expect(screen.getByText(/интерфейс: Неизвестно/)).not.toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить и сохранить в истории' }))
-  await waitFor(() => expect(ticketApi.confirmCheck).toHaveBeenCalledWith(ticketId, 'check-id', 3))
+  expect(screen.queryByText('Проверка OLT в мониторинге')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Проверить OLT' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Проверить подключение' })).not.toBeInTheDocument()
+  expect(screen.queryByText('device:1')).not.toBeInTheDocument()
+  expect(ticketApi.checkTicket).not.toHaveBeenCalled()
 })
 
 it('keeps equipment monitoring primary for a confirmed Ethernet connection', async () => {

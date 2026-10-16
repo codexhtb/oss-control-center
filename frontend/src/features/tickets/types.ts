@@ -205,6 +205,8 @@ export interface OnuCandidate {
   onu_tx_dbm: string | null
   inventory_polled_at: string | null
   optical_measured_at: string | null
+  disconnection_at?: string | null
+  disconnection_time_basis?: 'EPON_DEREGISTRATION' | 'FIRST_OBSERVED_OFFLINE' | null
 }
 
 export interface OnuResult {

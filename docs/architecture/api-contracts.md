@@ -124,7 +124,12 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 и не более 20 `candidates`. Каждый кандидат содержит OLT, интерфейс,
 `pon_type`, физический `mac` (nullable), `serial` (nullable), `state`,
 `reason`, три nullable оптических значения и отдельные
-`inventory_polled_at`/`optical_measured_at`. GPON surrogate в DB `mac`
+`inventory_polled_at`/`optical_measured_at`, а также необязательные
+`disconnection_at` и `disconnection_time_basis`. Для EPON basis
+`EPON_DEREGISTRATION` означает проверенное SNMP `last_deregister` на
+отключённой ONU; для GPON `FIRST_OBSERVED_OFFLINE` означает лишь первое
+обнаружение уже отключённой ONU. Когда время из текущей строки не доказано,
+оба поля `null`. У Online ONU они всегда `null`. GPON surrogate в DB `mac`
 не считается физическим MAC. `UNAVAILABLE` не подменяется пустым успешным
 списком. Ответы имеют `Cache-Control: no-store`; путь содержит только UUID,
 а не ЛС или MAC. `MATCHED_BY_RULE` возможен только при утверждённом

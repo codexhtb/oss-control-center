@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { expect, it } from 'vitest'
 import { MonitoringReport } from './MonitoringReport'
 import type { DiagnosticReport } from './types'
@@ -9,17 +9,6 @@ const report: DiagnosticReport = {
   observations: [{ source: 'LIBRENMS', measured_object: 'device:1', result: 'UP',
     observed_at: '2026-10-10T11:59:00Z', retrieved_at: '2026-10-10T12:00:00Z', quality: 'KNOWN' }],
 }
-
-it('presents PON monitoring as an OLT observation and keeps IDs/interface limitations in details', () => {
-  render(<MonitoringReport report={report} scope="olt" />)
-  expect(screen.getByText('Устройство OLT')).toBeVisible()
-  expect(screen.getByText('device:1')).not.toBeVisible()
-  expect(screen.getByText(/интерфейс: Неизвестно/)).not.toBeVisible()
-  expect(screen.getByText('Соответствие порта NetUP и интерфейса не подтверждено.')).not.toBeVisible()
-  fireEvent.click(screen.getByText('Технические сведения проверки'))
-  expect(screen.getByText('device:1')).toBeVisible()
-  expect(screen.getByText('Соответствие порта NetUP и интерфейса не подтверждено.')).toBeVisible()
-})
 
 it('preserves the existing Ethernet report and its interface semantics', () => {
   render(<MonitoringReport report={report} />)
@@ -32,7 +21,7 @@ it('preserves the existing Ethernet report and its interface semantics', () => {
 it('keeps unavailable observations distinct from DOWN and does not invent an interface', () => {
   render(<MonitoringReport report={{ ...report, observations: [{ ...report.observations[0]!,
     result: 'UNAVAILABLE', quality: 'UNAVAILABLE', observed_at: null,
-  }] }} scope="olt" />)
+  }] }} />)
   expect(screen.getAllByText('Источник недоступен')[0]).toBeVisible()
   expect(screen.getAllByText('Время неизвестно')[0]).toBeVisible()
   expect(screen.queryByText('Недоступно')).not.toBeInTheDocument()

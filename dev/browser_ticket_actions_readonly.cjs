@@ -111,11 +111,9 @@ async function main() {
       const refreshedOnu = await refresh.json()
       if (refreshedOnu.availability !== 'AVAILABLE' || refreshedOnu.candidates.length !== 1) throw new Error('ONU source unavailable after refresh')
       await diagnostics.getByRole('status').filter({ hasText: 'Данные обновлены' }).waitFor({ state: 'visible' })
-      for (const [label, value] of [['Наблюдение состояния ONU', refreshedOnu.candidates[0].inventory_polled_at], ['Измерение оптики', refreshedOnu.candidates[0].optical_measured_at]]) {
-        const row = diagnostics.locator('.onu-source-time').filter({ hasText: label })
-        const displayed = value ? value.replace(/^(\d{4})-(\d{2})-(\d{2})[ T]/, '$3.$2.$1 ') : 'Время неизвестно'
-        if (!(await row.textContent()).includes(displayed)) throw new Error('Refreshed source time differs from ONU observation')
-      }
+      const opticalTime = refreshedOnu.candidates[0].optical_measured_at
+      const opticalDisplay = opticalTime ? opticalTime.replace(/^(\d{4})-(\d{2})-(\d{2})[ T]/, '$3.$2.$1 ') : 'Время неизвестно'
+      if (!(await diagnostics.locator('.onu-source-time').textContent()).includes(opticalDisplay)) throw new Error('Refreshed optical time differs from ONU observation')
       const identifiers = candidate.locator('.onu-identifiers')
       const identityText = await candidate.locator('.onu-identity').textContent()
       if (!identityText.includes(item.olt) || !identityText.includes(item.interface)) throw new Error('ONU identity does not match the source')
@@ -131,19 +129,14 @@ async function main() {
         const text = await metric.textContent()
         if (value === null ? !text.includes('Нет измерения') : !text.includes(value) || !text.includes('dBm')) throw new Error('Optical value/unit differs from the source')
       }
-      for (const [label, value] of [['Наблюдение состояния ONU', item.inventory_polled_at], ['Измерение оптики', item.optical_measured_at]]) {
-        const row = candidate.locator('.onu-source-time').filter({ hasText: label })
-        const expected = value ? value.replace(/^(\d{4})-(\d{2})-(\d{2})[ T]/, '$3.$2.$1 ') : 'Время неизвестно'
-        if (!(await row.textContent()).includes(expected)) throw new Error('Source observation time was changed')
+      if (await diagnostics.getByText('Источники и актуальность').count()) throw new Error('Technical provenance disclosure is still visible')
+      if (await diagnostics.getByText('Проверка OLT в мониторинге').count() || await diagnostics.getByRole('button', { name: 'Проверить OLT' }).count()) throw new Error('OLT-only check is still presented as subscriber diagnostics')
+      if (await diagnostics.getByText('NetUP: историческая лабораторная копия.', { exact: true }).count()) throw new Error('Persistent lab warning remains on the ONU card')
+      if (item.state === 'ONLINE' && await candidate.locator('.onu-disconnect-time').count()) throw new Error('Old disconnection time shown for Online')
+      if (item.disconnection_at && ['OFFLINE', 'DEREGISTERED'].includes(item.state)) {
+        const label = item.disconnection_time_basis === 'EPON_DEREGISTRATION' ? 'Время отключения' : 'Отключение обнаружено'
+        if (!(await candidate.locator('.onu-disconnect-time').textContent()).includes(label)) throw new Error('Disconnection time basis mislabeled')
       }
-      if (onu.limitations.includes('netup_topology_stale')) await diagnostics.getByText('NetUP: историческая лабораторная копия.', { exact: true }).waitFor({ state: 'visible' })
-      const oltDetails = diagnostics.locator('details').filter({ has: page.getByText('Проверка OLT в мониторинге', { exact: true }) })
-      if (await oltDetails.evaluate((node) => node.open)) throw new Error('OLT checks open by default')
-      await oltDetails.locator(':scope > summary').focus()
-      await oltDetails.locator(':scope > summary').press('Enter')
-      if (!await oltDetails.evaluate((node) => node.open)) throw new Error('OLT disclosure cannot be opened with keyboard')
-      if (ticket.status !== 'CLOSED') await oltDetails.getByRole('button', { name: 'Проверить OLT', exact: true }).waitFor({ state: 'visible' })
-      await oltDetails.locator(':scope > summary').press('Enter')
       await diagnostics.screenshot({ path: `/run/screenshots/ticket38-diagnostics-${me.user.role}.png`, mask: [identifiers.locator('strong'), candidate.locator('.onu-identity strong')] })
       for (const width of [820, 390]) {
         await page.setViewportSize({ width, height: 844 })
@@ -207,7 +200,7 @@ async function main() {
         } else if (lookupResponse.status() !== 404) throw new Error('Subscriber 360 read-only lookup failed')
       }
       if (mutationAttempted || pageErrors) throw new Error('Read-only browser check failed')
-      console.log(`Ticket 38 read-only Chromium: role=${me.user.role}, state=${ticket.status}, grants, ONU copy/summary/GET refresh, identity/VLAN, Rx/Tx, separate source times, OLT disclosure, desktop sticky, 820/390px layout passed; Subscriber 360=${subscriberChecked ? 'verified' : 'snapshot belongs to another session'}; no ticket mutations`)
+      console.log(`Ticket 38 read-only Chromium: role=${me.user.role}, state=${ticket.status}, grants, ONU copy/summary/GET refresh, identity/VLAN, Rx/Tx, optical and disconnection time, compact diagnostics, desktop sticky, 820/390px layout passed; Subscriber 360=${subscriberChecked ? 'verified' : 'snapshot belongs to another session'}; no ticket mutations`)
       await context.close()
     }
   } finally { await browser.close() }

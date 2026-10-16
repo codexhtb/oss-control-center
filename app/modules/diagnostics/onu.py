@@ -27,6 +27,8 @@ class OnuCandidate(BaseModel):
     onu_tx_dbm: str | None = None
     inventory_polled_at: str | None = None
     optical_measured_at: str | None = None
+    disconnection_at: str | None = None
+    disconnection_time_basis: Literal["EPON_DEREGISTRATION", "FIRST_OBSERVED_OFFLINE"] | None = None
 
 
 class OnuMatch(BaseModel):
@@ -140,6 +142,35 @@ def _optical(value: object) -> str | None:
     return str(number) if number.is_finite() and -100 <= number <= 100 else None
 
 
+def _disconnection_time(row: dict, pon_type: str, state: str) -> tuple[str | None, str | None]:
+    if state not in {"OFFLINE", "DEREGISTERED"}:
+        return None, None
+    last_seen = row.get("last_seen")
+    if not isinstance(last_seen, datetime):
+        return None, None
+    if pon_type == "EPON":
+        deregister = row.get("last_deregister")
+        register = row.get("last_register")
+        if (
+            isinstance(deregister, datetime)
+            and deregister <= last_seen
+            and (not isinstance(register, datetime) or deregister >= register)
+        ):
+            return _source_time(deregister), "EPON_DEREGISTRATION"
+    elif pon_type == "GPON":
+        # changed_at also advances on reason/interface changes. Only the initial
+        # observation of an offline ONU proves when that state was first seen.
+        first_seen = row.get("first_seen")
+        changed_at = row.get("changed_at")
+        if (
+            isinstance(first_seen, datetime)
+            and first_seen == changed_at
+            and first_seen <= last_seen
+        ):
+            return _source_time(first_seen), "FIRST_OBSERVED_OFFLINE"
+    return None, None
+
+
 def normalize_candidate(row: dict, olt: dict) -> OnuCandidate | None:
     pon_type = str(row.get("pon_type") or "").upper()
     interface = row.get("interface")
@@ -157,6 +188,7 @@ def normalize_candidate(row: dict, olt: dict) -> OnuCandidate | None:
         "lost": "OFFLINE",
         "deregistered": "DEREGISTERED",
     }.get(raw_state, "UNKNOWN")
+    disconnection_at, disconnection_time_basis = _disconnection_time(row, pon_type, state)
     try:
         return OnuCandidate(
             olt=olt.get("sys_name") or olt.get("hostname"),
@@ -173,6 +205,8 @@ def normalize_candidate(row: dict, olt: dict) -> OnuCandidate | None:
             onu_tx_dbm=_optical(row.get("onu_tx_power")),
             inventory_polled_at=_source_time(row.get("last_seen")),
             optical_measured_at=_source_time(row.get("signal_updated_at")),
+            disconnection_at=disconnection_at,
+            disconnection_time_basis=disconnection_time_basis,
         )
     except ValidationError:
         return None
@@ -219,6 +253,7 @@ class BdcomOnuReader:
                     return {}, [], len(olts) > 1
                 query = (
                     "SELECT pon_type, interface, mac, serial, state, reason, present, last_seen, "
+                    "last_register, last_deregister, first_seen, changed_at, "
                     "onu_rx_power, onu_tx_power, olt_rx_power, signal_updated_at "
                     "FROM bdcom_onus WHERE device_id = %s AND vlan = %s AND present = 1 "
                 )

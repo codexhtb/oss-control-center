@@ -19,7 +19,7 @@ function SourceTime({ label, value, retrievedAt }: { label: string; value: strin
   const dayGap = date && received
     ? Math.floor((Date.UTC(+received[1]!, +received[2]! - 1, +received[3]!) - Date.UTC(+date[1]!, +date[2]! - 1, +date[3]!)) / 86_400_000)
     : 0
-  return <div className="onu-source-time"><span>{label}</span><strong>{sourceTime(value)}</strong>{dayGap >= 2 && <small title={`Разница календарных дат: ${dayGap} дн. Часовой пояс источника не подтверждён.`}>Ранее даты получения</small>}</div>
+  return <div className="onu-source-time"><span>{label}</span><strong>{sourceTime(value)}</strong>{dayGap >= 2 && <small title={`Разница календарных дат: ${dayGap} дн. Часовой пояс источника не подтверждён.`}>Старое измерение</small>}</div>
 }
 
 function OpticalValue({ label, value }: { label: string; value: string | null }) {
@@ -43,10 +43,8 @@ function Candidate({ item, vlan, retrievedAt, onCopy }: { item: OnuResult['candi
       <OpticalValue label="OLT Rx" value={item.olt_rx_dbm} />
       <OpticalValue label="ONU Tx" value={item.onu_tx_dbm} />
     </div>
-    <div className="onu-source-times">
-      <SourceTime label="Наблюдение состояния ONU" value={item.inventory_polled_at} retrievedAt={retrievedAt} />
-      <SourceTime label="Измерение оптики" value={item.optical_measured_at} retrievedAt={retrievedAt} />
-    </div>
+    {disconnected && item.disconnection_at && <p className="onu-disconnect-time">{item.disconnection_time_basis === 'EPON_DEREGISTRATION' ? 'Время отключения' : 'Отключение обнаружено'}: <strong>{sourceTime(item.disconnection_at)}</strong></p>}
+    <div className="onu-source-times"><SourceTime label="Оптика измерена" value={item.optical_measured_at} retrievedAt={retrievedAt} /></div>
   </div>
 }
 
@@ -76,23 +74,13 @@ export function OnuCard({ result, vlan, onRefresh, refreshing = false }: { resul
     catch { setFeedback('Источник недоступен. Не удалось обновить данные ONU.') }
     finally { refreshLock.current = false; setRefreshBusy(false) }
   }
-  const billingWarning = result.limitations.includes('netup_topology_stale') && <p className="onu-source-note">NetUP: историческая лабораторная копия.</p>
   return <div className={`onu-candidates${confirmed ? ' onu-candidates--matched' : ''}`}>
-    {onRefresh && <div className="onu-quick-actions"><Button type="button" variant="quiet" icon={<RefreshCw size={14} />} disabled={refreshing || refreshBusy} onClick={() => void refresh()}>{refreshing || refreshBusy ? 'Обновляем…' : 'Обновить данные'}</Button>{confirmed && result.match && <Button type="button" variant="quiet" icon={<Copy size={14} />} onClick={() => void copy('Сводка', diagnosticSummary(confirmed, result.match!.vlan, result.limitations.includes('netup_topology_stale')))}>Скопировать сводку</Button>}<span role="status" aria-live="polite">{feedback}</span></div>}
+    {onRefresh && <div className="onu-quick-actions"><Button type="button" variant="quiet" icon={<RefreshCw size={14} />} disabled={refreshing || refreshBusy} onClick={() => void refresh()}>{refreshing || refreshBusy ? 'Обновляем…' : 'Обновить данные'}</Button>{confirmed && result.match && <Button type="button" variant="quiet" icon={<Copy size={14} />} onClick={() => void copy('Сводка', diagnosticSummary(confirmed, result.match!.vlan))}>Скопировать сводку</Button>}<span role="status" aria-live="polite">{feedback}</span></div>}
     {result.availability === 'UNAVAILABLE' ? <Notice tone="error">Источник BDCOM ONU не подключён или недоступен.</Notice> : !result.candidates.length ? <p className="muted">ONU не сопоставлена с абонентом. {result.limitations.includes('olt_mapping_unconfirmed') ? 'Соответствие OLT не утверждено.' : result.limitations.includes('multiple_service_links_same_pon_vlan') ? 'Один OLT, PON-порт и VLAN указаны у нескольких сервисных связок.' : result.limitations.includes('onu_composite_key_not_found') ? 'Нет действующей ONU с таким OLT, PON-портом и VLAN.' : result.availability === 'CONFLICT' ? 'В NetUP есть противоречивые привязки.' : 'Подтверждённых данных нет.'}</p> : <>
     {result.association !== 'MATCHED_BY_RULE' && <p className="muted">Кандидаты для проверки инженером. Привязка к абоненту не подтверждена.</p>}
     {result.candidates.map((item) => <Candidate key={`${item.pon_type}-${item.interface}-${item.serial || item.mac}`} item={item} vlan={result.association === 'MATCHED_BY_RULE' ? result.match?.vlan ?? vlan : vlan} retrievedAt={result.retrieved_at} onCopy={confirmed === item ? (label, value) => void copy(label, value) : undefined} />)}
-    <p className="onu-source-note">LibreNMS BDCOM · Время источника, часовой пояс не подтверждён.</p>
-    <details className="diagnostic-details"><summary>Источники и актуальность</summary>
-      {result.association === 'MATCHED_BY_RULE' && result.match
-        ? <p>Привязка: NetUP, порт {result.match.netup_port} → PON {result.match.pon_port}, VLAN {result.match.vlan}. Состояние и оптика: LibreNMS BDCOM. Данные NetUP: {result.match.billing_observed_at || 'время неизвестно'}.</p>
-        : <p>Источник ONU: LibreNMS BDCOM. Привязка к абоненту не подтверждена.</p>}
-      <p>Получено: {result.retrieved_at}. Состояние относится к опросу ONU, оптические значения — к своему измерению; их возраст может различаться.</p>
-      {result.limitations.includes('onu_candidates_truncated') && <p>Показаны только первые 20 кандидатов.</p>}
-      {result.limitations.includes('onu_composite_key_ambiguous') && <p>Несколько ONU с одинаковым OLT, PON-портом и VLAN; нужна проверка инженером.</p>}
-    </details>
+    {result.limitations.includes('onu_candidates_truncated') && <p className="muted">Показаны первые 20 кандидатов.</p>}
     </>}
-    {billingWarning}
   </div>
 }
 
