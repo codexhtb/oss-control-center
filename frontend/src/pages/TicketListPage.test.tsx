@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ticketApi } from '../features/tickets/ticket-api'
@@ -55,4 +55,48 @@ it('shows the empty state from an empty server page', async () => {
   vi.mocked(ticketApi.list).mockResolvedValue({ items: [], page: 1, size: 20, total: 0 })
   renderList()
   expect(await screen.findByText('Заявок по этим условиям нет')).toBeInTheDocument()
+})
+
+it('shows snapshot subscriber identity and account alongside linked tickets', async () => {
+  const linked: Ticket = {
+    ...ticket,
+    id: '00000000-0000-4000-8000-000000000005',
+    ticket_type: 'SUBSCRIBER_LINKED',
+    subscriber_name: 'Синтетический абонент',
+    account_no: '0001499',
+    subject: 'Нет интернета',
+  }
+  vi.mocked(ticketApi.list).mockResolvedValue({ items: [linked, ticket], page: 1, size: 20, total: 2 })
+  renderList()
+  const subscriberRow = (await screen.findByText('Синтетический абонент')).closest('tr')
+  expect(subscriberRow).not.toBeNull()
+  expect(within(subscriberRow!).getByText('ЛС 0001499')).toBeInTheDocument()
+  expect(within(subscriberRow!).getByRole('link', { name: /Нет интернета/ })).toHaveAttribute('href', `/tickets/${linked.id}`)
+  const manualRow = screen.getByText('Синтетическая задача').closest('tr')
+  expect(manualRow).not.toBeNull()
+  expect(within(manualRow!).queryByText(/ЛС /)).not.toBeInTheDocument()
+})
+
+it('shows organization and a neutral label when a linked snapshot has no name', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({
+    items: [
+      { ...ticket, id: '00000000-0000-4000-8000-000000000003', ticket_type: 'SUBSCRIBER_LINKED', subscriber_name: 'Синтетическая организация', account_no: '001' },
+      { ...ticket, id: '00000000-0000-4000-8000-000000000004', ticket_type: 'SUBSCRIBER_LINKED', subscriber_name: null, account_no: '002' },
+    ],
+    page: 1, size: 20, total: 2,
+  })
+  renderList()
+  expect(await screen.findByText('Синтетическая организация')).toBeInTheDocument()
+  expect(screen.getByText('Абонент не указан')).toBeInTheDocument()
+  expect(screen.getByText('ЛС 002')).toBeInTheDocument()
+})
+
+it('does not fabricate an account number when linked data is incomplete', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({
+    items: [{ ...ticket, ticket_type: 'SUBSCRIBER_LINKED', subscriber_name: null, account_no: null }],
+    page: 1, size: 20, total: 1,
+  })
+  renderList()
+  expect(await screen.findByText('Абонент не указан')).toBeInTheDocument()
+  expect(screen.queryByText(/ЛС /)).not.toBeInTheDocument()
 })

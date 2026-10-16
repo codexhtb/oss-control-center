@@ -13,11 +13,12 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy import create_engine, event, func, inspect, select, text
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.v1.billing import get_billing_provider
 from app.api.v1.diagnostics import engine_dependency, onu_dependency
 from app.core.config import get_settings
 from app.core.errors import ApiError
@@ -1835,3 +1836,111 @@ def test_category_disable_and_ticket_create_serialize(ticket_engine: Engine) -> 
                 admin.rollback()
     with Session(ticket_engine) as db:
         assert db.scalar(select(func.count()).select_from(Ticket)) == 0
+
+
+def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "list_subscriber_operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "list_subscriber_engineer", Role.ENGINEER)
+    personal, _ = seed_snapshot(ticket_engine, operator)
+    with Session(ticket_engine, expire_on_commit=False) as db:
+        organization = SubscriberSnapshot(
+            account_no="000124",
+            source="MOCK",
+            fetched_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            requested_by=operator.id,
+            full_name=None,
+            organization_name="Synthetic Organization",
+            contracts=[],
+            services=[],
+        )
+        unnamed = SubscriberSnapshot(
+            account_no="000125",
+            source="MOCK",
+            fetched_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            requested_by=operator.id,
+            full_name="  ",
+            organization_name=None,
+            contracts=[],
+            services=[],
+        )
+        db.add_all([organization, unnamed])
+        db.commit()
+
+    login(ticket_client, operator.login)
+    linked_numbers = {}
+    for snapshot in (personal, organization, unnamed):
+        result = create(ticket_client, snapshot)
+        assert result.status_code == 201, result.text
+        linked_numbers[result.json()["number"]] = snapshot.account_no
+    for kind in ("MANUAL", "INTERNAL"):
+        result = ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "ticket_type": kind,
+                "subject": f"Synthetic {kind}",
+                "description": "Synthetic request",
+                "client_request_id": str(uuid4()),
+            },
+        )
+        assert result.status_code == 201, result.text
+
+    def unavailable_provider():
+        pytest.fail("Ticket list must not initialize a BillingProvider")
+
+    ticket_client.app.dependency_overrides[get_billing_provider] = unavailable_provider
+    snapshot_selects = []
+
+    def count_snapshot_selects(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT") and "subscriber_snapshots" in statement:
+            snapshot_selects.append(statement)
+
+    event.listen(ticket_engine, "before_cursor_execute", count_snapshot_selects)
+    try:
+        page = ticket_client.get("/api/v1/tickets", params={"page": 1, "size": 10})
+    finally:
+        event.remove(ticket_engine, "before_cursor_execute", count_snapshot_selects)
+    assert page.status_code == 200, page.text
+    assert page.headers["cache-control"] == "no-store"
+    assert page.json()["total"] == 5
+    assert len(snapshot_selects) == 1
+    items = {item["account_no"]: item for item in page.json()["items"] if item["account_no"]}
+    assert items["000123"]["subscriber_name"] == "Synthetic Subscriber"
+    assert items["000124"]["subscriber_name"] == "Synthetic Organization"
+    assert items["000125"]["subscriber_name"] is None
+    assert len(linked_numbers) == 3
+    assert all(
+        item["subscriber_name"] is None and item["account_no"] is None
+        for item in page.json()["items"]
+        if item["ticket_type"] != "SUBSCRIBER_LINKED"
+    )
+    for kind in ("MANUAL", "INTERNAL"):
+        filtered = ticket_client.get("/api/v1/tickets", params={"ticket_type": kind, "size": 1})
+        assert filtered.status_code == 200
+        assert filtered.json()["total"] == 1
+        assert filtered.json()["items"][0]["ticket_type"] == kind
+    linked_page = ticket_client.get(
+        "/api/v1/tickets", params={"ticket_type": "SUBSCRIBER_LINKED", "size": 1, "page": 2}
+    )
+    assert linked_page.status_code == 200
+    assert linked_page.json()["total"] == 3
+    assert linked_page.json()["items"][0]["subscriber_name"] in {
+        "Synthetic Subscriber",
+        "Synthetic Organization",
+        None,
+    }
+    login(ticket_client, engineer.login)
+    assert ticket_client.get("/api/v1/tickets", params={"size": 2}).json()["total"] == 5
+    restricted = seed_user(ticket_engine, "list_restricted", Role.OPERATOR)
+    with Session(ticket_engine) as db:
+        db.get(User, restricted.id).permissions_customized = True
+        db.add(UserPermission(user_id=restricted.id, permission=Permission.TICKET_READ_OWN))
+        db.commit()
+    login(ticket_client, restricted.login)
+    restricted_page = ticket_client.get("/api/v1/tickets")
+    assert restricted_page.status_code == 200
+    assert restricted_page.json()["total"] == 0

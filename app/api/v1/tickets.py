@@ -15,6 +15,7 @@ from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import (
     DiagnosticSnapshot,
+    SubscriberSnapshot,
     Ticket,
     TicketAudit,
     TicketComment,
@@ -41,6 +42,7 @@ from app.modules.tickets.schemas import (
     PurgeTicket,
     RecentEventView,
     TicketDetail,
+    TicketListView,
     TicketView,
 )
 from app.modules.tickets.service import (
@@ -187,16 +189,43 @@ def _names(db: Session, ids: list[UUID | None]) -> dict[UUID, str]:
     return dict(db.execute(select(User.id, User.display_name).where(User.id.in_(valid))).all())
 
 
-def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketView]:
+def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
     names = _names(
         db,
         [value for ticket in items for value in (ticket.created_by, ticket.assigned_engineer_id)],
     )
+    snapshot_ids = {
+        ticket.subscriber_snapshot_id
+        for ticket in items
+        if ticket.subscriber_snapshot_id is not None
+    }
+    subscribers = (
+        {
+            snapshot_id: (
+                (full_name or "").strip() or (organization_name or "").strip() or None,
+                account_no,
+            )
+            for snapshot_id, full_name, organization_name, account_no in db.execute(
+                select(
+                    SubscriberSnapshot.id,
+                    SubscriberSnapshot.full_name,
+                    SubscriberSnapshot.organization_name,
+                    SubscriberSnapshot.account_no,
+                ).where(SubscriberSnapshot.id.in_(snapshot_ids))
+            )
+        }
+        if snapshot_ids
+        else {}
+    )
     return [
-        TicketView.model_validate(item).model_copy(
+        TicketListView.model_validate(item).model_copy(
             update={
                 "created_by_name": names.get(item.created_by),
                 "assigned_engineer_name": names.get(item.assigned_engineer_id),
+                "subscriber_name": subscribers.get(item.subscriber_snapshot_id, (None, None))[0],
+                "account_no": subscribers.get(item.subscriber_snapshot_id, (None, item.account_no))[
+                    1
+                ],
             }
         )
         for item in items
@@ -233,7 +262,7 @@ def create(payload: CreateTicket, response: Response, identity: CreateDep, db: S
     return ticket
 
 
-@router.get("", response_model=Page[TicketView])
+@router.get("", response_model=Page[TicketListView])
 def listing(
     identity: ReadDep,
     db: SessionDep,
@@ -267,7 +296,7 @@ def listing(
     return {"items": _ticket_views(db, items), "page": page, "size": size, "total": total}
 
 
-@router.get("/trash", response_model=Page[TicketView])
+@router.get("/trash", response_model=Page[TicketListView])
 def trash(
     identity: CurrentIdentityDep,
     db: SessionDep,

@@ -1,5 +1,9 @@
 # API contracts — Phase 1
 
+## Phase 5.3 — абонент в реестре заявок
+
+`GET /api/v1/tickets` и `GET /api/v1/tickets/trash` сохраняют фильтры, сортировку, пагинацию и область видимости. В каждой сводке добавлено необязательное `subscriber_name: string | null`. Для `SUBSCRIBER_LINKED` имя или название организации и `account_no` читаются пакетно из неизменяемого `subscriber_snapshots` в PostgreSQL. Для `MANUAL` и `INTERNAL` оба значения равны `null`. Старые клиенты могут игнорировать новое поле; запросов к BillingProvider/NetUP при чтении списка нет. Если имя отсутствует в snapshot, API возвращает `null`, а интерфейс показывает нейтральное обозначение и подтверждённый ЛС.
+
 ## Текущий контракт удаления заявок (`0014`)
 
 Все изменяющие операции требуют сессию, Origin, CSRF и `If-Match: "<version>"`; ответ содержит `Cache-Control: no-store`. Детали: [удаление заявок](ticket-deletion.md).

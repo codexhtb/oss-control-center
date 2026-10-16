@@ -21,6 +21,7 @@ export interface Ticket {
   status: TicketStatus
   priority: TicketPriority
   account_no: string | null
+  subscriber_name?: string | null
   subscriber_snapshot_id: string | null
   connection_snapshot_id: string | null
   selected_service_id: string | null

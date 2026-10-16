@@ -259,6 +259,10 @@ class TicketView(BaseModel):
     updated_at: datetime
 
 
+class TicketListView(TicketView):
+    subscriber_name: str | None = None
+
+
 class TicketDetail(TicketView):
     subscriber: SubscriberView | None
     selected_connection: ConnectionView | None
