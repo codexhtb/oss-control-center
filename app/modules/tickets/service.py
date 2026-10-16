@@ -19,6 +19,7 @@ from app.modules.tickets.models import (
     SubscriberSnapshot,
     Ticket,
     TicketAudit,
+    TicketCallback,
     TicketCategory,
     TicketComment,
     TicketEvent,
@@ -33,6 +34,7 @@ from app.modules.tickets.schemas import (
     EditTicket,
     FieldWorkRequest,
     ManualDiagnostic,
+    RecordCallback,
     TicketDetail,
 )
 from app.modules.tickets.status import TicketStatus, TicketType
@@ -236,6 +238,7 @@ def purge_ticket(
         TicketComment,
         TicketEvent,
         TicketAudit,
+        TicketCallback,
         TicketResolution,
     ):
         db.execute(delete(model).where(model.ticket_id == ticket_id))
@@ -516,6 +519,7 @@ def list_tickets(
     created_from: datetime | None = None,
     created_before: datetime | None = None,
     active_only: bool = False,
+    callback_queue: bool = False,
 ) -> tuple[list[Ticket], int]:
     conditions = [Ticket.deleted_at.is_(None)]
     if visible_to is not None:
@@ -547,6 +551,11 @@ def list_tickets(
         conditions.append(Ticket.created_at < created_before)
     if active_only:
         conditions.append(Ticket.status.in_((TicketStatus.OPEN, TicketStatus.IN_PROGRESS)))
+    if callback_queue:
+        conditions.extend((
+            Ticket.status == TicketStatus.RESOLVED,
+            Ticket.ticket_type == TicketType.SUBSCRIBER_LINKED,
+        ))
 
     count_query = select(func.count()).select_from(Ticket)
     items_query = select(Ticket)
@@ -594,7 +603,10 @@ def list_tickets(
     total = db.scalar(count_query.where(*conditions)) or 0
     items = db.scalars(
         items_query.where(*conditions)
-        .order_by(Ticket.created_at.desc(), Ticket.id.desc())
+        .order_by(
+            Ticket.resolved_at.asc() if callback_queue else Ticket.created_at.desc(),
+            Ticket.id.asc() if callback_queue else Ticket.id.desc(),
+        )
         .offset((page - 1) * size)
         .limit(size)
     ).all()
@@ -870,13 +882,20 @@ def resolve_ticket(
 
 
 def close_ticket(
-    db: Session, actor_id: UUID, ticket_id: UUID, decision_id: UUID, version: int | None
+    db: Session, actor_id: UUID, ticket_id: UUID, decision_id: UUID,
+    version: int | None, reason: str | None = None,
 ) -> Ticket:
     _actor(db, actor_id, Permission.TICKET_CLOSE)
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
     if ticket.status != TicketStatus.RESOLVED:
         raise ApiError(409, "invalid_transition", "Only resolved tickets can be closed")
+    if ticket.ticket_type == TicketType.SUBSCRIBER_LINKED:
+        raise ApiError(409, "callback_required", "Subscriber callback is required")
+    if reason is None or not reason.strip():
+        raise ApiError(
+            422, "closure_reason_required", "Explain why no subscriber callback is needed"
+        )
     decision = db.get(TicketResolution, decision_id)
     if decision is None or decision.ticket_id != ticket_id:
         raise ApiError(422, "invalid_decision", "Decision must belong to ticket")
@@ -887,7 +906,61 @@ def close_ticket(
     ticket.closed_at = datetime.now(UTC)
     ticket.closed_decision_id = decision_id
     _changed(ticket)
-    _fact(db, ticket, actor_id, "ticket_closed", {"decision_id": str(decision_id)})
+    _fact(db, ticket, actor_id, "ticket_closed_without_call", {
+        "decision_id": str(decision_id), "reason": reason.strip(),
+    })
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def record_callback(
+    db: Session, actor_id: UUID, ticket_id: UUID, payload: RecordCallback,
+    version: int | None,
+) -> Ticket:
+    _actor(db, actor_id, Permission.TICKET_CALLBACK)
+    ticket = _ticket(db, ticket_id, lock=True)
+    previous = db.scalar(select(TicketCallback).where(
+        TicketCallback.ticket_id == ticket_id,
+        TicketCallback.client_request_id == payload.client_request_id,
+    ))
+    if previous is not None:
+        if (previous.actor_id != actor_id or previous.outcome != payload.outcome
+                or previous.comment != payload.comment):
+            raise ApiError(409, "request_id_conflict", "Request ID has different content")
+        return ticket
+    _version(ticket, version)
+    if ticket.status != TicketStatus.RESOLVED or ticket.ticket_type != TicketType.SUBSCRIBER_LINKED:
+        raise ApiError(409, "invalid_transition", "Only linked resolved tickets can be called")
+    attempt = TicketCallback(
+        ticket_id=ticket_id,
+        decision_id=ticket.resolved_decision_id,
+        client_request_id=payload.client_request_id,
+        actor_id=actor_id,
+        outcome=payload.outcome,
+        comment=payload.comment,
+    )
+    db.add(attempt)
+    db.flush()
+    event = {"callback_id": str(attempt.id), "outcome": payload.outcome}
+    if payload.outcome == "CONFIRMED":
+        ticket.status = TicketStatus.CLOSED
+        ticket.closed_by = actor_id
+        ticket.closed_at = attempt.occurred_at
+        ticket.closed_decision_id = ticket.resolved_decision_id
+        event["decision_id"] = str(ticket.resolved_decision_id)
+        event_type = "callback_confirmed_closed"
+    elif payload.outcome == "STILL_BROKEN":
+        ticket.status = TicketStatus.IN_PROGRESS
+        ticket.assigned_engineer_id = None
+        ticket.resolved_by = None
+        ticket.resolved_at = None
+        ticket.resolved_decision_id = None
+        event_type = "callback_returned_engineers"
+    else:
+        event_type = "callback_no_answer"
+    _changed(ticket)
+    _fact(db, ticket, actor_id, event_type, event)
     db.commit()
     db.refresh(ticket)
     return ticket

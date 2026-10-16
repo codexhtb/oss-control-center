@@ -1,6 +1,7 @@
 """Strict public Service Desk payloads; snapshots are read from PostgreSQL."""
 
 from datetime import UTC, datetime
+from typing import Literal
 from unicodedata import category
 from uuid import UUID
 
@@ -191,6 +192,23 @@ class AddDecision(StrictModel):
 
 class CloseTicket(StrictModel):
     decision_id: UUID
+    reason: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
+class RecordCallback(StrictModel):
+    client_request_id: UUID
+    outcome: Literal["CONFIRMED", "STILL_BROKEN", "NO_ANSWER"]
+    comment: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def require_feedback(self) -> "RecordCallback":
+        if self.comment is not None:
+            self.comment = self.comment.strip()
+            if not self.comment or any(category(ch) == "Cc" for ch in self.comment):
+                raise ValueError("comment must contain text without control characters")
+        if self.outcome == "STILL_BROKEN" and self.comment is None:
+            raise ValueError("subscriber feedback is required when the problem remains")
+        return self
 
 
 class ResolveTicket(AddDecision):
@@ -256,6 +274,7 @@ class TicketView(BaseModel):
     closed_decision_id: UUID | None
     closed_at: datetime | None
     resolved_by: UUID | None
+    resolved_by_name: str | None = None
     resolved_decision_id: UUID | None
     resolved_at: datetime | None
     deleted_at: datetime | None = None
@@ -269,6 +288,10 @@ class TicketView(BaseModel):
 class TicketListView(TicketView):
     subscriber_name: str | None = None
     work_started_at: datetime | None = None
+    resolved_by_name: str | None = None
+    callback_count: int = 0
+    last_callback_outcome: str | None = None
+    last_callback_at: datetime | None = None
 
 
 class TicketDetail(TicketView):
@@ -322,6 +345,18 @@ class DecisionView(BaseModel):
     decision_text: str
     performed_actions: str
     created_at: datetime
+
+
+class CallbackView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    ticket_id: UUID
+    decision_id: UUID
+    actor_id: UUID
+    actor_name: str | None = None
+    outcome: Literal["CONFIRMED", "STILL_BROKEN", "NO_ANSWER"]
+    comment: str | None
+    occurred_at: datetime
 
 
 class EventView(BaseModel):

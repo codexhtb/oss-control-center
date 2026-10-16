@@ -339,6 +339,45 @@ class TicketResolution(Base):
     )
 
 
+class TicketCallback(Base):
+    """One immutable callback result bound to a specific resolution cycle."""
+
+    __tablename__ = "ticket_callbacks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["decision_id", "ticket_id"],
+            ["ticket_decisions.id", "ticket_decisions.ticket_id"],
+            ondelete="RESTRICT",
+            name="fk_ticket_callbacks_decision",
+        ),
+        UniqueConstraint("ticket_id", "client_request_id", name="uq_ticket_callbacks_request"),
+        CheckConstraint(
+            "outcome IN ('CONFIRMED', 'STILL_BROKEN', 'NO_ANSWER')",
+            name="ck_ticket_callbacks_outcome",
+        ),
+        CheckConstraint(
+            "outcome <> 'STILL_BROKEN' OR (comment IS NOT NULL AND length(btrim(comment)) > 0)",
+            name="ck_ticket_callbacks_broken_comment",
+        ),
+        Index("ix_ticket_callbacks_ticket_occurred", "ticket_id", "occurred_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    ticket_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tickets.id", ondelete="RESTRICT"), nullable=False
+    )
+    decision_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    client_request_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    comment: Mapped[str | None] = mapped_column(String(2000))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class TicketEvent(Base):
     __tablename__ = "ticket_history"
     __table_args__ = (

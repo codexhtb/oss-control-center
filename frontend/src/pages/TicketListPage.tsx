@@ -13,7 +13,7 @@ import type { TicketFilters, TicketPriority, TicketStatus, TicketType } from '..
 const statuses: TicketStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']
 const types: TicketType[] = ['SUBSCRIBER_LINKED', 'MANUAL', 'INTERNAL']
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
-type Queue = 'all' | 'waiting' | 'mine'
+type Queue = 'all' | 'waiting' | 'mine' | 'callback'
 
 function workAge(value: string): string {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000))
@@ -71,7 +71,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   }, [categoryText, urlCategory, setParams])
   const canReadEngineers = session.permissions.some((permission) => ['tickets.read.all', 'tickets.read.own', 'tickets.assign'].includes(permission))
   const showQueues = session.permissions.includes('tickets.read.all')
-  const queue: Queue = showQueues && (params.get('queue') === 'waiting' || params.get('queue') === 'mine') ? params.get('queue') as Queue : 'all'
+  const queue: Queue = showQueues && ['waiting', 'mine', 'callback'].includes(params.get('queue') || '') ? params.get('queue') as Queue : 'all'
   const page = Math.max(1, Number(params.get('page')) || 1)
   const filters: TicketFilters = { page, size: 20 }
   const status = params.get('status')
@@ -91,11 +91,20 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   if (params.get('unassigned') === 'true') filters.unassigned = true
   if (assignee && !filters.unassigned) filters.assignee = assignee
   if (queue !== 'all') {
-    filters.active_only = true
-    if (queue === 'waiting') {
+    if (queue === 'callback') {
+      filters.callback_queue = true
+      delete filters.active_only
+      delete filters.status
+      delete filters.ticket_type
+      delete filters.priority
+      delete filters.assignee
+      delete filters.unassigned
+    } else if (queue === 'waiting') {
+      filters.active_only = true
       filters.unassigned = true
       delete filters.assignee
     } else {
+      filters.active_only = true
       filters.assignee = session.user.id
       delete filters.unassigned
     }
@@ -122,6 +131,11 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   const mineCount = useQuery({
     queryKey: ['tickets', 'queue-count', 'mine', session.user.id],
     queryFn: ({ signal }) => ticketApi.list({ page: 1, size: 1, active_only: true, assignee: session.user.id }, signal),
+    enabled: showQueues,
+  })
+  const callbackCount = useQuery({
+    queryKey: ['tickets', 'queue-count', 'callback'],
+    queryFn: ({ signal }) => ticketApi.list({ page: 1, size: 1, callback_queue: true }, signal),
     enabled: showQueues,
   })
   const engineerNames = new Map(engineers.data?.items.map((item) => [item.id, item.display_name]))
@@ -164,7 +178,8 @@ export function TicketListPage({ session }: { session: MeResponse }) {
       next.delete('assignee')
       next.delete('unassigned')
       next.delete('active_only')
-      if (value !== 'all' && ['CLOSED', 'RESOLVED'].includes(next.get('status') || '')) next.delete('status')
+      if (value !== 'all') next.delete('status')
+      if (value === 'callback') { next.delete('ticket_type'); next.delete('priority') }
       return next
     })
   }
@@ -193,6 +208,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
         <button type="button" className={queue === 'all' ? 'is-active' : ''} aria-current={queue === 'all' ? 'page' : undefined} onClick={() => setQueue('all')}>Все заявки</button>
         <button type="button" className={queue === 'waiting' ? 'is-active' : ''} aria-current={queue === 'waiting' ? 'page' : undefined} onClick={() => setQueue('waiting')}>Ожидают инженера <span>{waitingCount.data?.total ?? '—'}</span></button>
         <button type="button" className={queue === 'mine' ? 'is-active' : ''} aria-current={queue === 'mine' ? 'page' : undefined} onClick={() => setQueue('mine')}>Взяты мной <span>{mineCount.data?.total ?? '—'}</span></button>
+        <button type="button" className={queue === 'callback' ? 'is-active' : ''} aria-current={queue === 'callback' ? 'page' : undefined} onClick={() => setQueue('callback')}>Решено · обзвон <span>{callbackCount.data?.total ?? '—'}</span></button>
       </nav>}
       <div className="ticket-search-row">
         <label className="ticket-search"><Search size={19} aria-hidden="true" /><span className="sr-only">Поиск по заявкам</span><input aria-label="Поиск по заявкам" type="search" value={searchText} maxLength={160} placeholder="Номер, абонент, ЛС, телефон или текст обращения" onChange={(event) => setSearchText(event.target.value)} /></label>
@@ -200,25 +216,22 @@ export function TicketListPage({ session }: { session: MeResponse }) {
       </div>
       <div className="desk-toolbar" aria-label="Фильтры заявок">
         <div className="desk-toolbar__title"><ListFilter size={17} /><span>Фильтры</span></div>
-        <label className="compact-field"><span>Статус</span><select aria-label="Статус" value={filters.status || (filters.active_only ? 'ACTIVE' : '')} onChange={(event) => setStatus(event.target.value)}><option value="">Все</option><option value="ACTIVE">Не закрыты</option>{statuses.map((item) => <option value={item} key={item}>{statusLabel[item]}</option>)}</select></label>
+        <label className="compact-field"><span>Статус</span><select aria-label="Статус" value={filters.status || (filters.active_only ? 'ACTIVE' : '')} disabled={queue === 'callback'} onChange={(event) => setStatus(event.target.value)}><option value="">Все</option><option value="ACTIVE">Не закрыты</option>{statuses.map((item) => <option value={item} key={item}>{statusLabel[item]}</option>)}</select></label>
         <label className="compact-field compact-field--wide"><span>Категория</span><input aria-label="Категория" value={categoryText} maxLength={160} placeholder="Название категории" onChange={(event) => setCategoryText(event.target.value)} /></label>
-        <label className="compact-field"><span>Тип</span><select aria-label="Тип" value={filters.ticket_type || ''} onChange={(event) => setFilter('ticket_type', event.target.value)}><option value="">Все</option>{types.map((item) => <option value={item} key={item}>{typeLabel[item]}</option>)}</select></label>
-        <label className="compact-field"><span>Приоритет</span><select aria-label="Приоритет" value={filters.priority || ''} onChange={(event) => setFilter('priority', event.target.value)}><option value="">Все</option>{priorities.map((item) => <option value={item} key={item}>{priorityLabel[item]}</option>)}</select></label>
+        <label className="compact-field"><span>Тип</span><select aria-label="Тип" value={filters.ticket_type || ''} disabled={queue === 'callback'} onChange={(event) => setFilter('ticket_type', event.target.value)}><option value="">Все</option>{types.map((item) => <option value={item} key={item}>{typeLabel[item]}</option>)}</select></label>
+        <label className="compact-field"><span>Приоритет</span><select aria-label="Приоритет" value={filters.priority || ''} disabled={queue === 'callback'} onChange={(event) => setFilter('priority', event.target.value)}><option value="">Все</option>{priorities.map((item) => <option value={item} key={item}>{priorityLabel[item]}</option>)}</select></label>
         {canReadEngineers && <label className="compact-field compact-field--wide"><span>Исполнитель</span><select aria-label="Исполнитель" value={filters.assignee || ''} disabled={queue !== 'all'} onChange={(event) => setFilter('assignee', event.target.value)}><option value="">Все</option>{queue === 'mine' && <option value={session.user.id}>Я</option>}{engineers.data?.items.filter((item) => item.id !== (queue === 'mine' ? session.user.id : '')).map((item) => <option value={item.id} key={item.id}>{item.display_name}</option>)}</select></label>}
         <label className="desk-check"><input type="checkbox" checked={!!filters.unassigned} disabled={queue !== 'all'} onChange={(event) => setFilter('unassigned', event.target.checked ? 'true' : '')} /><span>Без исполнителя</span></label>
         <label className="compact-field"><span>Создана от</span><input aria-label="Создана от" type="date" value={calendarDate(createdFrom)} onChange={(event) => setFilter('created_from', event.target.value ? localDayBoundary(event.target.value) : '')} /></label>
         <label className="compact-field"><span>Создана до</span><input aria-label="Создана до" type="date" value={calendarDate(createdBefore, true)} onChange={(event) => setFilter('created_before', event.target.value ? localDayBoundary(event.target.value, true) : '')} /></label>
       </div>
       <section className="desk-table-wrap" aria-label="Список заявок">
-        <div className="desk-table-caption"><div><strong>Реестр заявок</strong><span>{tickets.data && !searchPending && !invalidRange ? `${hasFilters ? 'Найдено' : 'Всего'}: ${tickets.data.total}` : 'Загрузка данных'}</span></div><Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void tickets.refetch()} disabled={tickets.isFetching || invalidRange}>Обновить</Button></div>
+        <div className="desk-table-caption"><div><strong>{queue === 'callback' ? 'Решено · обзвон' : 'Реестр заявок'}</strong><span>{tickets.data && !searchPending && !invalidRange ? `${hasFilters ? 'Найдено' : 'Всего'}: ${tickets.data.total}` : 'Загрузка данных'}</span></div><Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void tickets.refetch()} disabled={tickets.isFetching || invalidRange}>Обновить</Button></div>
         {invalidRange ? <div className="desk-state"><Notice tone="error">Дата «до» должна быть не раньше даты «от».</Notice></div> : searchPending ? <div className="desk-state" role="status">Обновляем поиск…</div> : tickets.isPending ? <div className="desk-state" role="status">Загружаем заявки…</div> : tickets.isError ? <div className="desk-state"><Notice tone="error">{errorText(tickets.error)}</Notice></div> : tickets.data.items.length === 0 ? <div className="desk-state desk-state--empty"><Search size={26} /><strong>Заявок по этим условиям нет</strong><span>Измените фильтры или создайте новую заявку.</span></div> : (
-          <div className="desk-table-scroll"><table className="desk-table"><thead><tr><th>Заявка</th><th>Абонент</th><th>Статус</th><th>Приоритет</th><th>Исполнитель</th><th>Создана</th><th><span className="sr-only">Открыть</span></th></tr></thead><tbody>{tickets.data.items.map((ticket) => <tr key={ticket.id}>
+          <div className="desk-table-scroll"><table className="desk-table"><thead><tr><th>Заявка</th><th>Абонент</th>{queue === 'callback' ? <><th>Категория · звонок</th><th>Решена</th><th>Обзвон</th></> : <><th>Статус</th><th>Приоритет</th><th>Исполнитель</th><th>Создана</th></>}<th><span className="sr-only">Открыть</span></th></tr></thead><tbody>{tickets.data.items.map((ticket) => <tr key={ticket.id}>
             <td className="desk-ticket-cell"><Link className="ticket-link" to={`/tickets/${ticket.id}`} state={{ ticketListSearch: params.toString() }}><span className="ticket-number">#{ticket.number} · {typeLabel[ticket.ticket_type]}</span><strong>{ticketTitle(ticket.subject || ticket.category_name || null)}</strong><span className="ticket-excerpt">{ticket.description}</span></Link></td>
             <td className="desk-subscriber-cell">{ticket.ticket_type === 'SUBSCRIBER_LINKED' ? <div className="desk-subscriber"><strong>{ticket.subscriber_name || 'Абонент не указан'}</strong>{ticket.account_no && <span>ЛС {ticket.account_no}</span>}</div> : <span className="muted">{typeLabel[ticket.ticket_type]}</span>}</td>
-            <td className="desk-status-cell"><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span></td>
-            <td className="desk-priority-cell"><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></td>
-            <td className="desk-assignee-cell">{ticket.assigned_engineer_id ? <>{ticket.assigned_engineer_name || engineerNames.get(ticket.assigned_engineer_id) || 'Инженер'}{ticket.work_started_at && <span className="desk-work-age">{workAge(ticket.work_started_at)}</span>}</> : <span className="muted">Не назначен</span>}</td>
-            <td className="desk-date desk-created-cell">{formatDate(ticket.created_at)}</td>
+            {queue === 'callback' ? <><td>{ticket.category_name || 'Без категории'}{ticket.caller_phone && <div className="muted">Звонящий: {ticket.caller_phone}</div>}</td><td className="desk-date">{ticket.resolved_at ? formatDate(ticket.resolved_at) : '—'}<div className="muted">{ticket.resolved_by_name || 'Инженер'}</div></td><td>{ticket.callback_count || 0} попыток{ticket.last_callback_at && <div className="muted">Последняя: {formatDate(ticket.last_callback_at)} · {ticket.last_callback_outcome === 'NO_ANSWER' ? 'Не дозвонилась' : ticket.last_callback_outcome === 'STILL_BROKEN' ? 'Проблема осталась' : 'Подтверждено'}</div>}</td></> : <><td className="desk-status-cell"><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span></td><td className="desk-priority-cell"><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></td><td className="desk-assignee-cell">{ticket.assigned_engineer_id ? <>{ticket.assigned_engineer_name || engineerNames.get(ticket.assigned_engineer_id) || 'Инженер'}{ticket.work_started_at && <span className="desk-work-age">{workAge(ticket.work_started_at)}</span>}</> : <span className="muted">Не назначен</span>}</td><td className="desk-date desk-created-cell">{formatDate(ticket.created_at)}</td></>}
             <td className="desk-open-cell"><Link aria-label={`Открыть заявку №${ticket.number}`} className="row-open" to={`/tickets/${ticket.id}`} state={{ ticketListSearch: params.toString() }}><ArrowRight size={16} /></Link></td>
           </tr>)}</tbody></table></div>
         )}

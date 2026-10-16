@@ -37,13 +37,20 @@ from app.modules.tickets.models import (
     SubscriberSnapshot,
     Ticket,
     TicketAudit,
+    TicketCallback,
     TicketCategory,
     TicketEvent,
     TicketPurgeAudit,
     TicketResolution,
 )
-from app.modules.tickets.schemas import AddDecision, CreateTicket
-from app.modules.tickets.service import claim_ticket, create_ticket, resolve_ticket, start_ticket
+from app.modules.tickets.schemas import AddDecision, CreateTicket, RecordCallback
+from app.modules.tickets.service import (
+    claim_ticket,
+    create_ticket,
+    record_callback,
+    resolve_ticket,
+    start_ticket,
+)
 from app.modules.tickets.status import TicketStatus, TicketType
 
 ORIGIN = "https://oss.example.test"
@@ -454,9 +461,9 @@ def test_purge_closed_linked_ticket_preserves_source_snapshot(
     )
     assert resolved.status_code == 200, resolved.text
     closed = ticket_client.post(
-        path + "/close",
+        path + "/callbacks",
         headers={**csrf(ticket_client), "If-Match": f'"{resolved.json()["version"]}"'},
-        json={"decision_id": resolved.json()["resolved_decision_id"]},
+        json={"client_request_id": str(uuid4()), "outcome": "CONFIRMED"},
     )
     assert closed.status_code == 200, closed.text
     deleted = ticket_client.delete(
@@ -755,6 +762,7 @@ def test_single_connection_replay_and_page_boundary(
 def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestClient) -> None:
     operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
     engineer = seed_user(ticket_engine, "engineer", Role.ENGINEER)
+    grant_ticket_permission(ticket_engine, engineer, Permission.TICKET_CALLBACK)
     seed_user(ticket_engine, "admin", Role.ADMIN)
     snapshot, _ = seed_snapshot(ticket_engine, operator)
     login(ticket_client, "operator")
@@ -854,12 +862,12 @@ def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestCl
             headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
             json={"decision_id": str(uuid4())},
         ).status_code
-        == 422
+        == 409
     )
     closed = ticket_client.post(
-        f"/api/v1/tickets/{ticket_id}/close",
+        f"/api/v1/tickets/{ticket_id}/callbacks",
         headers={**csrf(ticket_client), "If-Match": f'"{version}"'},
-        json={"decision_id": resolved.json()["resolved_decision_id"]},
+        json={"client_request_id": str(uuid4()), "outcome": "CONFIRMED"},
     )
     assert closed.status_code == 200, closed.text
     assert closed.json()["status"] == "CLOSED"
@@ -1361,7 +1369,10 @@ def test_manual_internal_lifecycle_without_billing(
         closed = ticket_client.post(
             f"/api/v1/tickets/{ticket_id}/close",
             headers={**csrf(ticket_client), "If-Match": f'"{current["version"]}"'},
-            json={"decision_id": resolved.json()["resolved_decision_id"]},
+            json={
+                "decision_id": resolved.json()["resolved_decision_id"],
+                "reason": "No subscriber",
+            },
         )
         assert closed.status_code == 200, closed.text
         assert closed.json()["status"] == "CLOSED"
@@ -2309,7 +2320,7 @@ def test_claim_permissions_closed_deleted_and_admin_reassignment(
     closed = ticket_client.post(
         path + "/close",
         headers=headers(resolved.json()["version"]),
-        json={"decision_id": resolved.json()["resolved_decision_id"]},
+        json={"decision_id": resolved.json()["resolved_decision_id"], "reason": "Manual task"},
     )
     assert closed.status_code == 200
     assert (
@@ -2477,14 +2488,14 @@ def test_resolved_verdict_permissions_history_and_queues(
         ticket_client.post(
             path + "/close",
             headers={**csrf(ticket_client), "If-Match": f'"{latest["version"]}"'},
-            json={"decision_id": data["resolved_decision_id"]},
+            json={"decision_id": data["resolved_decision_id"], "reason": "Manual task"},
         ).status_code
         == 422
     )
     closed = ticket_client.post(
         path + "/close",
         headers={**csrf(ticket_client), "If-Match": f'"{latest["version"]}"'},
-        json={"decision_id": revision.json()["id"]},
+        json={"decision_id": revision.json()["id"], "reason": "Manual task"},
     )
     assert closed.status_code == 200 and closed.json()["status"] == "CLOSED"
 
@@ -2534,6 +2545,194 @@ def test_concurrent_resolution_records_only_one_verdict(
                     TicketEvent.ticket_id == UUID(ticket["id"]),
                     TicketEvent.event_type == "ticket_resolved",
                 )
+            )
+            == 1
+        )
+
+
+def test_callback_queue_repeated_calls_and_second_engineer_cycle(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    creator = seed_user(ticket_engine, "callback_creator", Role.OPERATOR)
+    caller = seed_user(ticket_engine, "callback_staff", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "callback_engineer", Role.ENGINEER)
+    grant_ticket_permission(ticket_engine, caller, Permission.TICKET_CALLBACK)
+    snapshot, _ = seed_snapshot(ticket_engine, creator)
+    login(ticket_client, creator.login)
+    created = create(ticket_client, snapshot)
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    login(ticket_client, engineer.login)
+    claimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200, claimed.text
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{claimed.json()["version"]}"'},
+        json={"decision_text": "First synthetic fix", "performed_actions": "First check"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    decision_one = resolved.json()["resolved_decision_id"]
+    queue = ticket_client.get("/api/v1/tickets", params={"callback_queue": True}).json()
+    assert queue["total"] == 1 and queue["items"][0]["id"] == created.json()["id"]
+    assert (
+        ticket_client.post(
+            path + "/close",
+            headers={**csrf(ticket_client), "If-Match": f'"{resolved.json()["version"]}"'},
+            json={"decision_id": decision_one, "reason": "Bypass"},
+        ).json()["code"]
+        == "callback_required"
+    )
+    login(ticket_client, caller.login)
+    request_id = str(uuid4())
+    no_answer = {"client_request_id": request_id, "outcome": "NO_ANSWER"}
+    headers = {**csrf(ticket_client), "If-Match": f'"{resolved.json()["version"]}"'}
+    assert (
+        ticket_client.post(
+            path + "/callbacks", json=no_answer, headers={"If-Match": headers["If-Match"]}
+        ).status_code
+        == 403
+    )
+    first = ticket_client.post(path + "/callbacks", json=no_answer, headers=headers)
+    assert first.status_code == 200 and first.json()["status"] == "RESOLVED", first.text
+    replay = ticket_client.post(path + "/callbacks", json=no_answer, headers=headers)
+    assert replay.status_code == 200 and replay.json()["version"] == first.json()["version"]
+    assert (
+        ticket_client.post(
+            path + "/callbacks",
+            headers={**csrf(ticket_client), "If-Match": f'"{first.json()["version"]}"'},
+            json={"client_request_id": str(uuid4()), "outcome": "STILL_BROKEN"},
+        ).status_code
+        == 422
+    )
+    returned = ticket_client.post(
+        path + "/callbacks",
+        headers={**csrf(ticket_client), "If-Match": f'"{first.json()["version"]}"'},
+        json={
+            "client_request_id": str(uuid4()),
+            "outcome": "STILL_BROKEN",
+            "comment": "Synthetic issue remains",
+        },
+    )
+    assert returned.status_code == 200 and returned.json()["status"] == "IN_PROGRESS", returned.text
+    assert returned.json()["assigned_engineer_id"] is None
+    assert (
+        ticket_client.get(
+            "/api/v1/tickets", params={"active_only": True, "unassigned": True}
+        ).json()["total"]
+        == 1
+    )
+    assert (
+        ticket_client.get("/api/v1/tickets", params={"callback_queue": True}).json()["total"] == 0
+    )
+    login(ticket_client, engineer.login)
+    reclaimed = ticket_client.post(
+        path + "/claim",
+        headers={**csrf(ticket_client), "If-Match": f'"{returned.json()["version"]}"'},
+    )
+    assert reclaimed.status_code == 200, reclaimed.text
+    second = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{reclaimed.json()["version"]}"'},
+        json={"decision_text": "Second synthetic fix", "performed_actions": "Second check"},
+    )
+    assert second.status_code == 200 and second.json()["resolved_decision_id"] != decision_one
+    login(ticket_client, caller.login)
+    confirmed = ticket_client.post(
+        path + "/callbacks",
+        headers={**csrf(ticket_client), "If-Match": f'"{second.json()["version"]}"'},
+        json={
+            "client_request_id": str(uuid4()),
+            "outcome": "CONFIRMED",
+            "comment": "Synthetic confirmation",
+        },
+    )
+    assert confirmed.status_code == 200 and confirmed.json()["status"] == "CLOSED", confirmed.text
+    assert confirmed.json()["closed_by"] == str(caller.id)
+    assert (
+        ticket_client.get("/api/v1/tickets", params={"callback_queue": True}).json()["total"] == 0
+    )
+    calls = ticket_client.get(path + "/callbacks").json()
+    assert calls["total"] == 3
+    assert [item["outcome"] for item in calls["items"]] == [
+        "CONFIRMED",
+        "STILL_BROKEN",
+        "NO_ANSWER",
+    ]
+    assert ticket_client.get(path + "/decisions").json()["total"] == 2
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketCallback)
+                .where(TicketCallback.ticket_id == UUID(created.json()["id"]))
+            )
+            == 3
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(
+                    TicketEvent.ticket_id == UUID(created.json()["id"]),
+                    TicketEvent.event_type == "callback_confirmed_closed",
+                )
+            )
+            == 1
+        )
+
+
+def test_concurrent_callback_conflict_has_one_durable_result(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    creator = seed_user(ticket_engine, "callback_race_creator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "callback_race_engineer", Role.ENGINEER)
+    caller = seed_user(ticket_engine, "callback_race_staff", Role.OPERATOR)
+    grant_ticket_permission(ticket_engine, caller, Permission.TICKET_CALLBACK)
+    snapshot, _ = seed_snapshot(ticket_engine, creator)
+    login(ticket_client, creator.login)
+    created = create(ticket_client, snapshot)
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    login(ticket_client, engineer.login)
+    claimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{claimed.json()["version"]}"'},
+        json={"decision_text": "Synthetic fix", "performed_actions": "Check"},
+    )
+    assert resolved.status_code == 200, resolved.text
+
+    def attempt(outcome: str) -> str:
+        with Session(ticket_engine) as db:
+            try:
+                record_callback(
+                    db,
+                    caller.id,
+                    UUID(created.json()["id"]),
+                    RecordCallback(
+                        client_request_id=uuid4(),
+                        outcome=outcome,
+                        comment="Synthetic issue remains" if outcome == "STILL_BROKEN" else None,
+                    ),
+                    resolved.json()["version"],
+                )
+                return outcome
+            except ApiError as error:
+                return error.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ("CONFIRMED", "STILL_BROKEN")))
+    assert "version_conflict" in results
+    assert len(set(results)) == 2
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketCallback)
+                .where(TicketCallback.ticket_id == UUID(created.json()["id"]))
             )
             == 1
         )

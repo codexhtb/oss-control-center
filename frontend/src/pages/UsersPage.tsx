@@ -24,7 +24,8 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
     { key: 'tickets.restore', label: 'Восстановление из корзины' }, { key: 'tickets.purge', label: 'Окончательное удаление' },
     { key: 'tickets.assign', label: 'Назначение' }, { key: 'tickets.start', label: 'Начало работы' },
     { key: 'tickets.diagnose', label: 'Диагностика' }, { key: 'tickets.resolve', label: 'Решение' },
-    { key: 'tickets.close', label: 'Закрытие' }, { key: 'tickets.field_work', label: 'Выездные работы' },
+    { key: 'tickets.callback', label: 'Контрольный обзвон' },
+    { key: 'tickets.close', label: 'Закрытие без обзвона' }, { key: 'tickets.field_work', label: 'Выездные работы' },
   ] },
   { title: 'Абоненты и мониторинг', values: [
     { key: 'subscribers.read', label: 'Карточки абонентов' },

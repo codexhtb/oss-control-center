@@ -1,5 +1,20 @@
 # API contracts — Phase 1
 
+**Phase 5.7:** `GET /api/v1/tickets?callback_queue=true&page=1&size=20`
+возвращает серверную очередь `SUBSCRIBER_LINKED` + `RESOLVED`, отсортированную
+по `resolved_at` от старых к новым. `total` — точное число после RBAC и
+фильтров; элементы содержат `resolved_by_name`, `caller_phone`, `category_name`,
+`callback_count`, `last_callback_outcome`, `last_callback_at`.
+`GET /api/v1/tickets/{id}/callbacks` возвращает пагинированные неизменяемые
+попытки. `POST /api/v1/tickets/{id}/callbacks` требует CSRF, Origin,
+`tickets.callback`, доступ к заявке и `If-Match` и принимает
+`{client_request_id, outcome, comment?}`. `STILL_BROKEN` требует комментарий.
+Повтор того же запроса идемпотентен; иной payload с тем же ID даёт `409`.
+`POST /close` для связанной заявки возвращает `409 callback_required`; для
+`MANUAL`/`INTERNAL` требует `tickets.close`, актуальный `decision_id`, `If-Match`
+и непустую `reason` (до 1000 символов). Ответы с данными имеют
+`Cache-Control: no-store`. См. [workflow](phase-5.7-callback.md).
+
 **Phase 5.6:** `TicketView` и `TicketDetail` дополнены nullable
 `resolved_by`, `resolved_at`, `resolved_decision_id`; для прежних закрытых
 заявок они могут быть `null`. Фильтр `status=RESOLVED` работает в общем реестре.

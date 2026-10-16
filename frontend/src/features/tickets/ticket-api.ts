@@ -1,7 +1,7 @@
 import { apiRequest } from '../../shared/api/client'
 import type {
   ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
-  Ticket, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
+  Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
 } from './types'
 
 function withQuery(path: `/api/v1/${string}`, values: Record<string, string | number | boolean | undefined>) {
@@ -75,6 +75,12 @@ export const ticketApi = {
     apiRequest<Page<Diagnostic>>(withQuery(`${ticketPath(id)}/manual-diagnostics`, { page, size: 20 }), { signal }),
   decisions: (id: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<Decision>>(withQuery(`${ticketPath(id)}/decisions`, { page, size: 20 }), { signal }),
+  callbacks: (id: string, page: number, signal?: AbortSignal) =>
+    apiRequest<Page<TicketCallback>>(withQuery(`${ticketPath(id)}/callbacks`, { page, size: 20 }), { signal }),
+  recordCallback: (id: string, outcome: CallbackOutcome, comment: string | null, version: number, requestId: string) =>
+    apiRequest<Ticket>(`${ticketPath(id)}/callbacks`, {
+      method: 'POST', json: { client_request_id: requestId, outcome, comment }, ifMatch: `"${version}"`,
+    }),
   assign: (id: string, engineerId: string, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/assignment`, {
       method: 'POST', json: { engineer_id: engineerId }, ifMatch: `"${version}"`,
@@ -108,8 +114,8 @@ export const ticketApi = {
     apiRequest<Ticket>(`${ticketPath(id)}/resolve`, {
       method: 'POST', json: { decision_text: decisionText, performed_actions: performedActions }, ifMatch: `"${version}"`,
     }),
-  close: (id: string, decisionId: string, version: number) =>
+  close: (id: string, decisionId: string, version: number, reason: string) =>
     apiRequest<Ticket>(`${ticketPath(id)}/close`, {
-      method: 'POST', json: { decision_id: decisionId }, ifMatch: `"${version}"`,
+      method: 'POST', json: { decision_id: decisionId, reason }, ifMatch: `"${version}"`,
     }),
 }

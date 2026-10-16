@@ -19,6 +19,7 @@ const permissionLabels: Partial<Record<Permission, string>> = {
   'diagnostics.run': 'Проверка мониторинга',
   'diagnostics.read': 'Чтение диагностики',
   'tickets.resolve': 'Решения',
+  'tickets.callback': 'Контрольный обзвон',
   'tickets.close': 'Закрытие заявок',
   'audit.read': 'Чтение аудита заявки',
   'users.manage': 'Управление учётными записями',

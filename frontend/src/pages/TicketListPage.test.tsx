@@ -60,6 +60,29 @@ it('shows server-counted engineer queues and keeps search in the queue view', as
   }), expect.anything()))
 })
 
+it('loads the callback queue from the server and shows call history summary', async () => {
+  vi.mocked(ticketApi.list).mockImplementation(async (filters) => ({
+    items: filters.callback_queue && filters.size === 20 ? [{
+      ...ticket, ticket_type: 'SUBSCRIBER_LINKED', status: 'RESOLVED',
+      subscriber_name: 'Синтетический абонент', account_no: '0001499',
+      caller_phone: '+000 000', category_name: 'Нет интернета',
+      resolved_at: ticket.created_at, resolved_by_name: 'Инженер теста',
+      callback_count: 2, last_callback_outcome: 'NO_ANSWER',
+      last_callback_at: ticket.created_at,
+    }] : [], page: filters.page, size: filters.size,
+    total: filters.callback_queue ? 1 : 0,
+  }))
+  renderList('/tickets?q=линия')
+  fireEvent.click(await screen.findByRole('button', { name: 'Решено · обзвон 1' }))
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    expect.objectContaining({ callback_queue: true, q: 'линия', size: 20 }),
+    expect.anything(),
+  ))
+  expect(await screen.findByText('2 попыток')).toBeInTheDocument()
+  expect(screen.getByText('Звонящий: +000 000')).toBeInTheDocument()
+  expect(screen.getByText('Инженер теста')).toBeInTheDocument()
+})
+
 it('shows verified work duration without exposing an assignee UUID', async () => {
   vi.mocked(ticketApi.list).mockResolvedValue({
     items: [{ ...ticket, assigned_engineer_id: session.user.id, assigned_engineer_name: 'Инженер',

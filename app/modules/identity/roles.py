@@ -30,6 +30,7 @@ class Permission(StrEnum):
     DIAGNOSTICS_RUN = "diagnostics.run"
     TICKET_DECISION = "tickets.resolve"
     TICKET_CLOSE = "tickets.close"
+    TICKET_CALLBACK = "tickets.callback"
     TICKET_AUDIT_READ = "audit.read"
     IDENTITY_MANAGE = "users.manage"
     USERS_READ = "users.read"

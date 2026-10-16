@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.engine import get_engine
 from app.modules.identity.crypto import hash_password
-from app.modules.identity.models import User
-from app.modules.identity.roles import Role
+from app.modules.identity.models import User, UserPermission
+from app.modules.identity.roles import Permission, Role, permissions_for
+from app.modules.tickets.models import TicketCategory
 
 
 def main() -> None:
@@ -34,7 +35,7 @@ def main() -> None:
     with Session(get_engine()) as db:
         if db.scalar(select(func.count()).select_from(User)):
             raise SystemExit("Disposable browser database is not empty")
-        db.add_all(
+        users = [
             User(
                 login=login,
                 display_name=display_name,
@@ -43,6 +44,23 @@ def main() -> None:
                 is_active=True,
             )
             for login, display_name, role, password in credentials
+        ]
+        db.add_all(users)
+        db.flush()
+        callback_staff = users[0]
+        callback_staff.permissions_customized = True
+        db.add_all(
+            UserPermission(user_id=callback_staff.id, permission=permission)
+            for permission in permissions_for(Role.OPERATOR) | {Permission.TICKET_CALLBACK}
+        )
+        db.add(
+            TicketCategory(
+                name="Синтетическая проблема подключения",
+                sort_order=10,
+                is_active=True,
+                is_other=False,
+                version=1,
+            )
         )
         db.commit()
     print("Disposable browser staff seeded")

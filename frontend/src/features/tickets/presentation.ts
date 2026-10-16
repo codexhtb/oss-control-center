@@ -33,6 +33,10 @@ export const eventLabel: Record<string, string> = {
   ticket_resolved: 'Инженерное решение принято',
   field_work_requested: 'Запрошены выездные работы',
   ticket_closed: 'Заявка закрыта',
+  ticket_closed_without_call: 'Закрыта без контрольного звонка',
+  callback_confirmed_closed: 'Абонент подтвердил устранение проблемы',
+  callback_returned_engineers: 'Проблема осталась — возвращена инженерам',
+  callback_no_answer: 'Не удалось дозвониться',
   ticket_deleted: 'Заявка перемещена в корзину',
   ticket_restored: 'Заявка восстановлена',
 }

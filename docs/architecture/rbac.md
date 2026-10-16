@@ -1,5 +1,14 @@
 # RBAC и персональные разрешения
 
+**Phase 5.7:** новое индивидуальное `tickets.callback` разрешает записывать
+контрольный звонок и выполнять переходы связанной заявки из `RESOLVED`.
+Требуется также чтение заявки; полный обзор очереди требует
+`tickets.read.all`. `operator` и `engineer` не получают право обзвона
+автоматически; `admin` получает его в preset. Симе нужны
+`tickets.read.all`, `tickets.edit.all`, `tickets.assign`, `tickets.callback`,
+`tickets.close` для несвязанных задач; `tickets.resolve` ей не назначается.
+Без идентификации её настоящей учётной записи гранты не меняются.
+
 Текущий контракт — [Identity, Permissions & Ticket Editing](phase3-identity-ticket-editing.md).
 Роль `operator`, `engineer`, `admin` задаёт начальный профиль при создании сотрудника;
 после этого авторизация опирается на сохранённые индивидуальные разрешения. Отзыв

@@ -19,6 +19,7 @@ from app.modules.tickets.models import (
     SubscriberSnapshot,
     Ticket,
     TicketAudit,
+    TicketCallback,
     TicketComment,
     TicketEvent,
     TicketResolution,
@@ -29,6 +30,7 @@ from app.modules.tickets.schemas import (
     AssignableEngineerView,
     AssignEngineer,
     AuditView,
+    CallbackView,
     CloseTicket,
     CommentView,
     CreateTicket,
@@ -42,6 +44,7 @@ from app.modules.tickets.schemas import (
     Page,
     PurgeTicket,
     RecentEventView,
+    RecordCallback,
     ResolveTicket,
     TicketDetail,
     TicketListView,
@@ -59,6 +62,7 @@ from app.modules.tickets.service import (
     edit_ticket,
     list_tickets,
     purge_ticket,
+    record_callback,
     release_ticket,
     request_field_work,
     resolve_ticket,
@@ -138,6 +142,10 @@ def can_close(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_CLOSE)
 
 
+def can_callback(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
+    return _allowed(identity, db, Permission.TICKET_CALLBACK)
+
+
 def can_audit(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_AUDIT_READ)
 
@@ -156,6 +164,7 @@ FieldDep = Annotated[AuthContext, Depends(can_field_work)]
 DiagnoseDep = Annotated[AuthContext, Depends(can_diagnose)]
 DecisionDep = Annotated[AuthContext, Depends(can_decide)]
 CloseDep = Annotated[AuthContext, Depends(can_close)]
+CallbackDep = Annotated[AuthContext, Depends(can_callback)]
 AuditDep = Annotated[AuthContext, Depends(can_audit)]
 DiagnosticReadDep = Annotated[AuthContext, Depends(can_read_diagnostics)]
 
@@ -208,7 +217,9 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
         return []
     names = _names(
         db,
-        [value for ticket in items for value in (ticket.created_by, ticket.assigned_engineer_id)],
+        [value for ticket in items for value in (
+            ticket.created_by, ticket.assigned_engineer_id, ticket.resolved_by,
+        )],
     )
     snapshot_ids = {
         ticket.subscriber_snapshot_id
@@ -252,11 +263,36 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
         .order_by(TicketEvent.ticket_id, TicketEvent.ticket_version.desc(), TicketEvent.id.desc())
     ).all()
     latest_by_ticket = {row.ticket_id: row for row in latest_assignment}
+    ticket_ids = [item.id for item in items]
+    callback_counts = dict(
+        db.execute(
+            select(TicketCallback.ticket_id, func.count())
+            .where(TicketCallback.ticket_id.in_(ticket_ids))
+            .group_by(TicketCallback.ticket_id)
+        ).all()
+    )
+    latest_callbacks = {
+        row.ticket_id: row for row in db.execute(
+            select(TicketCallback.ticket_id, TicketCallback.outcome, TicketCallback.occurred_at)
+            .where(TicketCallback.ticket_id.in_(ticket_ids))
+            .distinct(TicketCallback.ticket_id)
+            .order_by(TicketCallback.ticket_id, TicketCallback.occurred_at.desc(),
+                      TicketCallback.id.desc())
+        ).all()
+    }
     return [
         TicketListView.model_validate(item).model_copy(
             update={
                 "created_by_name": names.get(item.created_by),
                 "assigned_engineer_name": names.get(item.assigned_engineer_id),
+                "resolved_by_name": names.get(item.resolved_by),
+                "callback_count": callback_counts.get(item.id, 0),
+                "last_callback_outcome": (
+                    latest_callbacks[item.id].outcome if item.id in latest_callbacks else None
+                ),
+                "last_callback_at": (
+                    latest_callbacks[item.id].occurred_at if item.id in latest_callbacks else None
+                ),
                 "subscriber_name": subscribers.get(item.subscriber_snapshot_id, (None, None))[0],
                 "account_no": subscribers.get(item.subscriber_snapshot_id, (None, item.account_no))[
                     1
@@ -326,7 +362,11 @@ def listing(
     created_from: datetime | None = None,
     created_before: datetime | None = None,
     active_only: bool = False,
+    callback_queue: bool = False,
 ):
+    if callback_queue and (active_only or status is not None or ticket_type is not None
+                           or assignee is not None or unassigned):
+        raise ApiError(422, "conflicting_filters", "Callback queue conflicts with work filters")
     if unassigned and assignee is not None:
         raise ApiError(422, "conflicting_filters", "assignee and unassigned cannot be combined")
     search = q.strip() if q is not None else None
@@ -361,6 +401,7 @@ def listing(
         created_from=created_from,
         created_before=created_before,
         active_only=active_only,
+        callback_queue=callback_queue,
         visible_to=None
         if has_permission(db, identity.user, Permission.TICKET_READ)
         else identity.user.id,
@@ -470,11 +511,12 @@ def recent_events(
 def get_one(ticket_id: UUID, response: Response, identity: ReadDep, db: SessionDep):
     _readable(db, identity, ticket_id)
     ticket = ticket_detail(db, ticket_id)
-    names = _names(db, [ticket.created_by, ticket.assigned_engineer_id])
+    names = _names(db, [ticket.created_by, ticket.assigned_engineer_id, ticket.resolved_by])
     ticket = ticket.model_copy(
         update={
             "created_by_name": names.get(ticket.created_by),
             "assigned_engineer_name": names.get(ticket.assigned_engineer_id),
+            "resolved_by_name": names.get(ticket.resolved_by),
         }
     )
     _etag(response, ticket)
@@ -679,7 +721,39 @@ def close(
     if_match: IfMatch = None,
 ):
     _mutation_scope(db, identity, ticket_id)
-    ticket = close_ticket(db, identity.user.id, ticket_id, payload.decision_id, _version(if_match))
+    ticket = close_ticket(
+        db, identity.user.id, ticket_id, payload.decision_id, _version(if_match), payload.reason
+    )
+    _etag(response, TicketView.model_validate(ticket))
+    return ticket
+
+
+@router.get("/{ticket_id}/callbacks", response_model=Page[CallbackView])
+def callbacks(
+    ticket_id: UUID, identity: ReadDep, db: SessionDep,
+    page: PageNumber = 1, size: PageSize = 20,
+):
+    _readable(db, identity, ticket_id)
+    total = db.scalar(select(func.count()).select_from(TicketCallback)
+                      .where(TicketCallback.ticket_id == ticket_id)) or 0
+    rows = db.scalars(
+        select(TicketCallback).where(TicketCallback.ticket_id == ticket_id)
+        .order_by(TicketCallback.occurred_at.desc(), TicketCallback.id.desc())
+        .offset((page - 1) * size).limit(size)
+    ).all()
+    names = _names(db, [row.actor_id for row in rows])
+    return {"items": [CallbackView.model_validate(row).model_copy(
+        update={"actor_name": names.get(row.actor_id)}) for row in rows],
+        "page": page, "size": size, "total": total}
+
+
+@router.post("/{ticket_id}/callbacks", response_model=TicketView)
+def callback_result(
+    ticket_id: UUID, payload: RecordCallback, response: Response,
+    identity: CallbackDep, db: SessionDep, if_match: IfMatch = None,
+):
+    _mutation_scope(db, identity, ticket_id)
+    ticket = record_callback(db, identity.user.id, ticket_id, payload, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
 

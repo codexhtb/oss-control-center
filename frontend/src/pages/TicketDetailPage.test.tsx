@@ -9,7 +9,7 @@ import { TicketDetailPage } from './TicketDetailPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
-  decisions: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
+  decisions: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
@@ -52,6 +52,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
   vi.mocked(ticketApi.diagnostics).mockResolvedValue(empty)
   vi.mocked(ticketApi.decisions).mockResolvedValue(empty)
+  vi.mocked(ticketApi.callbacks).mockResolvedValue(empty)
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
   vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
     source: 'BDCOM', retrieved_at: base.created_at,
@@ -263,7 +264,7 @@ it('records a verdict in the action panel before offering a separate closure', a
   renderDetail('engineer')
   const panel = within(await screen.findByRole('complementary', { name: 'Управление заявкой' }))
   expect(panel.queryByRole('button', { name: /Взять в работу/ })).not.toBeInTheDocument()
-  expect(panel.queryByText('Закрытие заявки')).not.toBeInTheDocument()
+  expect(panel.queryByText('Закрыть без обзвона')).not.toBeInTheDocument()
   const input = panel.getByRole('textbox', { name: 'Решение инженера' })
   fireEvent.change(input, { target: { value: 'Результат' } })
   fireEvent.change(screen.getByRole('textbox', { name: 'Выполненные действия' }), { target: { value: 'Проверка' } })
@@ -271,9 +272,10 @@ it('records a verdict in the action panel before offering a separate closure', a
   await waitFor(() => expect(ticketApi.resolve).toHaveBeenCalledWith(ticketId, 'Результат', 'Проверка', 3))
   expect(await panel.findByText(/Ожидает подтверждения абонента/)).toBeInTheDocument()
   expect(panel.queryByRole('button', { name: 'Освободить заявку' })).not.toBeInTheDocument()
-  fireEvent.click(await panel.findByText('Закрытие заявки'))
+  fireEvent.click(await panel.findByText('Закрыть без обзвона'))
+  fireEvent.change(panel.getByRole('textbox', { name: 'Причина закрытия без звонка' }), { target: { value: 'Внутренняя задача' } })
   fireEvent.click(panel.getByRole('button', { name: 'Закрыть заявку' }))
-  await waitFor(() => expect(ticketApi.close).toHaveBeenCalledWith(ticketId, 'decision-id', 4))
+  await waitFor(() => expect(ticketApi.close).toHaveBeenCalledWith(ticketId, 'decision-id', 4, 'Внутренняя задача'))
 })
 
 it('shows a resolved verdict without active engineer actions to a ticket editor', async () => {
@@ -295,6 +297,36 @@ it('shows a resolved verdict without active engineer actions to a ticket editor'
   expect(screen.getByText(/Инженер теста · Выполнено/)).toBeInTheDocument()
   expect(panel.queryByRole('button', { name: /Взять в работу|Освободить заявку|Решено/ })).not.toBeInTheDocument()
   expect(screen.queryByRole('textbox', { name: 'Решение инженера' })).not.toBeInTheDocument()
+})
+
+it('records a callback outcome only with an individual grant and preserves phones separately', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'RESOLVED',
+    account_no: '0001499', caller_phone: '+000 caller', resolved_at: base.created_at,
+    resolved_by_name: 'Инженер теста', resolved_decision_id: 'verdict-id',
+    subscriber: { full_name: 'Синтетический абонент', organization_name: null,
+      phone: '+000 subscriber', contacts: [], actual_address: null,
+      fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
+  })
+  vi.mocked(ticketApi.decisions).mockResolvedValue({ ...empty, total: 1, items: [{
+    id: 'verdict-id', ticket_id: ticketId, engineer_id: 'engineer-id',
+    decision_text: 'Проверка завершена', performed_actions: 'Синтетический ремонт',
+    created_at: base.created_at,
+  }] })
+  vi.mocked(ticketApi.recordCallback).mockResolvedValue({ ...base, status: 'RESOLVED' })
+  const staff = session('operator')
+  renderDetail('operator', { ...staff, permissions: [...staff.permissions, 'tickets.callback'] })
+  expect(await screen.findByText('Звонящий: +000 caller')).toBeInTheDocument()
+  expect(screen.getByText('Контакт NetUP: +000 subscriber')).toBeInTheDocument()
+  expect(await screen.findByText('Вердикт: Проверка завершена')).toBeInTheDocument()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Комментарий обзвона' }), {
+    target: { value: 'Синтетическая проблема осталась' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Проблема осталась' }))
+  await waitFor(() => expect(ticketApi.recordCallback).toHaveBeenCalledWith(
+    ticketId, 'STILL_BROKEN', 'Синтетическая проблема осталась', 3, expect.any(String),
+  ))
+  expect(screen.queryByRole('button', { name: 'Закрыть заявку' })).not.toBeInTheDocument()
 })
 
 it.each(['operator', 'admin'] as const)('uses grants rather than role name for %s', async (role) => {

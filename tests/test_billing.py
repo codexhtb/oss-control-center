@@ -35,7 +35,7 @@ from app.modules.billing.quality import DataQuality, FieldOrigin
 from app.modules.billing.service import create_lookup
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
-from app.modules.identity.roles import Permission, Role
+from app.modules.identity.roles import Permission, Role, permissions_for
 from app.modules.tickets.models import (
     ConnectionSnapshot,
     SubscriberSnapshot,
@@ -100,6 +100,17 @@ def seed_user(engine: Engine, name: str, role: Role) -> User:
         db.add(user)
         db.commit()
         return user
+
+
+def grant_callback(engine: Engine, user: User) -> None:
+    with Session(engine) as db:
+        row = db.get(User, user.id)
+        row.permissions_customized = True
+        db.add_all(
+            UserPermission(user_id=user.id, permission=permission)
+            for permission in permissions_for(Role(user.role)) | {Permission.TICKET_CALLBACK}
+        )
+        db.commit()
 
 
 def login(client: TestClient, name: str) -> None:
@@ -391,6 +402,7 @@ def test_multiple_choices_snapshot_confirmation_and_ticket_flow(
 ) -> None:
     operator = seed_user(billing_engine, "operator", Role.OPERATOR)
     engineer = seed_user(billing_engine, "engineer", Role.ENGINEER)
+    grant_callback(billing_engine, engineer)
     login(billing_client, "operator")
     card = lookup(billing_client, "MOCK-GPON-001").json()
     assert len(card["connections"]) == 2 and len(card["services"]) == 2
@@ -463,9 +475,9 @@ def test_multiple_choices_snapshot_confirmation_and_ticket_flow(
     )
     assert resolved.status_code == 200, resolved.text
     closed = billing_client.post(
-        f"/api/v1/tickets/{ticket_id}/close",
+        f"/api/v1/tickets/{ticket_id}/callbacks",
         headers={**csrf(billing_client), "If-Match": f'"{resolved.json()["version"]}"'},
-        json={"decision_id": resolved.json()["resolved_decision_id"]},
+        json={"client_request_id": str(uuid4()), "outcome": "CONFIRMED"},
     )
     assert closed.status_code == 200 and closed.json()["status"] == "CLOSED"
     with Session(billing_engine) as db:
@@ -890,9 +902,9 @@ def test_active_ticket_warning_override_and_inactive_tickets(
     assert unresolved["total_visible"] == 2
     assert "RESOLVED" in {item["status"] for item in unresolved["items"]}
     closed = billing_client.post(
-        f"/api/v1/tickets/{first.json()['id']}/close",
+        f"/api/v1/tickets/{first.json()['id']}/callbacks",
         headers={**csrf(billing_client), "If-Match": f'"{resolved.json()["version"]}"'},
-        json={"decision_id": resolved.json()["resolved_decision_id"]},
+        json={"client_request_id": str(uuid4()), "outcome": "CONFIRMED"},
     )
     assert closed.status_code == 200
     deleted = billing_client.request(

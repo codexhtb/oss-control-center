@@ -21,6 +21,7 @@ export type Permission =
   | 'diagnostics.read'
   | 'tickets.resolve'
   | 'tickets.close'
+  | 'tickets.callback'
   | 'audit.read'
   | 'users.manage'
   | 'users.read'

@@ -34,6 +34,7 @@ export interface Ticket {
   closed_decision_id: string | null
   closed_at: string | null
   resolved_by: string | null
+  resolved_by_name?: string | null
   resolved_decision_id: string | null
   resolved_at: string | null
   deleted_at: string | null
@@ -42,6 +43,9 @@ export interface Ticket {
   version: number
   created_at: string
   updated_at: string
+  callback_count?: number
+  last_callback_outcome?: 'CONFIRMED' | 'STILL_BROKEN' | 'NO_ANSWER' | null
+  last_callback_at?: string | null
 }
 
 export interface SubscriberConnection {
@@ -63,6 +67,7 @@ export interface TicketDetail extends Ticket {
     full_name: string | null
     organization_name: string | null
     phone: string | null
+    contacts?: Array<{ type: string; value: string; source: string; observed_at: string; quality: string }>
     actual_address: string | null
     fetched_at: string
     source: string
@@ -71,6 +76,18 @@ export interface TicketDetail extends Ticket {
   } | null
   selected_connection: SubscriberConnection | null
   technical_state: string
+}
+
+export type CallbackOutcome = 'CONFIRMED' | 'STILL_BROKEN' | 'NO_ANSWER'
+export interface TicketCallback {
+  id: string
+  ticket_id: string
+  decision_id: string
+  actor_id: string
+  actor_name: string | null
+  outcome: CallbackOutcome
+  comment: string | null
+  occurred_at: string
 }
 
 export type DataQuality = 'KNOWN' | 'UNKNOWN' | 'STALE' | 'CONFLICT' | 'UNAVAILABLE'
@@ -299,6 +316,7 @@ export interface TicketFilters {
   created_from?: string
   created_before?: string
   active_only?: boolean
+  callback_queue?: boolean
   status?: TicketStatus
   ticket_type?: TicketType
   priority?: TicketPriority

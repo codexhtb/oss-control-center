@@ -1,5 +1,12 @@
 # Модель данных и ERD
 
+**Дополнение Phase 5.7:** `ticket_callbacks` — неизменяемые попытки контрольного
+обзвона с FK на Ticket, текущую версию инженерного решения и автора. Поля:
+`id`, `ticket_id`, `decision_id`, `client_request_id`, `actor_id`, `outcome`,
+`comment`, `occurred_at`. Уникальность `(ticket_id, client_request_id)`;
+результат `STILL_BROKEN` требует комментарий. См.
+[правила обзвона](phase-5.7-callback.md).
+
 **Phase 5.6 — `0016_ticket_resolved`:** `tickets.status` дополнен `RESOLVED`;
 nullable `resolved_by`, `resolved_at`, `resolved_decision_id` фиксируют первый
 инженерный переход и текущую неизменяемую версию вердикта. Составной FK
