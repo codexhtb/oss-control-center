@@ -255,7 +255,7 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         category = db.scalar(
             select(TicketCategory)
             .where(TicketCategory.id == payload.category_id)
-            .with_for_update(key_share=True)
+            .with_for_update(read=True)
         )
         if category is None or not category.is_active:
             raise ApiError(422, "invalid_category", "Select an active category")

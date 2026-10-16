@@ -4,6 +4,8 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import Queue
+from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
@@ -1777,3 +1779,59 @@ def test_0015_upgrade_preserves_existing_ticket(
             assert db.scalar(select(func.count()).select_from(TicketCategory)) == 8
     finally:
         engine.dispose()
+
+
+def test_category_disable_and_ticket_create_serialize(ticket_engine: Engine) -> None:
+    """A pending non-key UPDATE must hold creation until the inactive row is visible."""
+    operator = seed_user(ticket_engine, "category_race_operator", Role.OPERATOR)
+    with Session(ticket_engine) as db:
+        category_id = db.scalar(
+            select(TicketCategory.id).where(TicketCategory.name == "Нет интернета")
+        )
+    assert category_id is not None
+    payload = CreateTicket(
+        ticket_type=TicketType.MANUAL,
+        category_id=category_id,
+        client_request_id=uuid4(),
+    )
+    backend_pids: Queue[int] = Queue()
+
+    def create_while_disabling() -> int:
+        with Session(ticket_engine) as db:
+            pid = db.scalar(text("SELECT pg_backend_pid()"))
+            assert pid is not None
+            backend_pids.put(pid)
+            try:
+                create_ticket(db, operator.id, payload)
+            except ApiError as error:
+                db.rollback()
+                return error.status_code
+            return 201
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with Session(ticket_engine) as admin:
+            admin.execute(
+                text("UPDATE ticket_categories SET is_active = false WHERE id = :category_id"),
+                {"category_id": category_id},
+            )
+            pending = pool.submit(create_while_disabling)
+            try:
+                pid = backend_pids.get(timeout=5)
+                deadline = monotonic() + 10
+                with ticket_engine.connect() as observer:
+                    while monotonic() < deadline:
+                        wait_event = observer.scalar(
+                            text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"),
+                            {"pid": pid},
+                        )
+                        if wait_event == "Lock":
+                            break
+                        sleep(0.05)
+                    else:
+                        pytest.fail("Ticket creation did not wait for the category update")
+                admin.commit()
+                assert pending.result(timeout=10) == 422
+            finally:
+                admin.rollback()
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 0
