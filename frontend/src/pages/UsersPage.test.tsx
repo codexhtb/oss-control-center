@@ -22,6 +22,7 @@ function renderPage() {
 beforeEach(() => {
   vi.mocked(apiRequest).mockReset()
   vi.mocked(apiRequest).mockImplementation(async (path) => {
+    if (path === '/api/v1/ticket-categories?include_inactive=true') return []
     if (path.startsWith('/api/v1/users?page=')) return { items: [worker], page: 1, size: 20, total: 1 }
     if (path === '/api/v1/users/audit?size=20') return { items: [], page: 1, size: 20, total: 0 }
     if (path === '/api/v1/users') return { ...worker, temporary_password: 'synthetic-only-temporary' }
@@ -53,5 +54,23 @@ it('sends a replacement grant set for the selected employee', async () => {
     path === `/api/v1/users/${worker.id}/permissions` && options?.method === 'PUT' &&
     Array.isArray((options.json as { permissions: string[] }).permissions) &&
     (options.json as { permissions: string[] }).permissions.includes('tickets.create'),
+  )).toBe(true))
+})
+
+it('manages the category catalog through the existing admin page', async () => {
+  const item = { id: '00000000-0000-4000-8000-000000000099', name: 'Нет интернета',
+    sort_order: 10, is_active: true, is_other: false, version: 1 }
+  vi.mocked(apiRequest).mockImplementation(async (path) => {
+    if (path === '/api/v1/ticket-categories?include_inactive=true') return [item]
+    if (path.startsWith('/api/v1/users?page=')) return { items: [worker], page: 1, size: 20, total: 1 }
+    return item
+  })
+  renderPage()
+  expect(await screen.findByDisplayValue('Нет интернета')).toBeInTheDocument()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Название категории Нет интернета' }), { target: { value: 'Нет связи' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+  await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.some(([path, options]) =>
+    path === `/api/v1/ticket-categories/${item.id}` && options?.method === 'PATCH' &&
+    options.ifMatch === '"1"' && (options.json as { name: string }).name === 'Нет связи',
   )).toBe(true))
 })

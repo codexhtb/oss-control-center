@@ -14,6 +14,9 @@ export interface Ticket {
   number: number
   ticket_type: TicketType
   subject: string | null
+  category_id?: string | null
+  category_name?: string | null
+  caller_phone?: string | null
   description: string
   status: TicketStatus
   priority: TicketPriority
@@ -239,7 +242,9 @@ export interface Decision {
 
 export type CreateTicketInput = {
   subject?: string
-  description: string
+  description?: string
+  category_id?: string
+  caller_phone?: string
   priority: TicketPriority
   client_request_id: string
 } & (
@@ -261,6 +266,15 @@ export interface ActiveTicketSummary {
   created_at: string
   assigned_engineer_name: string | null
   description: string
+}
+
+export interface TicketCategory {
+  id: string
+  name: string
+  sort_order: number
+  is_active: boolean
+  is_other: boolean
+  version: number
 }
 
 export interface ActiveTickets {

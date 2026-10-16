@@ -554,6 +554,12 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .diagnostic-details summary { cursor: pointer; color: #bfd2d0; font-weight: 600; }
 .diagnostic-details[open] summary { margin-bottom: .7rem; }
 .diagnostic-details p { margin: .5rem 0; }
+.category-editor { display: grid; gap: .55rem; margin: .8rem 0 1rem; }
+.category-editor-row { display: grid; grid-template-columns: minmax(180px, 1fr) 90px auto auto; align-items: end; gap: .7rem; padding: .65rem 0; border-bottom: 1px solid var(--line-soft); }
+.category-editor-row .field { min-width: 0; }
+.category-editor-row__active { display: inline-flex; align-items: center; gap: .4rem; padding-bottom: .7rem; white-space: nowrap; }
+.category-editor-row .notice { grid-column: 1 / -1; }
+@media (max-width: 720px) { .category-editor-row { grid-template-columns: minmax(0, 1fr) 90px; } .category-editor-row .button { justify-self: start; } }
 .permission-editor { display: grid; gap: 12px; width: 100%; }
 .permission-editor fieldset { min-width: 0; margin: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; }
 .permission-editor legend { padding: 0 5px; color: #dce9e5; font-size: 12px; font-weight: 650; }

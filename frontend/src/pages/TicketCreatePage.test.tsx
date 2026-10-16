@@ -8,7 +8,9 @@ import { ApiError } from '../shared/api/client'
 import type { MeResponse } from '../shared/api/types'
 import { TicketCreatePage } from './TicketCreatePage'
 
-vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { create: vi.fn(), lookup: vi.fn(), getLookup: vi.fn(), activeSubscriberTickets: vi.fn() } }))
+vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { create: vi.fn(), lookup: vi.fn(), getLookup: vi.fn(), activeSubscriberTickets: vi.fn(), categories: vi.fn() } }))
+
+const categoryId = '00000000-0000-4000-8000-000000000099'
 
 const subscriberDefaults = {
   contacts: [], email: null, subscriber_id: null, field_meta: {},
@@ -38,6 +40,7 @@ function renderCreate() {
 beforeEach(() => {
   vi.mocked(ticketApi.create).mockReset()
   vi.mocked(ticketApi.lookup).mockReset()
+  vi.mocked(ticketApi.categories).mockReset().mockResolvedValue([{ id: categoryId, name: 'Нет интернета', sort_order: 10, is_active: true, is_other: false, version: 1 }])
   vi.mocked(ticketApi.activeSubscriberTickets).mockReset().mockResolvedValue({
     items: [], page: 1, size: 20, total_visible: 0, has_hidden_active: false,
   })
@@ -83,14 +86,14 @@ it('requires explicit service and connection choices for an ambiguous subscriber
   fireEvent.change(screen.getByRole('textbox', { name: 'Лицевой счёт' }), { target: { value: 'MOCK-GPON-001' } })
   fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
   expect(await screen.findByText('Тестовая организация')).toBeInTheDocument()
-  fireEvent.change(screen.getByRole('textbox', { name: /Описание/ }), { target: { value: 'Проверить доступность' } })
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
   fireEvent.change(screen.getByRole('combobox', { name: 'Услуга' }), { target: { value: 'service-b' } })
   fireEvent.change(screen.getByRole('combobox', { name: 'Подключение' }), { target: { value: card.connections[1]!.connection_snapshot_id } })
   fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
   await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
     ticket_type: 'SUBSCRIBER_LINKED', lookup_id: card.lookup_id,
-    selected_service_id: 'service-b', connection_snapshot_id: card.connections[1]!.connection_snapshot_id,
+    selected_service_id: 'service-b', connection_snapshot_id: card.connections[1]!.connection_snapshot_id, category_id: categoryId,
   })))
 })
 
@@ -136,7 +139,7 @@ it('shows active subscriber tickets and requires a different-problem reason', as
   fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
   expect(await screen.findByText('У абонента уже есть открытые обращения')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Открыть существующую заявку/ })).toHaveAttribute('href', '/tickets/00000000-0000-4000-8000-000000000021')
-  fireEvent.change(screen.getByRole('textbox', { name: /Описание/ }), { target: { value: 'Вторая проблема' } })
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
   fireEvent.click(screen.getByRole('checkbox', { name: /Другая проблема/ }))
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
@@ -172,4 +175,28 @@ it('does not create a linked ticket when billing is unavailable', async () => {
   expect(await screen.findByText(/Данные абонента не подтверждены/)).toBeInTheDocument()
   expect(ticketApi.activeSubscriberTickets).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
+})
+
+it('uses a selected NetUP contact while leaving the extra comment optional', async () => {
+  const card: SubscriberCard = {
+    lookup_id: '00000000-0000-4000-8000-000000000010', source: 'MOCK',
+    fetched_at: '2026-01-01T00:00:00Z', expires_at: '2999-01-01T00:00:00Z', is_expired: false,
+    subscriber: { ...subscriberDefaults, billing_account: 'MOCK-ETH-001', full_name: 'Тестовый абонент', organization_name: null, phone: '+7 900 000 00 01', actual_address: null },
+    accounts: [], financial_accounts: [], contracts: [],
+    services: [{ ...serviceDefaults, account_id: null, service_id: 'service-eth', name: 'Synthetic Ethernet' }],
+    connections: [{ ...connectionDefaults, connection_snapshot_id: '00000000-0000-4000-8000-000000000011', access_type: 'ETHERNET', device: null, port: null, vlan: null, service_id: 'service-eth' }],
+    technical_state: 'UNKNOWN',
+  }
+  vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  vi.mocked(ticketApi.create).mockResolvedValue({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
+  renderCreate()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Лицевой счёт' }), { target: { value: 'MOCK-ETH-001' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByText('Тестовый абонент')).toBeInTheDocument()
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Телефон входящего звонка' }), { target: { value: 'number:0' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    category_id: categoryId, caller_phone: '+7 900 000 00 01', description: undefined,
+  })))
 })

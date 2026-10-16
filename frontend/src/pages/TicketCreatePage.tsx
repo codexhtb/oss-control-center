@@ -18,9 +18,12 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const [searchParams] = useSearchParams()
   const linkedLookupId = searchParams.get('lookup')
   const queryClient = useQueryClient()
-  const [type, setType] = useState<TicketType>('MANUAL')
+  const [type, setType] = useState<TicketType>('SUBSCRIBER_LINKED')
   const [subject, setSubject] = useState('')
   const [description, setDescription] = useState('')
+  const [categoryId, setCategoryId] = useState('')
+  const [phoneChoice, setPhoneChoice] = useState('')
+  const [manualPhone, setManualPhone] = useState('')
   const [priority, setPriority] = useState<TicketPriority>('NORMAL')
   const [accountNo, setAccountNo] = useState('')
   const [card, setCard] = useState<SubscriberCard | null>(null)
@@ -43,10 +46,12 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
     setAccountNo(result.subscriber.billing_account)
     currentAccount.current = result.subscriber.billing_account
     setCard(result)
+    setPhoneChoice('')
+    setManualPhone('')
     setOtherProblem(false)
     setDuplicateReason('')
     setActivePage(1)
-    const eligible = result.services.filter((service) => service.account_id === result.subscriber.billing_account)
+    const eligible = result.services.filter((service) => !service.account_id || service.account_id === result.subscriber.billing_account)
     setServiceId(eligible.length === 1 ? eligible[0]!.service_id : '')
     setConnectionId(result.connections.length === 1 ? result.connections[0]!.connection_snapshot_id : '')
   }, [existingLookup.data])
@@ -55,10 +60,12 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
     onSuccess: (result) => {
       if (result.subscriber.billing_account !== currentAccount.current) return
       setCard(result)
+      setPhoneChoice('')
+      setManualPhone('')
       setOtherProblem(false)
       setDuplicateReason('')
       setActivePage(1)
-      const eligible = result.services.filter((service) => service.account_id === result.subscriber.billing_account)
+      const eligible = result.services.filter((service) => !service.account_id || service.account_id === result.subscriber.billing_account)
       setServiceId(eligible.length === 1 ? eligible[0]!.service_id : '')
       setConnectionId(result.connections.length === 1 ? result.connections[0]!.connection_snapshot_id : '')
       edited()
@@ -79,17 +86,21 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   })
   const canCreate = session.permissions.includes('tickets.create')
   const linked = type === 'SUBSCRIBER_LINKED'
+  const categories = useQuery({ queryKey: ['ticket-categories'], queryFn: ({ signal }) => ticketApi.categories(signal), enabled: canCreate })
+  const selectedCategory = categories.data?.find((item) => item.id === categoryId && item.is_active)
+  const phoneChoices = [...new Set([card?.subscriber.phone, ...(card?.subscriber.contacts.map((contact) => contact.value) ?? [])].filter((value): value is string => !!value?.trim()))]
+  const callerPhone = phoneChoice === '__manual__' ? manualPhone.trim() : phoneChoice.startsWith('number:') ? phoneChoices[Number(phoneChoice.slice(7))] : undefined
   const active = useQuery({
     queryKey: ['active-subscriber-tickets', card?.lookup_id, activePage],
     queryFn: ({ signal }) => ticketApi.activeSubscriberTickets(card!.lookup_id, activePage, signal),
     enabled: linked && !!card,
   })
   const hasActive = !!active.data && (active.data.total_visible > 0 || active.data.has_hidden_active)
-  const eligibleServices = card?.services.filter((service) => service.account_id === card.subscriber.billing_account) ?? []
+  const eligibleServices = card?.services.filter((service) => !service.account_id || service.account_id === card.subscriber.billing_account) ?? []
   const ambiguousService = eligibleServices.length > 1
   const ambiguousConnection = (card?.connections.length ?? 0) > 1
   const expired = card ? card.is_expired || Date.now() >= new Date(card.expires_at).getTime() : false
-  const canSubmit = !!description.trim() && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
+  const canSubmit = (!linked ? !!description.trim() : !!selectedCategory && (!selectedCategory.is_other || !!subject.trim()) && (!callerPhone || callerPhone.length <= 50) && !!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId))
 
   function edited() {
     setRequestId(crypto.randomUUID())
@@ -100,13 +111,15 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
     event.preventDefault()
     if (!canCreate || mutation.isPending || !canSubmit) return
     const common = {
-      subject: subject.trim() || undefined,
-      description: description.trim(),
+      subject: (linked && !selectedCategory?.is_other ? undefined : subject.trim() || undefined),
+      description: description.trim() || undefined,
       priority,
       client_request_id: requestId,
     }
     const payload: CreateTicketInput = type === 'SUBSCRIBER_LINKED' && card
       ? { ...common, ticket_type: type, lookup_id: card.lookup_id,
+          category_id: categoryId,
+          ...(callerPhone ? { caller_phone: callerPhone } : {}),
           ...(serviceId ? { selected_service_id: serviceId } : {}),
           ...(connectionId ? { connection_snapshot_id: connectionId } : {}),
           ...(hasActive && otherProblem ? { duplicate_reason: duplicateReason.trim() } : {}) }
@@ -118,6 +131,8 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
     if (!accountNo.trim() || lookup.isPending) return
     currentAccount.current = accountNo.trim()
     setCard(null)
+    setPhoneChoice('')
+    setManualPhone('')
     setOtherProblem(false)
     setDuplicateReason('')
     setActivePage(1)
@@ -129,7 +144,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   return (
     <div className="page desk-page">
       <Link to="/tickets" className="back-link"><ArrowLeft size={15} /> К реестру заявок</Link>
-      <div className="page-heading desk-heading"><div><p className="eyebrow">SERVICEDESK / СОЗДАНИЕ</p><h1>Новая заявка</h1><p className="page-heading__description">Выберите тип и опишите задачу. Дополнительные поля не обязательны.</p></div></div>
+      <div className="page-heading desk-heading"><div><p className="eyebrow">SERVICEDESK / СОЗДАНИЕ</p><h1>Новая заявка</h1><p className="page-heading__description">Найдите абонента по лицевому счёту и выберите тему обращения.</p></div></div>
       <div className="create-layout">
         <form className="create-card" onSubmit={submit}>
           <div className="form-section-heading"><span className="step-number">01</span><div><h2>Тип заявки</h2><p>Общий workflow для обращений и внутренних задач.</p></div></div>
@@ -151,15 +166,24 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
               {ambiguousConnection && <label className="field"><span>Подключение <em>*</em></span><select aria-label="Подключение" value={connectionId} onChange={(event) => { setConnectionId(event.target.value); edited() }}><option value="">Выберите подключение</option>{card.connections.map((connection) => <option key={connection.connection_snapshot_id} value={connection.connection_snapshot_id} disabled={!!(serviceId && connection.service_id && connection.service_id !== serviceId)}>{connection.access_type} · {connection.device || 'Устройство UNKNOWN'} · {connection.port || 'Порт UNKNOWN'}{connection.service_id ? ` · ${connection.service_id}` : ''}</option>)}</select></label>}
               {card.connections.length === 1 && <p className="lookup-single">Подключение: {card.connections[0]!.access_type} · {card.connections[0]!.device || 'Устройство UNKNOWN'} · {card.connections[0]!.port || 'Порт UNKNOWN'}</p>}
               {card.connections.length === 0 && <p className="lookup-single">Подключение в источнике не указано. Техническое состояние остаётся UNKNOWN.</p>}
+              <label className="field"><span>Телефон входящего звонка <small>необязательно</small></span><select aria-label="Телефон входящего звонка" value={phoneChoice} onChange={(event) => { setPhoneChoice(event.target.value); edited() }}><option value="">Не указан</option>{phoneChoices.map((phone, index) => <option key={`${phone}-${index}`} value={`number:${index}`}>{phone} · контакт NetUP</option>)}<option value="__manual__">Другой номер</option></select></label>
+              {phoneChoice === '__manual__' && <label className="field"><span>Другой номер</span><input type="tel" value={manualPhone} maxLength={50} placeholder="Введите номер, сообщённый при звонке" onChange={(event) => { setManualPhone(event.target.value); edited() }} /></label>}
               {expired && <Notice tone="error">Карточка устарела для создания заявки. Выполните поиск повторно.</Notice>}
             </div>}
             {card && (active.isPending ? <p role="status" className="muted">Проверяем открытые обращения…</p> : active.isError ? <Notice tone="error">Не удалось проверить открытые обращения. {errorText(active.error)} Создание заявки пока недоступно.</Notice> : hasActive ? <section className="duplicate-warning" aria-label="Открытые обращения абонента"><h3>У абонента уже есть открытые обращения</h3><p>Проверьте их перед созданием новой заявки.</p><ul>{active.data.items.map((ticket) => <li key={ticket.id}><div><strong>#{ticket.number} · {ticketTitle(ticket.subject)}</strong><span>{statusLabel[ticket.status]} · {formatDate(ticket.created_at)} · {ticket.assigned_engineer_name || 'Не назначен'}</span><p>{ticket.description}</p></div><Link to={`/tickets/${ticket.id}`}>Открыть существующую заявку <ArrowRight size={14} /></Link></li>)}</ul>{active.data.total_visible > active.data.page * active.data.size && <Button type="button" variant="quiet" onClick={() => setActivePage(activePage + 1)}>Следующие обращения</Button>}{activePage > 1 && <Button type="button" variant="quiet" onClick={() => setActivePage(activePage - 1)}>Предыдущие</Button>}{active.data.has_hidden_active && <p>Есть обращение, содержание которого вам недоступно. Передайте повторный звонок инженеру OSS для проверки; доступ к заявке определяется вашими правами.</p>}<label className="duplicate-warning__choice"><input type="checkbox" checked={otherProblem} onChange={(event) => { setOtherProblem(event.target.checked); edited() }} /> Другая проблема — создать отдельную заявку</label>{otherProblem && <label className="field"><span>Почему требуется новая заявка <em>*</em></span><textarea value={duplicateReason} onChange={(event) => { setDuplicateReason(event.target.value); edited() }} minLength={1} maxLength={500} rows={2} required placeholder="Кратко укажите отличие от открытого обращения" /></label>}</section> : null)}
           </div>}
-          <div className="form-section-heading form-section-heading--later"><span className="step-number">{linked ? '03' : '02'}</span><div><h2>Содержание</h2><p>Свободный текст, без обязательного шаблона.</p></div></div>
+          <div className="form-section-heading form-section-heading--later"><span className="step-number">{linked ? '03' : '02'}</span><div><h2>Содержание</h2></div></div>
           <div className="form-fields">
-            <label className="field"><span>Тема <small>необязательно</small></span><input id="ticket-subject" name="subject" value={subject} maxLength={160} placeholder="Например, проверить доступность узла" onChange={(event) => { setSubject(event.target.value); edited() }} /></label>
-            <label className="field"><span>Описание <em>*</em></span><textarea id="ticket-description" name="description" value={description} maxLength={10000} rows={7} required placeholder="Что произошло и какая работа требуется?" onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
-            <label className="field form-fields__priority"><span>Приоритет</span><select id="ticket-priority" name="priority" value={priority} onChange={(event) => { setPriority(event.target.value as TicketPriority); edited() }}>{priorities.map((item) => <option key={item} value={item}>{priorityLabel[item]}</option>)}</select></label>
+            {linked ? <>
+              <label className="field"><span>Тема обращения <em>*</em></span><select aria-label="Тема обращения" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); edited() }} required><option value="">Выберите тему</option>{categories.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              {categories.isError && <Notice tone="error">Не удалось загрузить темы обращений. {errorText(categories.error)}</Notice>}
+              {selectedCategory?.is_other && <label className="field"><span>Уточнение темы <em>*</em></span><input id="ticket-subject" name="subject" value={subject} maxLength={160} placeholder="Кратко уточните тему" onChange={(event) => { setSubject(event.target.value); edited() }} required /></label>}
+              <label className="field"><span>Комментарий <small>необязательно</small></span><textarea id="ticket-description" name="description" value={description} maxLength={10000} rows={3} placeholder="Дополнительные сведения со слов абонента" onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
+            </> : <>
+              <label className="field"><span>Тема <small>необязательно</small></span><input id="ticket-subject" name="subject" value={subject} maxLength={160} placeholder="Краткая тема" onChange={(event) => { setSubject(event.target.value); edited() }} /></label>
+              <label className="field"><span>Описание <em>*</em></span><textarea id="ticket-description" name="description" value={description} maxLength={10000} rows={7} required placeholder="Что произошло и какая работа требуется?" onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
+              <label className="field form-fields__priority"><span>Приоритет</span><select id="ticket-priority" name="priority" value={priority} onChange={(event) => { setPriority(event.target.value as TicketPriority); edited() }}>{priorities.map((item) => <option key={item} value={item}>{priorityLabel[item]}</option>)}</select></label>
+            </>}
           </div>
           {mutation.isError && <Notice tone="error">{mutation.error instanceof ApiError && mutation.error.code === 'active_ticket_exists' ? 'Появилось открытое обращение этого абонента. Проверьте его и при другой проблеме укажите причину новой заявки.' : errorText(mutation.error)}</Notice>}
           <div className="create-actions"><span>Сохранение и история выполняются сервером в одной транзакции.</span><Button type="submit" variant="primary" disabled={mutation.isPending || !canSubmit}>{mutation.isPending ? 'Создаём…' : 'Создать заявку'} <ArrowRight size={16} /></Button></div>

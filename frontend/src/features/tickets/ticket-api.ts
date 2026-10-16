@@ -1,7 +1,7 @@
 import { apiRequest } from '../../shared/api/client'
 import type {
   ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
-  Ticket, TicketComment, TicketDetail, TicketEvent, TicketFilters,
+  Ticket, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
 } from './types'
 
 function withQuery(path: `/api/v1/${string}`, values: Record<string, string | number | boolean | undefined>) {
@@ -15,6 +15,7 @@ function withQuery(path: `/api/v1/${string}`, values: Record<string, string | nu
 const ticketPath = (id: string) => `/api/v1/tickets/${encodeURIComponent(id)}` as const
 
 export const ticketApi = {
+  categories: (signal?: AbortSignal) => apiRequest<TicketCategory[]>('/api/v1/ticket-categories', { signal }),
   list: (filters: TicketFilters, signal?: AbortSignal) =>
     apiRequest<Page<Ticket>>(withQuery('/api/v1/tickets', { ...filters }), { signal }),
   get: (id: string, signal?: AbortSignal) => apiRequest<TicketDetail>(ticketPath(id), { signal }),

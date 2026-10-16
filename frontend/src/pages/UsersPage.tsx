@@ -6,6 +6,7 @@ import type { Permission, Role, User } from '../shared/api/types'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { roleLabel } from '../layout/AppShell'
+import { CategoryManager } from '../features/tickets/CategoryManager'
 
 type ManagedUser = User & { permissions: Permission[] }
 type Page<T> = { items: T[]; page: number; size: number; total: number }
@@ -114,6 +115,7 @@ export function UsersPage() {
           <div className="fact-pager"><Button variant="quiet" disabled={page <= 1} onClick={() => setPage(page - 1)}>Назад</Button><span>{page} / {Math.max(1, Math.ceil(users.data.total / users.data.size))}</span><Button variant="quiet" disabled={page * users.data.size >= users.data.total} onClick={() => setPage(page + 1)}>Далее</Button></div>
         </>}
       </section>
+      <CategoryManager />
       <section className="detail-panel"><div className="detail-panel__heading"><h2>История административных действий</h2><Button variant="quiet" onClick={() => setShowAudit(!showAudit)}>{showAudit ? 'Скрыть' : 'Показать'}</Button></div>
         {showAudit && (audit.isPending ? <p role="status">Загружаем историю…</p> : audit.isError ? <Notice tone="error">{errorText(audit.error)}</Notice> : <div className="fact-list">{audit.data.items.map((row) => <div className="fact-item" key={row.id}><strong>{row.action}</strong><span>{new Date(row.occurred_at).toLocaleString('ru-RU')}</span><span>Исполнитель: {row.actor_name ?? 'Система'}</span><span>Объект: {row.target_name ?? '—'}</span><pre>{JSON.stringify(row.details, null, 2)}</pre></div>)}</div>)}
       </section>
