@@ -67,6 +67,7 @@ def billing_engine(isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch) 
 @pytest.fixture
 def billing_client(billing_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("BILLING_PROVIDER", "MOCK")
     monkeypatch.setenv("AUTH_PUBLIC_ORIGIN", ORIGIN)
     monkeypatch.setenv("AUTH_ALLOW_HTTP_LOOPBACK", "false")
     monkeypatch.setenv("AUTH_HASH_KEY", "test-only-key-with-at-least-32-bytes")

@@ -16,6 +16,7 @@
 - [Текущий Identity, Permissions & Ticket Editing](phase3-identity-ticket-editing.md)
 - [Удаление и корзина заявок](ticket-deletion.md)
 - [Phase 5.1: предупреждение о повторных обращениях](phase-5.1-duplicate-tickets.md)
+- [Категории обращений и телефон звонящего](ticket-categories-caller-phone.md)
 - [Решения ревью и остающиеся вопросы](review.md)
 
 **Source of truth:** PostgreSQL хранит заявки, комментарии, решения, историю, аудит и диагностические snapshots. ServiceDesk Plus остаётся только в AS-IS и временном миграционном процессе; синхронизация с ним не разрабатывается. Нет необходимости знать production API NetUP, чтобы начать Phase 1.

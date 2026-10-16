@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -150,6 +151,18 @@ class Ticket(Base):
             name="ck_tickets_subject",
         ),
         CheckConstraint(
+            "(category_id IS NULL AND category_name IS NULL) OR "
+            "(category_id IS NOT NULL AND category_name IS NOT NULL "
+            "AND length(btrim(category_name)) > 0)",
+            name="ck_tickets_category_snapshot",
+        ),
+        CheckConstraint(
+            "caller_phone IS NULL OR (length(btrim(caller_phone)) > 0 "
+            "AND caller_phone = btrim(caller_phone) "
+            "AND caller_phone !~ '[[:cntrl:]]')",
+            name="ck_tickets_caller_phone",
+        ),
+        CheckConstraint(
             "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
             "AND account_no IS NOT NULL AND length(account_no) > 0) OR "
             "(ticket_type IN ('MANUAL', 'INTERNAL') AND subscriber_snapshot_id IS NULL "
@@ -196,6 +209,11 @@ class Ticket(Base):
     selected_service_id: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str] = mapped_column(Text, nullable=False)
     subject: Mapped[str | None] = mapped_column(String(160))
+    category_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ticket_categories.id", ondelete="RESTRICT")
+    )
+    category_name: Mapped[str | None] = mapped_column(String(160))
+    caller_phone: Mapped[str | None] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     created_by: Mapped[UUID] = mapped_column(
@@ -221,6 +239,36 @@ class Ticket(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TicketCategory(Base):
+    __tablename__ = "ticket_categories"
+    __table_args__ = (
+        CheckConstraint(
+            "length(btrim(name)) > 0 AND name = btrim(name) AND name !~ '[[:cntrl:]]'",
+            name="ck_ticket_categories_name",
+        ),
+        CheckConstraint("sort_order >= 0", name="ck_ticket_categories_order"),
+        CheckConstraint("version > 0", name="ck_ticket_categories_version"),
+        Index("uq_ticket_categories_name_lower", text("lower(name)"), unique=True),
+        Index(
+            "uq_ticket_categories_other", "is_other", unique=True, postgresql_where=text("is_other")
+        ),
+        Index("ix_ticket_categories_active_order", "is_active", "sort_order", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    is_other: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

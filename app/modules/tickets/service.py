@@ -19,6 +19,7 @@ from app.modules.tickets.models import (
     SubscriberSnapshot,
     Ticket,
     TicketAudit,
+    TicketCategory,
     TicketComment,
     TicketEvent,
     TicketPurgeAudit,
@@ -249,6 +250,27 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
     )
     if existing:
         return _replayed(db, existing, payload)
+    category_name = None
+    if payload.category_id is not None:
+        category = db.scalar(
+            select(TicketCategory)
+            .where(TicketCategory.id == payload.category_id)
+            .with_for_update(key_share=True)
+        )
+        if category is None or not category.is_active:
+            raise ApiError(422, "invalid_category", "Select an active category")
+        category_name = category.name
+        if category.is_other:
+            if payload.subject is None:
+                raise ApiError(422, "subject_required", "Clarify the Other category")
+            subject = payload.subject
+        else:
+            if payload.subject is not None and payload.subject != category.name:
+                raise ApiError(422, "category_subject_conflict", "Subject is set by the category")
+            subject = category.name
+    else:
+        subject = payload.subject
+    description = payload.description or subject
     account_no = None
     snapshot_id = None
     selected_service = None
@@ -271,8 +293,11 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         subscriber_snapshot_id=snapshot_id,
         connection_snapshot_id=selected,
         selected_service_id=selected_service,
-        description=payload.description,
-        subject=payload.subject,
+        description=description,
+        subject=subject,
+        category_id=payload.category_id,
+        category_name=category_name,
+        caller_phone=payload.caller_phone,
         status=TicketStatus.OPEN,
         priority=payload.priority,
         created_by=actor_id,
@@ -357,10 +382,24 @@ def _linked_source(
 def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticket, bool]:
     if ticket.deleted_at is not None:
         raise ApiError(409, "ticket_deleted", "Request already created a deleted ticket")
+    category = db.get(TicketCategory, ticket.category_id) if ticket.category_id else None
+    if ticket.category_id is not None and category is None:
+        raise ApiError(409, "request_id_conflict", "Ticket category is unavailable")
+    expected_subject = (
+        payload.subject if category is None or category.is_other else ticket.category_name
+    )
+    expected_description = payload.description or expected_subject
     if (
         ticket.ticket_type != payload.ticket_type
-        or ticket.description != payload.description
-        or ticket.subject != payload.subject
+        or (
+            category is not None
+            and not category.is_other
+            and payload.subject not in (None, ticket.category_name)
+        )
+        or ticket.description != expected_description
+        or ticket.subject != expected_subject
+        or ticket.category_id != payload.category_id
+        or ticket.caller_phone != payload.caller_phone
         or ticket.priority != payload.priority
     ):
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")

@@ -14,13 +14,56 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CategoryView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    sort_order: int
+    is_active: bool
+    is_other: bool
+    version: int
+
+
+class CreateCategory(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    sort_order: int = Field(ge=0, le=100000)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        if not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value):
+            raise ValueError("category name must be trimmed and contain no control characters")
+        return value
+
+
+class UpdateCategory(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    sort_order: int | None = Field(default=None, ge=0, le=100000)
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str | None) -> str | None:
+        return CreateCategory.valid_name(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_update(self) -> "UpdateCategory":
+        if not self.model_fields_set or any(
+            getattr(self, name) is None for name in self.model_fields_set
+        ):
+            raise ValueError("at least one category field is required")
+        return self
+
+
 class CreateTicket(StrictModel):
     ticket_type: TicketType = TicketType.SUBSCRIBER_LINKED
     lookup_id: UUID | None = None
     connection_snapshot_id: UUID | None = None
     selected_service_id: str | None = Field(default=None, min_length=1, max_length=100)
-    description: str = Field(min_length=1, max_length=10000)
+    description: str | None = Field(default=None, min_length=1, max_length=10000)
     subject: str | None = Field(default=None, max_length=160)
+    category_id: UUID | None = None
+    caller_phone: str | None = Field(default=None, max_length=50)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
     duplicate_reason: str | None = Field(default=None, min_length=1, max_length=500)
@@ -43,8 +86,21 @@ class CreateTicket(StrictModel):
             raise ValueError("duplicate_reason must be trimmed and contain no control characters")
         return value
 
+    @field_validator("caller_phone")
+    @classmethod
+    def validate_caller_phone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value):
+            raise ValueError(
+                "caller_phone must be nonblank, trimmed and contain no control characters"
+            )
+        return value
+
     @model_validator(mode="after")
     def validate_source(self) -> "CreateTicket":
+        if self.category_id is None and self.description is None:
+            raise ValueError("description is required without a category")
         if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
             if self.lookup_id is None:
                 raise ValueError("lookup_id is required for SUBSCRIBER_LINKED")
@@ -183,6 +239,9 @@ class TicketView(BaseModel):
     selected_service_id: str | None
     description: str
     subject: str | None
+    category_id: UUID | None = None
+    category_name: str | None = None
+    caller_phone: str | None = None
     status: TicketStatus
     priority: TicketPriority
     created_by: UUID

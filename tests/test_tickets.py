@@ -34,6 +34,7 @@ from app.modules.tickets.models import (
     SubscriberSnapshot,
     Ticket,
     TicketAudit,
+    TicketCategory,
     TicketEvent,
     TicketPurgeAudit,
 )
@@ -62,6 +63,7 @@ def ticket_engine(isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch) -
 @pytest.fixture
 def ticket_client(ticket_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("BILLING_PROVIDER", "MOCK")
     monkeypatch.setenv("AUTH_PUBLIC_ORIGIN", ORIGIN)
     monkeypatch.setenv("AUTH_ALLOW_HTTP_LOOPBACK", "false")
     monkeypatch.setenv("AUTH_HASH_KEY", "test-only-key-with-at-least-32-bytes")
@@ -1608,3 +1610,170 @@ def test_own_ticket_edit_scope_conflict_and_history(
             )
             == 1
         )
+
+
+def test_categories_rbac_csrf_origin_and_immutable_ticket_label(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "category_operator", Role.OPERATOR)
+    admin = seed_user(ticket_engine, "category_admin", Role.ADMIN)
+    snapshot, _ = seed_snapshot(ticket_engine, operator)
+    login(ticket_client, operator.login)
+    listed = ticket_client.get("/api/v1/ticket-categories")
+    assert listed.status_code == 200
+    assert listed.headers["cache-control"] == "no-store"
+    assert len(listed.json()) == 8
+    category = next(item for item in listed.json() if item["name"] == "Нет интернета")
+    other = next(item for item in listed.json() if item["is_other"])
+    assert ticket_client.get("/api/v1/ticket-categories?include_inactive=true").status_code == 403
+    path = "/api/v1/ticket-categories"
+    assert (
+        ticket_client.post(
+            path, headers=csrf(ticket_client), json={"name": "Новая", "sort_order": 90}
+        ).status_code
+        == 403
+    )
+    created = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={
+            "lookup_id": str(snapshot.id),
+            "category_id": category["id"],
+            "caller_phone": "+7 (900) 000-00-01",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert created.status_code == 201, created.text
+    ticket_id = created.json()["id"]
+    assert created.json()["category_name"] == "Нет интернета"
+    assert created.json()["caller_phone"] == "+7 (900) 000-00-01"
+    assert created.json()["description"] == "Нет интернета"
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "lookup_id": str(snapshot.id),
+                "category_id": other["id"],
+                "client_request_id": str(uuid4()),
+                "duplicate_reason": "Отдельный вопрос",
+            },
+        ).status_code
+        == 422
+    )
+    login(ticket_client, admin.login)
+    assert ticket_client.post(path, json={"name": "Новая", "sort_order": 90}).status_code == 403
+    assert (
+        ticket_client.post(
+            path,
+            headers={**csrf(ticket_client), "Origin": "https://bad.example"},
+            json={"name": "Новая", "sort_order": 90},
+        ).status_code
+        == 403
+    )
+    new_category = ticket_client.post(
+        path, headers=csrf(ticket_client), json={"name": "Новая", "sort_order": 90}
+    )
+    assert new_category.status_code == 201, new_category.text
+    updated = ticket_client.patch(
+        f"{path}/{category['id']}",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"name": "Нет доступа", "sort_order": 5, "is_active": False},
+    )
+    assert updated.status_code == 200, updated.text
+    assert (
+        ticket_client.patch(
+            f"{path}/{category['id']}",
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+            json={"sort_order": 20},
+        ).status_code
+        == 409
+    )
+    login(ticket_client, operator.login)
+    reread = ticket_client.get(f"/api/v1/tickets/{ticket_id}")
+    assert reread.json()["category_name"] == "Нет интернета"
+    assert reread.json()["caller_phone"] == "+7 (900) 000-00-01"
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={
+                "lookup_id": str(snapshot.id),
+                "category_id": category["id"],
+                "duplicate_reason": "Другая проблема",
+                "client_request_id": str(uuid4()),
+            },
+        ).status_code
+        == 422
+    )
+    with Session(ticket_engine) as db:
+        assert db.get(TicketCategory, UUID(category["id"])).name == "Нет доступа"
+        assert db.get(Ticket, UUID(ticket_id)).category_name == "Нет интернета"
+
+
+def test_category_ticket_idempotency_and_manual_phone(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "category_replay", Role.OPERATOR)
+    login(ticket_client, operator.login)
+    category = ticket_client.get("/api/v1/ticket-categories").json()[0]
+    payload = {
+        "ticket_type": "MANUAL",
+        "category_id": category["id"],
+        "caller_phone": "(000) 123 456",
+        "client_request_id": str(uuid4()),
+    }
+    first = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert first.status_code == 201, first.text
+    replay = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["id"] == first.json()["id"]
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={**payload, "caller_phone": "other"},
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(
+            "/api/v1/tickets",
+            headers=csrf(ticket_client),
+            json={**payload, "client_request_id": str(uuid4()), "caller_phone": "  bad  "},
+        ).status_code
+        == 422
+    )
+
+
+def test_0015_upgrade_preserves_existing_ticket(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "0014_ticket_deletion")
+    engine = create_engine(isolated_postgres_url)
+    try:
+        author = seed_legacy_user(engine, "category_historical", Role.OPERATOR)
+        ticket_id = uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text("""INSERT INTO tickets
+                (id, ticket_type, description, status, priority, created_by,
+                 client_request_id, version)
+                VALUES (:id, 'INTERNAL', 'Historical description', 'OPEN',
+                        'NORMAL', :author, :request, 1)"""),
+                {"id": ticket_id, "author": author, "request": uuid4()},
+            )
+        command.upgrade(config, "head")
+        with Session(engine) as db:
+            ticket = db.get(Ticket, ticket_id)
+            assert ticket is not None
+            assert ticket.category_id is None and ticket.category_name is None
+            assert ticket.caller_phone is None
+            assert ticket.description == "Historical description"
+            assert db.scalar(select(func.count()).select_from(TicketCategory)) == 8
+    finally:
+        engine.dispose()
