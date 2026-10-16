@@ -29,6 +29,7 @@ export interface Ticket {
   created_by_name?: string | null
   assigned_engineer_id: string | null
   assigned_engineer_name?: string | null
+  work_started_at?: string | null
   closed_by: string | null
   closed_decision_id: string | null
   closed_at: string | null

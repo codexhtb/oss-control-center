@@ -209,6 +209,10 @@ cd frontend && npm run typecheck && npm test -- --run && npm run build
 
 ## Остановка, повторный запуск и данные
 
+### Phase 5.5 — инженерная очередь
+
+Claim/release используют существующую схему `0015_ticket_categories`; миграция и изменения постоянной dev-БД не нужны. Полный PostgreSQL pytest создаёт только временные `oss_test_*` базы. Мутационная Chromium-приёмка запускается командой `sg docker -c 'sh dev/run_phase55_browser_e2e.sh'`: скрипт создаёт одноразовую базу, направляет в неё только dev API, проверяет UI, возвращает API к постоянной базе и удаляет временную базу. При неудачном возврате API временная база сохраняется для восстановления. Скрипт использует уже существующие защищённые dev credentials и не печатает их значения. Постоянные заявки допускается проверять через Web UI только без мутаций.
+
 ```bash
 sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml stop'
 sg docker -c 'docker compose --env-file .env.dev -f compose.dev.yaml up -d'

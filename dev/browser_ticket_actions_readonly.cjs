@@ -40,7 +40,7 @@ async function main() {
       const panel = page.getByRole('complementary', { name: 'Управление заявкой' })
       await panel.getByRole('heading', { name: 'Заявка #38' }).waitFor()
       const startVisible = await panel.getByRole('button', { name: 'Взять в работу' }).count() === 1
-      if (startVisible !== (ticket.status === 'OPEN' && me.permissions.includes('tickets.start'))) throw new Error('Start action RBAC/state mismatch')
+      if (startVisible !== (ticket.status !== 'CLOSED' && ticket.assigned_engineer_id === null && me.user.role === 'engineer' && me.permissions.includes('tickets.start'))) throw new Error('Claim action RBAC/state mismatch')
       const decisionVisible = await panel.getByRole('button', { name: 'Записать решение' }).count() === 1
       if (decisionVisible !== (ticket.status === 'IN_PROGRESS' && me.permissions.includes('tickets.resolve'))) throw new Error('Decision action RBAC/state mismatch')
       const deletable = me.permissions.includes('tickets.delete.all') || (me.permissions.includes('tickets.delete.own') && ticket.created_by === me.user.id)

@@ -601,20 +601,75 @@ def list_tickets(
 def assign_engineer(
     db: Session, actor_id: UUID, ticket_id: UUID, engineer_id: UUID, version: int | None
 ) -> Ticket:
-    _actor(db, actor_id, Permission.TICKET_ASSIGN)
-    ticket = _ticket(db, ticket_id, lock=True)
-    _version(ticket, version)
-    _open(ticket)
+    actor = _actor(db, actor_id, Permission.TICKET_ASSIGN)
     engineer = db.execute(
         select(User).where(User.id == engineer_id).with_for_update()
     ).scalar_one_or_none()
     if engineer is None or not engineer.is_active or engineer.role != Role.ENGINEER:
         raise ApiError(422, "invalid_engineer", "Assignee must be an active engineer")
+    ticket = _ticket(db, ticket_id, lock=True)
+    _version(ticket, version)
+    _open(ticket)
+    if (
+        ticket.assigned_engineer_id is not None
+        and ticket.assigned_engineer_id != engineer_id
+        and actor.role != Role.ADMIN
+    ):
+        raise ApiError(
+            409, "ticket_already_assigned", "Only an administrator can reassign a claimed ticket"
+        )
     if ticket.assigned_engineer_id == engineer_id:
         raise ApiError(409, "same_assignee", "Engineer is already assigned")
     ticket.assigned_engineer_id = engineer_id
     _changed(ticket)
     _fact(db, ticket, actor_id, "engineer_assigned", {"engineer_id": str(engineer_id)})
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def claim_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | None) -> Ticket:
+    if version is None:
+        raise ApiError(428, "version_required", "If-Match ticket version is required")
+    actor = _actor(db, actor_id, Permission.TICKET_START)
+    if actor.role != Role.ENGINEER:
+        raise ApiError(403, "forbidden", "Only an engineer can claim a ticket")
+    ticket = _ticket(db, ticket_id, lock=True)
+    _open(ticket)
+    # A retry after a successful response is a read: it must not duplicate the audit fact.
+    if ticket.assigned_engineer_id == actor_id and ticket.status == TicketStatus.IN_PROGRESS:
+        return ticket
+    if ticket.assigned_engineer_id is not None:
+        raise ApiError(409, "ticket_already_claimed", "Ticket is assigned to another engineer")
+    _version(ticket, version)
+    previous_status = ticket.status
+    ticket.assigned_engineer_id = actor_id
+    ticket.status = TicketStatus.IN_PROGRESS
+    _changed(ticket)
+    _fact(
+        db,
+        ticket,
+        actor_id,
+        "engineer_claimed",
+        {"engineer_id": str(actor_id), "from": previous_status, "to": TicketStatus.IN_PROGRESS},
+    )
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def release_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | None) -> Ticket:
+    actor = _actor(db, actor_id, Permission.TICKET_START)
+    if actor.role != Role.ENGINEER:
+        raise ApiError(403, "forbidden", "Only an engineer can release a ticket")
+    ticket = _ticket(db, ticket_id, lock=True)
+    _version(ticket, version)
+    _open(ticket)
+    if ticket.assigned_engineer_id != actor_id:
+        raise ApiError(409, "not_ticket_assignee", "Only the assigned engineer can release ticket")
+    ticket.assigned_engineer_id = None
+    _changed(ticket)
+    _fact(db, ticket, actor_id, "engineer_released", {"engineer_id": str(actor_id)})
     db.commit()
     db.refresh(ticket)
     return ticket
@@ -635,11 +690,13 @@ def add_comment(db: Session, actor_id: UUID, ticket_id: UUID, payload: AddCommen
 
 
 def start_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | None) -> Ticket:
-    _actor(db, actor_id, Permission.TICKET_START)
+    actor = _actor(db, actor_id, Permission.TICKET_START)
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
     if ticket.status != TicketStatus.OPEN:
         raise ApiError(409, "invalid_transition", "Ticket cannot be started")
+    if ticket.assigned_engineer_id not in (None, actor_id) and actor.role != Role.ADMIN:
+        raise ApiError(409, "ticket_already_claimed", "Ticket is assigned to another engineer")
     ticket.status = TicketStatus.IN_PROGRESS
     _changed(ticket)
     _fact(db, ticket, actor_id, "ticket_started", {"from": "OPEN", "to": "IN_PROGRESS"})

@@ -81,6 +81,10 @@ export const ticketApi = {
     }),
   start: (id: string, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/start`, { method: 'POST', ifMatch: `"${version}"` }),
+  claim: (id: string, version: number) =>
+    apiRequest<Ticket>(`${ticketPath(id)}/claim`, { method: 'POST', ifMatch: `"${version}"` }),
+  release: (id: string, version: number) =>
+    apiRequest<Ticket>(`${ticketPath(id)}/release`, { method: 'POST', ifMatch: `"${version}"` }),
   requestFieldWork: (id: string, reason: string, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/field-work-request`, {
       method: 'POST', json: { reason }, ifMatch: `"${version}"`,

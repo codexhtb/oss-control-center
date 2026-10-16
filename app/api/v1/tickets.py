@@ -51,12 +51,14 @@ from app.modules.tickets.service import (
     add_decision,
     add_diagnostic,
     assign_engineer,
+    claim_ticket,
     close_ticket,
     create_ticket,
     delete_ticket,
     edit_ticket,
     list_tickets,
     purge_ticket,
+    release_ticket,
     request_field_work,
     restore_ticket,
     start_ticket,
@@ -106,6 +108,15 @@ def can_assign(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
 
 
 def can_list_engineers(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
+    if any(
+        has_permission(db, identity.user, permission)
+        for permission in (
+            Permission.TICKET_ASSIGN,
+            Permission.TICKET_READ,
+            Permission.TICKET_READ_OWN,
+        )
+    ):
+        return identity
     return _allowed(identity, db, Permission.TICKET_ASSIGN)
 
 
@@ -191,6 +202,8 @@ def _names(db: Session, ids: list[UUID | None]) -> dict[UUID, str]:
 
 
 def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
+    if not items:
+        return []
     names = _names(
         db,
         [value for ticket in items for value in (ticket.created_by, ticket.assigned_engineer_id)],
@@ -218,6 +231,25 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
         if snapshot_ids
         else {}
     )
+    # Only the latest assignment/start fact can establish work duration. An old
+    # start followed by release or reassignment cannot be attributed to the new assignee.
+    latest_assignment = db.execute(
+        select(
+            TicketEvent.ticket_id,
+            TicketEvent.event_type,
+            TicketEvent.actor_id,
+            TicketEvent.occurred_at,
+        )
+        .where(
+            TicketEvent.ticket_id.in_([item.id for item in items]),
+            TicketEvent.event_type.in_(
+                ("engineer_claimed", "engineer_released", "engineer_assigned", "ticket_started")
+            ),
+        )
+        .distinct(TicketEvent.ticket_id)
+        .order_by(TicketEvent.ticket_id, TicketEvent.ticket_version.desc(), TicketEvent.id.desc())
+    ).all()
+    latest_by_ticket = {row.ticket_id: row for row in latest_assignment}
     return [
         TicketListView.model_validate(item).model_copy(
             update={
@@ -227,6 +259,16 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                 "account_no": subscribers.get(item.subscriber_snapshot_id, (None, item.account_no))[
                     1
                 ],
+                "work_started_at": (
+                    latest_by_ticket[item.id].occurred_at
+                    if item.status == TicketStatus.IN_PROGRESS
+                    and item.assigned_engineer_id is not None
+                    and item.id in latest_by_ticket
+                    and latest_by_ticket[item.id].event_type
+                    in ("engineer_claimed", "ticket_started")
+                    and latest_by_ticket[item.id].actor_id == item.assigned_engineer_id
+                    else None
+                ),
             }
         )
         for item in items
@@ -519,6 +561,34 @@ def start(
 ):
     _mutation_scope(db, identity, ticket_id)
     ticket = start_ticket(db, identity.user.id, ticket_id, _version(if_match))
+    _etag(response, TicketView.model_validate(ticket))
+    return ticket
+
+
+@router.post("/{ticket_id}/claim", response_model=TicketView)
+def claim(
+    ticket_id: UUID,
+    response: Response,
+    identity: StartDep,
+    db: SessionDep,
+    if_match: IfMatch = None,
+):
+    _mutation_scope(db, identity, ticket_id)
+    ticket = claim_ticket(db, identity.user.id, ticket_id, _version(if_match))
+    _etag(response, TicketView.model_validate(ticket))
+    return ticket
+
+
+@router.post("/{ticket_id}/release", response_model=TicketView)
+def release(
+    ticket_id: UUID,
+    response: Response,
+    identity: StartDep,
+    db: SessionDep,
+    if_match: IfMatch = None,
+):
+    _mutation_scope(db, identity, ticket_id)
+    ticket = release_ticket(db, identity.user.id, ticket_id, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
 

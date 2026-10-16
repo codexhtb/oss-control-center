@@ -261,6 +261,7 @@ class TicketView(BaseModel):
 
 class TicketListView(TicketView):
     subscriber_name: str | None = None
+    work_started_at: datetime | None = None
 
 
 class TicketDetail(TicketView):

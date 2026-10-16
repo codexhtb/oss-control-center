@@ -66,6 +66,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   }
   const canAssign = session.permissions.includes('tickets.assign')
   const canStart = session.permissions.includes('tickets.start')
+  const canClaim = canStart && session.user.role === 'engineer'
   const canDiagnose = session.permissions.includes('tickets.diagnose')
   const canReadDiagnostics = session.permissions.includes('diagnostics.read')
   const canDecide = session.permissions.includes('tickets.resolve')
@@ -130,6 +131,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const open = ticket.status !== 'CLOSED'
   const inProgress = ticket.status === 'IN_PROGRESS'
   const assignedName = ticket.assigned_engineer_name || engineers.data?.items.find((item) => item.id === ticket.assigned_engineer_id)?.display_name
+  const canManualAssign = canAssign && (ticket.assigned_engineer_id === null || session.user.role === 'admin')
 
   async function deleteCurrent() {
     if (busy) return
@@ -180,7 +182,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
     <div className="page desk-page">
       <Link to={listDestination} className="back-link"><ArrowLeft size={15} /> К реестру заявок</Link>
       <div className="ticket-detail-heading"><div><p className="eyebrow">SERVICEDESK / ЗАЯВКА #{ticket.number}</p><h1>{ticketTitle(ticket.subject)}</h1><div className="ticket-detail-tags"><span className="type-label">{typeLabel[ticket.ticket_type]}</span><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></div></div><Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void ticketQuery.refetch()} disabled={ticketQuery.isFetching}>Обновить</Button></div>
-      {actionError !== null && <Notice tone="error">{errorText(actionError)}{actionError instanceof ApiError && actionError.status === 409 ? ' Карточка обновлена; проверьте версию перед повтором.' : ''}</Notice>}
+      {actionError !== null && <Notice tone="error">{actionError instanceof ApiError && actionError.code === 'ticket_already_claimed' ? 'Заявку уже взял другой инженер.' : errorText(actionError)}{actionError instanceof ApiError && actionError.status === 409 ? ' Карточка обновлена; проверьте исполнителя перед повтором.' : ''}</Notice>}
       {actionSuccess && <Notice>{actionSuccess}</Notice>}
       <div className="ticket-detail-layout">
         <div className="ticket-detail-main">
@@ -209,10 +211,12 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               <div><dt>Исполнитель</dt><dd>{ticket.assigned_engineer_id ? assignedName || 'Имя не указано' : 'Не назначен'}</dd></div>
               <div><dt>Обновлена</dt><dd><time dateTime={ticket.updated_at}>{formatDate(ticket.updated_at)}</time></dd></div>
             </dl>
-            {(open && (canAssign || (canStart && ticket.status === 'OPEN') || (inProgress && (canDecide || canClose || session.permissions.includes('tickets.field_work'))))) && <div className="ticket-action-panel__actions">
-              {ticket.status === 'OPEN' && canStart && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('start', () => ticketApi.start(id, ticket.version))}>Взять в работу <ArrowRight size={15} /></Button>}
+            {(open && (canManualAssign || (canClaim && (ticket.assigned_engineer_id === null || ticket.assigned_engineer_id === session.user.id)) || (canStart && ticket.status === 'OPEN' && ticket.assigned_engineer_id === session.user.id) || (inProgress && (canDecide || canClose || session.permissions.includes('tickets.field_work'))))) && <div className="ticket-action-panel__actions">
+              {canClaim && ticket.assigned_engineer_id === null && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('claim', () => ticketApi.claim(id, ticket.version))}>Взять в работу <ArrowRight size={15} /></Button>}
+              {canClaim && ticket.assigned_engineer_id === session.user.id && <Button variant="secondary" disabled={!!busy} onClick={() => void runAction('release', () => ticketApi.release(id, ticket.version))}>Освободить заявку</Button>}
+              {ticket.status === 'OPEN' && canStart && ticket.assigned_engineer_id === session.user.id && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('start', () => ticketApi.start(id, ticket.version))}>Начать работу <ArrowRight size={15} /></Button>}
               {inProgress && canDecide && <Button variant="primary" disabled={!!busy} onClick={() => { decisionInput.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' }); decisionInput.current?.focus({ preventScroll: true }) }}>Записать решение</Button>}
-              {open && canAssign && <details className="ticket-action-disclosure"><summary>Назначить инженера</summary>
+              {open && canManualAssign && <details className="ticket-action-disclosure"><summary>Назначить инженера</summary>
                 {engineers.isPending ? <p className="rail-note">Загружаем инженеров…</p> : engineers.isError ? <Notice tone="error">{errorText(engineers.error)}</Notice> : engineers.data.items.some((item) => item.id !== ticket.assigned_engineer_id) ? <div className="ticket-action-form">
                   <label className="field"><span>Активный инженер</span><select aria-label="Активный инженер" value={engineerId} onChange={(event) => setEngineerId(event.target.value)}><option value="">Выберите инженера</option>{engineers.data.items.filter((item) => item.id !== ticket.assigned_engineer_id).map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
                   <Button disabled={!engineerId || !!busy} onClick={() => void runAction('assign', () => ticketApi.assign(id, engineerId, ticket.version), () => setEngineerId(''))}>Назначить</Button>

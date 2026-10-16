@@ -23,6 +23,8 @@ export const eventLabel: Record<string, string> = {
   ticket_created: 'Заявка создана',
   ticket_edited: 'Заявка отредактирована',
   engineer_assigned: 'Назначен инженер',
+  engineer_claimed: 'Инженер взял заявку',
+  engineer_released: 'Инженер освободил заявку',
   ticket_started: 'Работа начата',
   comment_added: 'Добавлен комментарий',
   manual_diagnostic_added: 'Записана диагностика',

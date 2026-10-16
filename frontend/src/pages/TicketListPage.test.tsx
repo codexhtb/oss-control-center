@@ -38,6 +38,37 @@ function renderList(initial = '/tickets') {
 beforeEach(() => {
   vi.mocked(ticketApi.list).mockReset()
   vi.mocked(ticketApi.engineers).mockReset()
+  vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
+})
+
+it('shows server-counted engineer queues and keeps search in the queue view', async () => {
+  vi.mocked(ticketApi.list).mockImplementation(async (filters) => ({
+    items: filters.size === 1 ? [] : [ticket], page: filters.page, size: filters.size,
+    total: filters.unassigned ? 2 : filters.assignee ? 1 : 3,
+  }))
+  renderList('/tickets?q=линия')
+  expect(await screen.findByRole('button', { name: 'Ожидают инженера 2' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Взяты мной 1' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Ожидают инженера 2' }))
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(expect.objectContaining({
+    q: 'линия', active_only: true, unassigned: true, size: 20,
+  }), expect.anything()))
+  fireEvent.click(screen.getByRole('button', { name: 'Взяты мной 1' }))
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(expect.objectContaining({
+    q: 'линия', active_only: true, assignee: session.user.id, size: 20,
+  }), expect.anything()))
+})
+
+it('shows verified work duration without exposing an assignee UUID', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({
+    items: [{ ...ticket, assigned_engineer_id: session.user.id, assigned_engineer_name: 'Инженер',
+      status: 'IN_PROGRESS', work_started_at: new Date(Date.now() - 65 * 60000).toISOString() }],
+    page: 1, size: 20, total: 1,
+  })
+  renderList()
+  expect(await screen.findByText('В работе 1 ч')).toBeInTheDocument()
+  expect(screen.getByText('Инженер')).toBeInTheDocument()
+  expect(screen.queryByText(/ID [0-9a-f]{8}/)).not.toBeInTheDocument()
 })
 
 it('renders server data and sends unassigned and type filters to the API', async () => {

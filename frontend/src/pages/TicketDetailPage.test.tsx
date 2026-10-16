@@ -9,7 +9,7 @@ import { TicketDetailPage } from './TicketDetailPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
-  decisions: vi.fn(), engineers: vi.fn(), start: vi.fn(), addComment: vi.fn(),
+  decisions: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), addDecision: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
@@ -60,12 +60,28 @@ beforeEach(() => {
 })
 
 it('shows the saved ticket and sends the current version when an engineer starts work', async () => {
-  vi.mocked(ticketApi.start).mockResolvedValue({ ...base, status: 'IN_PROGRESS', version: 4 })
+  vi.mocked(ticketApi.claim).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: session('engineer').user.id, version: 4 })
   renderDetail('engineer')
   expect(await screen.findByRole('heading', { name: 'Проверка OSS' })).toBeInTheDocument()
   expect(screen.getByText(/Заявка без привязки к абоненту/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /Взять в работу/ }))
-  await waitFor(() => expect(ticketApi.start).toHaveBeenCalledWith(ticketId, 3))
+  await waitFor(() => expect(ticketApi.claim).toHaveBeenCalledWith(ticketId, 3))
+})
+
+it('lets only the assigned engineer release an active ticket', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: session('engineer').user.id })
+  vi.mocked(ticketApi.release).mockResolvedValue({ ...base, status: 'IN_PROGRESS', version: 4 })
+  renderDetail('engineer')
+  fireEvent.click(await screen.findByRole('button', { name: 'Освободить заявку' }))
+  await waitFor(() => expect(ticketApi.release).toHaveBeenCalledWith(ticketId, 3))
+})
+
+it('does not offer claim or reassignment of another engineer ticket', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: 'other-engineer', assigned_engineer_name: 'Другой инженер' })
+  renderDetail('engineer')
+  expect(await screen.findByText('Другой инженер')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /Взять в работу|Освободить заявку/ })).not.toBeInTheDocument()
+  expect(screen.queryByText('Назначить инженера')).not.toBeInTheDocument()
 })
 
 it('shows only confirmed connection fields and opens a fresh subscriber lookup', async () => {
@@ -234,11 +250,11 @@ it('groups metadata and permitted OPEN actions in one panel, with deletion behin
 })
 
 it('focuses the decision form and closes only after a saved decision using the fresh version', async () => {
-  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: session('engineer').user.id })
   const decision = { id: 'decision-id', ticket_id: ticketId, engineer_id: session('engineer').user.id,
     decision_text: 'Результат', performed_actions: 'Проверка', created_at: base.created_at }
   vi.mocked(ticketApi.addDecision).mockImplementation(async () => {
-    vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', version: 4 })
+    vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: session('engineer').user.id, version: 4 })
     vi.mocked(ticketApi.decisions).mockResolvedValue({ ...empty, items: [decision], total: 1 })
     return decision
   })

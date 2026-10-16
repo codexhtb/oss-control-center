@@ -43,7 +43,7 @@ from app.modules.tickets.models import (
     TicketResolution,
 )
 from app.modules.tickets.schemas import CreateTicket
-from app.modules.tickets.service import create_ticket, start_ticket
+from app.modules.tickets.service import claim_ticket, create_ticket, start_ticket
 from app.modules.tickets.status import TicketStatus, TicketType
 
 ORIGIN = "https://oss.example.test"
@@ -1125,7 +1125,11 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
         db.commit()
     assert ticket_client.get("/api/v1/tickets/events/recent").status_code == 401
     login(ticket_client, operator.login)
-    assert ticket_client.get("/api/v1/tickets/assignable-engineers").status_code == 403
+    public_engineers = ticket_client.get("/api/v1/tickets/assignable-engineers")
+    assert public_engineers.status_code == 200
+    assert public_engineers.json()["items"] == [
+        {"id": str(engineer.id), "display_name": engineer.display_name}
+    ]
     created = []
     for kind in ("MANUAL", "INTERNAL"):
         response = ticket_client.post(
@@ -2115,3 +2119,190 @@ def test_ticket_search_filters_history_pagination_and_rbac(
     login(ticket_client, owner.login)
     assert numbers("wire-down")[0] == 2
     assert numbers("restored") == (0, [])
+
+
+def test_engineer_claim_race_release_and_queues(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "queue_operator", Role.OPERATOR)
+    first = seed_user(ticket_engine, "queue_first", Role.ENGINEER)
+    second = seed_user(ticket_engine, "queue_second", Role.ENGINEER)
+    login(ticket_client, operator.login)
+    target = make_manual_ticket(ticket_client, subject="Synthetic shared queue")
+    other = make_manual_ticket(ticket_client, subject="Synthetic second ticket")
+    path = f"/api/v1/tickets/{target['id']}"
+    assert (
+        ticket_client.post(
+            path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+        ).status_code
+        == 403
+    )
+
+    def attempt(actor: User) -> str:
+        with Session(ticket_engine) as db:
+            try:
+                claim_ticket(db, actor.id, UUID(target["id"]), 1)
+                return "success"
+            except ApiError as exc:
+                return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, (first, second)))
+    assert sorted(outcomes) == ["success", "ticket_already_claimed"]
+    winner = first if outcomes[0] == "success" else second
+    loser = second if winner == first else first
+    login(ticket_client, winner.login)
+    owned = ticket_client.get(path)
+    assert owned.status_code == 200
+    assert owned.json()["assigned_engineer_id"] == str(winner.id)
+    assert owned.json()["assigned_engineer_name"] == winner.display_name
+    assert owned.json()["status"] == "IN_PROGRESS"
+    assert owned.json()["version"] == 2
+    retry = ticket_client.post(path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'})
+    assert retry.status_code == 200 and retry.json()["version"] == 2
+    waiting = ticket_client.get("/api/v1/tickets", params={"active_only": True, "unassigned": True})
+    mine = ticket_client.get(
+        "/api/v1/tickets", params={"active_only": True, "assignee": str(winner.id)}
+    )
+    assert waiting.json()["total"] == 1 and waiting.json()["items"][0]["id"] == other["id"]
+    assert mine.json()["total"] == 1 and mine.json()["items"][0]["id"] == target["id"]
+    assert mine.json()["items"][0]["work_started_at"] is not None
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(
+                    TicketEvent.ticket_id == UUID(target["id"]),
+                    TicketEvent.event_type == "engineer_claimed",
+                )
+            )
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(
+                    TicketAudit.ticket_id == UUID(target["id"]),
+                    TicketAudit.action == "engineer_claimed",
+                )
+            )
+            == 1
+        )
+
+    login(ticket_client, loser.login)
+    conflict = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert conflict.status_code == 409 and conflict.json()["code"] == "ticket_already_claimed"
+    assert (
+        ticket_client.post(
+            path + "/release", headers={**csrf(ticket_client), "If-Match": '"2"'}
+        ).status_code
+        == 409
+    )
+    login(ticket_client, winner.login)
+    released = ticket_client.post(
+        path + "/release", headers={**csrf(ticket_client), "If-Match": '"2"'}
+    )
+    assert released.status_code == 200 and released.json()["version"] == 3
+    assert released.json()["assigned_engineer_id"] is None
+    assert released.json()["status"] == "IN_PROGRESS"
+    waiting = ticket_client.get("/api/v1/tickets", params={"active_only": True, "unassigned": True})
+    assert waiting.json()["total"] == 2
+    login(ticket_client, loser.login)
+    reclaimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"3"'}
+    )
+    assert reclaimed.status_code == 200 and reclaimed.json()["assigned_engineer_id"] == str(
+        loser.id
+    )
+    mine = ticket_client.get(
+        "/api/v1/tickets", params={"active_only": True, "assignee": str(loser.id)}
+    )
+    assert mine.json()["total"] == 1 and mine.json()["items"][0]["work_started_at"] is not None
+    with Session(ticket_engine) as db:
+        events = db.scalars(
+            select(TicketEvent.event_type)
+            .where(TicketEvent.ticket_id == UUID(target["id"]))
+            .order_by(TicketEvent.ticket_version)
+        ).all()
+    assert events == ["ticket_created", "engineer_claimed", "engineer_released", "engineer_claimed"]
+
+
+def test_claim_permissions_closed_deleted_and_admin_reassignment(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "claim_operator", Role.OPERATOR)
+    first = seed_user(ticket_engine, "claim_first", Role.ENGINEER)
+    second = seed_user(ticket_engine, "claim_second", Role.ENGINEER)
+    denied = seed_user(ticket_engine, "claim_denied", Role.ENGINEER)
+    admin = seed_user(ticket_engine, "claim_admin", Role.ADMIN)
+    with Session(ticket_engine) as db:
+        row = db.get(User, denied.id)
+        row.permissions_customized = True
+        db.add(UserPermission(user_id=denied.id, permission=Permission.TICKET_READ))
+        db.commit()
+    login(ticket_client, operator.login)
+    target = make_manual_ticket(ticket_client, subject="Synthetic RBAC claim")
+    deleted = make_manual_ticket(ticket_client, subject="Synthetic deleted claim")
+    path = f"/api/v1/tickets/{target['id']}"
+
+    def headers(version: int) -> dict[str, str]:
+        return {**csrf(ticket_client), "If-Match": f'"{version}"'}
+
+    for actor in (denied, admin):
+        login(ticket_client, actor.login)
+        assert ticket_client.post(path + "/claim", headers=headers(1)).status_code == 403
+    login(ticket_client, first.login)
+    assert ticket_client.post(path + "/claim", headers=headers(1)).status_code == 200
+    login(ticket_client, second.login)
+    assert (
+        ticket_client.post(
+            path + "/assignment", headers=headers(2), json={"engineer_id": str(second.id)}
+        ).status_code
+        == 409
+    )
+    assert ticket_client.post(path + "/start", headers=headers(2)).status_code == 409
+    login(ticket_client, admin.login)
+    reassigned = ticket_client.post(
+        path + "/assignment", headers=headers(2), json={"engineer_id": str(second.id)}
+    )
+    assert reassigned.status_code == 200 and reassigned.json()["assigned_engineer_id"] == str(
+        second.id
+    )
+    login(ticket_client, second.login)
+    decision = ticket_client.post(
+        path + "/decisions",
+        headers=csrf(ticket_client),
+        json={"decision_text": "Synthetic resolution", "performed_actions": "Synthetic work"},
+    )
+    assert decision.status_code == 201, decision.text
+    current_version = ticket_client.get(path).json()["version"]
+    closed = ticket_client.post(
+        path + "/close",
+        headers=headers(current_version),
+        json={"decision_id": decision.json()["id"]},
+    )
+    assert closed.status_code == 200
+    assert (
+        ticket_client.post(path + "/claim", headers=headers(closed.json()["version"])).status_code
+        == 409
+    )
+    assert (
+        ticket_client.post(path + "/release", headers=headers(closed.json()["version"])).status_code
+        == 409
+    )
+    login(ticket_client, admin.login)
+    assert (
+        ticket_client.request(
+            "DELETE", f"/api/v1/tickets/{deleted['id']}", headers=headers(1), json={}
+        ).status_code
+        == 200
+    )
+    login(ticket_client, first.login)
+    assert (
+        ticket_client.post(f"/api/v1/tickets/{deleted['id']}/claim", headers=headers(1)).status_code
+        == 404
+    )
