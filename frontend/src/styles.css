@@ -282,6 +282,11 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .back-link { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 25px; color: #9cb4b4; font-size: 12px; font-weight: 650; }
 .back-link:hover { color: var(--accent); }
 .desk-toolbar { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; padding: 15px 18px; margin-bottom: 17px; border: 1px solid var(--line); border-radius: 12px; background: #171f26; }
+.ticket-search-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.ticket-search { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; height: 45px; padding: 0 14px; border: 1px solid #3a464d; border-radius: 9px; background: #11191f; color: var(--accent); }
+.ticket-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(125, 224, 195, .12); }
+.ticket-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font-size: 14px; }
+.ticket-search input::placeholder { color: #84959d; }
 .desk-toolbar__title { display: flex; align-items: center; align-self: center; gap: 8px; padding-right: 10px; color: #b9c9cb; font-size: 12px; font-weight: 700; }
 .desk-toolbar__title svg { color: var(--accent); }
 .compact-field { display: grid; gap: 5px; min-width: 128px; color: #81939c; font-size: 10px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
@@ -319,6 +324,9 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .desk-subscriber span { color: #a5b7be; font-size: 12px; font-variant-numeric: tabular-nums; }
 .desk-assignee-cell, .desk-created-cell { line-height: 1.4; }
 @media (max-width: 760px) {
+  .ticket-search-row { align-items: stretch; flex-direction: column; gap: 5px; }
+  .ticket-search { flex: auto; }
+  .ticket-search-row .button { align-self: flex-end; }
   .desk-table-scroll { overflow-x: visible; }
   .desk-table, .desk-table tbody, .desk-table tr { display: block; width: 100%; }
   .desk-table thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

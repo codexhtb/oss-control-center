@@ -1,5 +1,6 @@
 """Versioned Service Desk routes backed solely by PostgreSQL."""
 
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -275,9 +276,30 @@ def listing(
     unassigned: bool = False,
     account_no: str | None = None,
     ticket_type: TicketType | None = None,
+    q: Annotated[str | None, Query(max_length=160)] = None,
+    category_id: UUID | None = None,
+    category: Annotated[str | None, Query(max_length=160)] = None,
+    created_from: datetime | None = None,
+    created_before: datetime | None = None,
+    active_only: bool = False,
 ):
     if unassigned and assignee is not None:
         raise ApiError(422, "conflicting_filters", "assignee and unassigned cannot be combined")
+    search = q.strip() if q is not None else None
+    category_name = category.strip() if category is not None else None
+    if any(
+        ord(char) < 32 or ord(char) == 127
+        for value in (search, category_name)
+        if value
+        for char in value
+    ):
+        raise ApiError(422, "invalid_search", "Search contains control characters")
+    if created_from is not None and created_from.utcoffset() is None:
+        raise ApiError(422, "invalid_date_range", "created_from requires a timezone")
+    if created_before is not None and created_before.utcoffset() is None:
+        raise ApiError(422, "invalid_date_range", "created_before requires a timezone")
+    if created_from is not None and created_before is not None and created_from >= created_before:
+        raise ApiError(422, "invalid_date_range", "created_before must follow created_from")
     items, total = list_tickets(
         db,
         page=page,
@@ -289,6 +311,12 @@ def listing(
         unassigned=unassigned,
         account_no=account_no,
         ticket_type=ticket_type,
+        search=search,
+        category_id=category_id,
+        category_name=category_name,
+        created_from=created_from,
+        created_before=created_before,
+        active_only=active_only,
         visible_to=None
         if has_permission(db, identity.user, Permission.TICKET_READ)
         else identity.user.id,

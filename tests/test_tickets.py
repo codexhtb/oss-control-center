@@ -40,10 +40,11 @@ from app.modules.tickets.models import (
     TicketCategory,
     TicketEvent,
     TicketPurgeAudit,
+    TicketResolution,
 )
 from app.modules.tickets.schemas import CreateTicket
 from app.modules.tickets.service import create_ticket, start_ticket
-from app.modules.tickets.status import TicketType
+from app.modules.tickets.status import TicketStatus, TicketType
 
 ORIGIN = "https://oss.example.test"
 PASSWORD = "Test-password-with-sufficient-length-42!"
@@ -1944,3 +1945,173 @@ def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup
     restricted_page = ticket_client.get("/api/v1/tickets")
     assert restricted_page.status_code == 200
     assert restricted_page.json()["total"] == 0
+
+
+def test_ticket_search_filters_history_pagination_and_rbac(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    owner = seed_user(ticket_engine, "search_owner", Role.OPERATOR)
+    colleague = seed_user(ticket_engine, "search_colleague", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "search_engineer", Role.ENGINEER)
+    first_day = datetime(2026, 10, 10, 12, tzinfo=UTC)
+    with Session(ticket_engine, expire_on_commit=False) as db:
+        category = db.scalar(select(TicketCategory).where(TicketCategory.name == "Нет интернета"))
+        assert category is not None
+        person = SubscriberSnapshot(
+            account_no="0001499",
+            source="MOCK",
+            fetched_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            requested_by=owner.id,
+            full_name="Иван Тестовый",
+            contracts=[],
+            services=[],
+        )
+        organization = SubscriberSnapshot(
+            account_no="0002500",
+            source="MOCK",
+            fetched_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            requested_by=colleague.id,
+            organization_name="Синтетическая организация",
+            contracts=[],
+            services=[],
+        )
+        db.add_all([person, organization])
+        db.flush()
+        person_ticket = Ticket(
+            ticket_type=TicketType.SUBSCRIBER_LINKED,
+            account_no=person.account_no,
+            subscriber_snapshot_id=person.id,
+            subject=category.name,
+            category_id=category.id,
+            category_name=category.name,
+            description="wire-down на тестовой линии",
+            caller_phone="+7 (900) 123-45-67",
+            status=TicketStatus.OPEN,
+            priority="NORMAL",
+            created_by=owner.id,
+            client_request_id=uuid4(),
+            version=1,
+            created_at=first_day,
+            updated_at=first_day,
+        )
+        organization_ticket = Ticket(
+            ticket_type=TicketType.SUBSCRIBER_LINKED,
+            account_no=organization.account_no,
+            subscriber_snapshot_id=organization.id,
+            subject="Услуга организации",
+            description="Другая синтетическая проблема",
+            status=TicketStatus.IN_PROGRESS,
+            priority="HIGH",
+            created_by=colleague.id,
+            client_request_id=uuid4(),
+            version=1,
+            created_at=first_day + timedelta(days=2),
+            updated_at=first_day + timedelta(days=2),
+        )
+        manual_ticket = Ticket(
+            ticket_type=TicketType.MANUAL,
+            subject="Проверка линии",
+            description="wire-down в другом месте",
+            status=TicketStatus.OPEN,
+            priority="NORMAL",
+            created_by=owner.id,
+            client_request_id=uuid4(),
+            version=1,
+            created_at=first_day + timedelta(days=4),
+            updated_at=first_day + timedelta(days=4),
+        )
+        deleted_ticket = Ticket(
+            ticket_type=TicketType.INTERNAL,
+            subject="wire-down удалённая задача",
+            description="Только корзина",
+            status=TicketStatus.OPEN,
+            priority="NORMAL",
+            created_by=owner.id,
+            deleted_at=first_day + timedelta(days=5),
+            deleted_by=owner.id,
+            client_request_id=uuid4(),
+            version=1,
+            created_at=first_day + timedelta(days=3),
+            updated_at=first_day + timedelta(days=5),
+        )
+        db.add_all([person_ticket, organization_ticket, manual_ticket, deleted_ticket])
+        db.flush()
+        db.add(
+            TicketResolution(
+                ticket_id=organization_ticket.id,
+                engineer_id=engineer.id,
+                decision_text="Optic restored",
+                performed_actions="wire-down fix applied",
+            )
+        )
+        db.commit()
+
+    def numbers(query: str, **filters) -> tuple[int, list[int]]:
+        response = ticket_client.get("/api/v1/tickets", params={"q": query, **filters})
+        assert response.status_code == 200, response.text
+        return response.json()["total"], [item["number"] for item in response.json()["items"]]
+
+    def unavailable_provider():
+        pytest.fail("Search must not initialize a BillingProvider")
+
+    ticket_client.app.dependency_overrides[get_billing_provider] = unavailable_provider
+    login(ticket_client, colleague.login)
+    assert numbers("1499") == (1, [person_ticket.number])
+    assert person_ticket.number in numbers(str(person_ticket.number))[1]
+    assert numbers("ИВАН") == (1, [person_ticket.number])
+    assert numbers("ОРГАНИЗАЦИЯ") == (1, [organization_ticket.number])
+    assert numbers("79001234567") == (1, [person_ticket.number])
+    assert numbers("900 123-45-67") == (1, [person_ticket.number])
+    assert numbers("нет ИНТЕРНЕТА") == (1, [person_ticket.number])
+    assert numbers("другая СИНТЕТИЧЕСКАЯ") == (1, [organization_ticket.number])
+    assert numbers("restored") == (1, [organization_ticket.number])
+    assert numbers("fix applied") == (1, [organization_ticket.number])
+    assert numbers("wire-down") == (
+        3,
+        [manual_ticket.number, organization_ticket.number, person_ticket.number],
+    )
+    assert numbers("wire-down", size=1, page=2) == (3, [organization_ticket.number])
+    assert numbers("wire-down", size=1, page=3) == (3, [person_ticket.number])
+    assert numbers("wire-down", category="нет интернета", active_only="true") == (
+        1,
+        [person_ticket.number],
+    )
+    assert numbers(
+        "wire-down",
+        category_id=str(category.id),
+        status="OPEN",
+        ticket_type="SUBSCRIBER_LINKED",
+        created_from="2026-10-10T00:00:00+03:00",
+        created_before="2026-10-11T00:00:00+03:00",
+    ) == (1, [person_ticket.number])
+    assert numbers("wire-down", assignee=str(engineer.id)) == (0, [])
+    assert numbers("удалённая") == (0, [])
+    assert numbers("%") == (0, [])
+    assert numbers("%' OR TRUE--") == (0, [])
+    assert numbers("   ")[0] == 3
+    assert (
+        ticket_client.get(
+            "/api/v1/tickets", params={"created_from": "2026-10-10T00:00:00"}
+        ).status_code
+        == 422
+    )
+    assert (
+        ticket_client.get(
+            "/api/v1/tickets",
+            params={
+                "created_from": "2026-10-12T00:00:00Z",
+                "created_before": "2026-10-11T00:00:00Z",
+            },
+        ).status_code
+        == 422
+    )
+
+    with Session(ticket_engine) as db:
+        db.get(User, owner.id).permissions_customized = True
+        db.add(UserPermission(user_id=owner.id, permission=Permission.TICKET_READ_OWN))
+        db.commit()
+    login(ticket_client, owner.login)
+    assert numbers("wire-down")[0] == 2
+    assert numbers("restored") == (0, [])

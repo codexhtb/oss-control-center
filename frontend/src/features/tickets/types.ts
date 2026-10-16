@@ -289,6 +289,11 @@ export interface ActiveTickets {
 export interface TicketFilters {
   page: number
   size: number
+  q?: string
+  category?: string
+  created_from?: string
+  created_before?: string
+  active_only?: boolean
   status?: TicketStatus
   ticket_type?: TicketType
   priority?: TicketPriority

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, ClipboardCheck, Clock3, MessageSquareText, RefreshCw, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { ApiError, errorText } from '../shared/api/client'
 import type { MeResponse } from '../shared/api/types'
 import { Button } from '../shared/ui/Button'
@@ -30,6 +30,9 @@ function EditedFields({ data }: { data: Record<string, unknown> }) {
 
 export function TicketDetailPage({ session }: { session: MeResponse }) {
   const { id = '' } = useParams()
+  const location = useLocation()
+  const listSearch = typeof location.state?.ticketListSearch === 'string' ? location.state.ticketListSearch : ''
+  const listDestination = { pathname: '/tickets', search: listSearch ? `?${listSearch}` : '' }
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const decisionInput = useRef<HTMLTextAreaElement>(null)
@@ -120,7 +123,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   }
 
   if (ticketQuery.isPending) return <div className="desk-state" role="status">Открываем заявку…</div>
-  if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to="/tickets"><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{errorText(ticketQuery.error)}</Notice></div>
+  if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to={listDestination}><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{errorText(ticketQuery.error)}</Notice></div>
   const ticket = ticketQuery.data
   const canEdit = ticket.status !== 'CLOSED' && (session.permissions.includes('tickets.edit.all') || (session.permissions.includes('tickets.edit.own') && ticket.created_by === session.user.id))
   const canDelete = session.permissions.includes('tickets.delete.all') || (session.permissions.includes('tickets.delete.own') && ticket.created_by === session.user.id)
@@ -175,7 +178,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
 
   return (
     <div className="page desk-page">
-      <Link to="/tickets" className="back-link"><ArrowLeft size={15} /> К реестру заявок</Link>
+      <Link to={listDestination} className="back-link"><ArrowLeft size={15} /> К реестру заявок</Link>
       <div className="ticket-detail-heading"><div><p className="eyebrow">SERVICEDESK / ЗАЯВКА #{ticket.number}</p><h1>{ticketTitle(ticket.subject)}</h1><div className="ticket-detail-tags"><span className="type-label">{typeLabel[ticket.ticket_type]}</span><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></div></div><Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void ticketQuery.refetch()} disabled={ticketQuery.isFetching}>Обновить</Button></div>
       {actionError !== null && <Notice tone="error">{errorText(actionError)}{actionError instanceof ApiError && actionError.status === 409 ? ' Карточка обновлена; проверьте версию перед повтором.' : ''}</Notice>}
       {actionSuccess && <Notice>{actionSuccess}</Notice>}

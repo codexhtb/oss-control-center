@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -507,6 +507,12 @@ def list_tickets(
     ticket_type: TicketType | None = None,
     unassigned: bool = False,
     visible_to: UUID | None = None,
+    search: str | None = None,
+    category_id: UUID | None = None,
+    category_name: str | None = None,
+    created_from: datetime | None = None,
+    created_before: datetime | None = None,
+    active_only: bool = False,
 ) -> tuple[list[Ticket], int]:
     conditions = [Ticket.deleted_at.is_(None)]
     if visible_to is not None:
@@ -525,10 +531,66 @@ def list_tickets(
         conditions.append(Ticket.account_no == account_no)
     if ticket_type is not None:
         conditions.append(Ticket.ticket_type == ticket_type)
-    total = db.scalar(select(func.count()).select_from(Ticket).where(*conditions)) or 0
+    if category_id is not None:
+        conditions.append(Ticket.category_id == category_id)
+    if category_name:
+        escaped_category = (
+            category_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        conditions.append(Ticket.category_name.ilike(f"%{escaped_category}%", escape="\\"))
+    if created_from is not None:
+        conditions.append(Ticket.created_at >= created_from)
+    if created_before is not None:
+        conditions.append(Ticket.created_at < created_before)
+    if active_only:
+        conditions.append(Ticket.status.in_((TicketStatus.OPEN, TicketStatus.IN_PROGRESS)))
+
+    count_query = select(func.count()).select_from(Ticket)
+    items_query = select(Ticket)
+    if search:
+        # One snapshot row per ticket; decisions use EXISTS to keep one ticket per result.
+        count_query = count_query.outerjoin(
+            SubscriberSnapshot, Ticket.subscriber_snapshot_id == SubscriberSnapshot.id
+        )
+        items_query = items_query.outerjoin(
+            SubscriberSnapshot, Ticket.subscriber_snapshot_id == SubscriberSnapshot.id
+        )
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        matches = [
+            column.ilike(pattern, escape="\\")
+            for column in (
+                Ticket.account_no,
+                Ticket.caller_phone,
+                Ticket.category_name,
+                Ticket.subject,
+                Ticket.description,
+                SubscriberSnapshot.full_name,
+                SubscriberSnapshot.organization_name,
+            )
+        ]
+        matches.append(
+            exists(
+                select(TicketResolution.id).where(
+                    TicketResolution.ticket_id == Ticket.id,
+                    or_(
+                        TicketResolution.decision_text.ilike(pattern, escape="\\"),
+                        TicketResolution.performed_actions.ilike(pattern, escape="\\"),
+                    ),
+                )
+            )
+        )
+        digits = "".join(char for char in search if "0" <= char <= "9")
+        if len(digits) >= 3:
+            matches.append(
+                func.regexp_replace(Ticket.caller_phone, "[^0-9]", "", "g").like(f"%{digits}%")
+            )
+        if search.isascii() and search.isdecimal() and int(search) <= 9223372036854775807:
+            matches.append(Ticket.number == int(search))
+        conditions.append(or_(*matches))
+    total = db.scalar(count_query.where(*conditions)) or 0
     items = db.scalars(
-        select(Ticket)
-        .where(*conditions)
+        items_query.where(*conditions)
         .order_by(Ticket.created_at.desc(), Ticket.id.desc())
         .offset((page - 1) * size)
         .limit(size)

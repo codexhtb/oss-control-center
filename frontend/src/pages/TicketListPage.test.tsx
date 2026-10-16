@@ -30,9 +30,9 @@ const ticket: Ticket = {
   version: 1, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 }
 
-function renderList() {
+function renderList(initial = '/tickets') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter><TicketListPage session={session} /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initial]}><TicketListPage session={session} /></MemoryRouter></QueryClientProvider>)
 }
 
 beforeEach(() => {
@@ -99,4 +99,35 @@ it('does not fabricate an account number when linked data is incomplete', async 
   renderList()
   expect(await screen.findByText('Абонент не указан')).toBeInTheDocument()
   expect(screen.queryByText(/ЛС /)).not.toBeInTheDocument()
+})
+
+it('debounces the universal search and hides stale results while the query changes', async () => {
+  vi.mocked(ticketApi.list).mockImplementation(async (filters) => ({
+    items: filters.q ? [] : [ticket], page: 1, size: 20, total: filters.q ? 0 : 1,
+  }))
+  renderList()
+  expect(await screen.findByText('Синтетическая задача')).toBeInTheDocument()
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск по заявкам' }), { target: { value: '1499' } })
+  expect(screen.getByText('Обновляем поиск…')).toBeInTheDocument()
+  expect(screen.queryByText('Синтетическая задача')).not.toBeInTheDocument()
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(expect.objectContaining({ q: '1499', page: 1 }), expect.anything()))
+  expect(await screen.findByText('Заявок по этим условиям нет')).toBeInTheDocument()
+})
+
+it('combines saved URL filters, local calendar dates and reset', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({ items: [ticket], page: 1, size: 20, total: 1 })
+  renderList('/tickets?q=wire-down&category=Нет+интернета&active_only=true&ticket_type=MANUAL')
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(expect.objectContaining({
+    q: 'wire-down', category: 'Нет интернета', active_only: true, ticket_type: 'MANUAL',
+  }), expect.anything()))
+  expect(screen.getByRole('searchbox', { name: 'Поиск по заявкам' })).toHaveValue('wire-down')
+  fireEvent.change(screen.getByLabelText('Создана от'), { target: { value: '2026-10-10' } })
+  fireEvent.change(screen.getByLabelText('Создана до'), { target: { value: '2026-10-16' } })
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(expect.objectContaining({
+    created_from: new Date(2026, 9, 10).toISOString(),
+    created_before: new Date(2026, 9, 17).toISOString(),
+  }), expect.anything()))
+  fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }))
+  await waitFor(() => expect(vi.mocked(ticketApi.list).mock.lastCall?.[0]).toEqual({ page: 1, size: 20 }))
+  expect(screen.getByRole('searchbox', { name: 'Поиск по заявкам' })).toHaveValue('')
 })
