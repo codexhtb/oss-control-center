@@ -593,15 +593,10 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .dashboard-list svg { color: #668a83; }
 .event-icon { width: 7px; height: 7px; margin: 0 5px; border-radius: 50%; background: var(--accent); }
 .dashboard-empty { padding: 30px 0; color: #889ca4; font-size: 12px; }
-.dashboard-health { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 20px; padding: 13px 16px; border: 1px solid var(--line-soft); border-radius: 9px; color: #8ea1a8; font-size: 11px; }
-.dashboard-health > div, .dashboard-health > span { display: inline-flex; align-items: center; gap: 8px; }
-.dashboard-health strong { color: #c7d7d5; }
-.dashboard-health svg { color: var(--accent); }
-.dashboard-health__divider { color: #506068; }
 @media (max-width: 1150px) { .desk-toolbar__title { width: 100%; } .create-layout { grid-template-columns: 1fr; } .create-aside { display: none; } }
 @media (max-width: 1150px) { .ticket-detail-layout { grid-template-columns: 1fr; } .ticket-detail-rail { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); } .dashboard-list > a { grid-template-columns: auto minmax(0, 1fr) auto; } .dashboard-list small { display: none; } }
 @media (max-width: 850px) { .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dashboard-columns { grid-template-columns: 1fr; } }
-@media (max-width: 650px) { .desk-heading { display: grid; } .desk-toolbar { align-items: stretch; } .compact-field { flex: 1 1 130px; } .desk-check { flex: 1 1 100%; } .type-picker { grid-template-columns: 1fr; } .type-option { min-height: 0; } .create-card { padding: 20px; } .create-actions { display: grid; } .create-actions .button { justify-content: center; } .lookup-search { align-items: stretch; flex-direction: column; } .lookup-card__top { display: grid; } .source-chip { width: fit-content; } .ticket-detail-heading { display: grid; } .ticket-detail-rail { grid-template-columns: 1fr; } .subscriber-summary { grid-template-columns: 1fr; } .history-list li { flex-wrap: wrap; } .history-list time { margin-left: 19px; } .dashboard-metrics { gap: 9px; } .metric-card { padding: 16px; min-height: 119px; } .dashboard-health { align-items: start; flex-direction: column; } }
+@media (max-width: 650px) { .desk-heading { display: grid; } .desk-toolbar { align-items: stretch; } .compact-field { flex: 1 1 130px; } .desk-check { flex: 1 1 100%; } .type-picker { grid-template-columns: 1fr; } .type-option { min-height: 0; } .create-card { padding: 20px; } .create-actions { display: grid; } .create-actions .button { justify-content: center; } .lookup-search { align-items: stretch; flex-direction: column; } .lookup-card__top { display: grid; } .source-chip { width: fit-content; } .ticket-detail-heading { display: grid; } .ticket-detail-rail { grid-template-columns: 1fr; } .subscriber-summary { grid-template-columns: 1fr; } .history-list li { flex-wrap: wrap; } .history-list time { margin-left: 19px; } .dashboard-metrics { gap: 9px; } .metric-card { padding: 16px; min-height: 119px; } }
 .onu-section { margin-top: 1rem; border-top: 1px solid var(--border, #283343); padding-top: .8rem; }
 .onu-section h4 { margin: 0 0 .6rem; }
 .onu-candidates { display: grid; gap: .65rem; }

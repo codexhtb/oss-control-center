@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, ArrowUpRight, Database, KeyRound, Server, ShieldCheck } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, KeyRound, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router'
 import { useState } from 'react'
 import { consumeWelcome } from '../features/auth/welcome-session'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { eventLabel, formatDate, statusLabel, ticketTitle } from '../features/tickets/presentation'
-import type { MeResponse, ReadyResponse } from '../shared/api/types'
-import { apiRequest, errorText } from '../shared/api/client'
+import type { MeResponse } from '../shared/api/types'
+import { errorText } from '../shared/api/client'
 import { Notice } from '../shared/ui/Notice'
 import { Panel } from '../shared/ui/Panel'
 import { roleLabel } from '../layout/AppShell'
@@ -16,11 +16,6 @@ export function WorkspacePage({ session }: { session: MeResponse }) {
   const hasAllDeskAccess = session.permissions.includes('tickets.read.all')
   const hasDeskAccess = hasAllDeskAccess || session.permissions.includes('tickets.read.own')
   const isEngineer = session.permissions.includes('tickets.assign')
-  const health = useQuery({
-    queryKey: ['health', 'ready'],
-    queryFn: ({ signal }) => apiRequest<ReadyResponse>('/api/v1/health/ready', { signal }),
-    refetchInterval: 30_000,
-  })
   const open = useQuery({ queryKey: ['dashboard', 'open'], queryFn: ({ signal }) => ticketApi.list({ page: 1, size: 1, status: 'OPEN' }, signal), enabled: hasDeskAccess })
   const working = useQuery({ queryKey: ['dashboard', 'working'], queryFn: ({ signal }) => ticketApi.list({ page: 1, size: 1, status: 'IN_PROGRESS' }, signal), enabled: hasDeskAccess })
   const unassigned = useQuery({ queryKey: ['dashboard', 'unassigned'], queryFn: ({ signal }) => ticketApi.list({ page: 1, size: 1, unassigned: true }, signal), enabled: hasDeskAccess })
@@ -43,7 +38,6 @@ export function WorkspacePage({ session }: { session: MeResponse }) {
           <Panel className="dashboard-panel"><div className="dashboard-panel__head"><div><p className="eyebrow">ИСТОРИЯ</p><h2>Недавние события</h2></div></div>{events.isPending ? <p className="dashboard-empty" role="status">Загружаем события…</p> : events.isError ? <Notice tone="error">{errorText(events.error)}</Notice> : events.data.items.length ? <div className="dashboard-list dashboard-list--events">{events.data.items.map((event) => <Link to={`/tickets/${event.ticket_id}`} key={event.id}><span className="event-icon" /><strong>{eventLabel[event.event_type] || event.event_type}</strong><small>#{event.ticket_number} · {formatDate(event.occurred_at)}</small><ArrowRight size={14} /></Link>)}</div> : <p className="dashboard-empty">Событий заявок пока нет.</p>}</Panel>
         </div>
       </> : <div className="overview-grid"><Panel className="welcome-panel"><div className="panel-icon panel-icon--accent"><KeyRound size={22} /></div><p className="eyebrow">ВАША СЕССИЯ</p><h2>Сессия активна</h2><p>Вы вошли как <strong>{session.user.display_name}</strong>. Доступные действия определяются назначенными разрешениями и проверяются сервером.</p><Link className="text-link" to="/account">Посмотреть права доступа <ArrowUpRight size={16} /></Link></Panel><Notice>Для просмотра заявок необходимо разрешение на чтение заявок.</Notice></div>}
-      <div className="dashboard-health"><div><Server size={16} /><strong>Состояние API</strong></div>{health.isPending ? <span>Проверяем доступность…</span> : health.isError ? <span>{errorText(health.error)}</span> : <span><span className="health-dot" /> Backend доступен <span className="dashboard-health__divider">/</span> <Database size={14} /> PostgreSQL {health.data.dependencies.postgres === 'up' ? 'доступен' : 'не подтверждён'}</span>}</div>
     </div>
   )
 }

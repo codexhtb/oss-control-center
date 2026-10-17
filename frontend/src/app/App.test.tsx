@@ -51,6 +51,8 @@ describe('session shell', () => {
     fireEvent.click(screen.getByRole('button', { name: /Войти/ }))
     expect(await screen.findByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
     expect(screen.getByText('Тестовый оператор', { selector: '.sidebar__profile-text strong' })).toBeInTheDocument()
+    expect(screen.queryByText('Состояние API')).not.toBeInTheDocument()
+    expect(screen.queryByText('Backend доступен')).not.toBeInTheDocument()
     expect(vi.mocked(authApi.login)).toHaveBeenCalledWith('synthetic-operator', 'test-only')
   })
 
