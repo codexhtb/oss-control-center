@@ -249,6 +249,7 @@ class SubscriberView(BaseModel):
     organization_name: str | None = None
     email: str | None = None
     actual_address: str | None = None
+    house_number: str | None = None
     accounts: list = Field(default_factory=list)
     field_meta: dict = Field(default_factory=dict)
     source: str

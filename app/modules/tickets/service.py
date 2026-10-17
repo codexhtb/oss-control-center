@@ -469,6 +469,7 @@ def ticket_detail(db: Session, ticket_id: UUID) -> TicketDetail:
             "organization_name": snapshot.organization_name,
             "email": snapshot.email,
             "actual_address": snapshot.actual_address,
+            "house_number": snapshot.house_number,
             "accounts": snapshot.accounts,
             "field_meta": snapshot.field_meta,
             "source": snapshot.source,

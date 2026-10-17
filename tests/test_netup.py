@@ -56,8 +56,8 @@ def synthetic_group(*, conflict: bool = False) -> NetupGroup:
     address = NetupGroupRow(
         row_id=12,
         ip_type=4,
-        ip=123456,
-        mask=654321,
+        ip=3_221_225_994,
+        mask=-1,
         ip_ext=0,
         mask_ext=0,
         pool_id=0,
@@ -105,6 +105,7 @@ def synthetic_subscriber(*, conflict: bool = False) -> NetupSubscriber:
             NetupService(302, 203, "Synthetic ancillary", 2, ()),
         ),
         fetched_at=datetime.now(UTC),
+        building="20",
     )
 
 
@@ -132,14 +133,52 @@ def test_normalizer_preserves_accounts_services_groups_and_origins() -> None:
     assert connection.ip_groups[0].rows[1].switch_id_raw == 0
     assert connection.ip_groups[0].rows[1].port_id == 0
     assert connection.ip_groups[0].rows[1].field_meta["port_id"].quality == DataQuality.UNKNOWN
-    assert connection.ip_groups[0].rows[1].ip_raw == 123456
+    assert connection.ip_groups[0].rows[1].ip_raw == 3_221_225_994
     assert connection.ip_groups[0].rows[1].field_meta["ip_raw"].quality == DataQuality.UNKNOWN
+    assert connection.ip_groups[0].rows[1].configured_ipv4 == "192.0.2.10"
+    assert connection.ip_groups[0].rows[1].configured_prefix_length == 32
     assert connection.device == "synthetic-switch" and connection.vlan == "100"
     assert connection.field_meta["access_type"].quality == DataQuality.UNKNOWN
     assert card.field_meta["actual_address"].source == "NETUP"
+    assert card.house_number == "20"
+    assert card.field_meta["house_number"].source == "NETUP"
     assert card.services[0].tariff_name is None
     assert card.services[0].billing_active is True
     assert card.financial_accounts[0].balance is None
+
+
+def test_configured_ipv4_is_decoded_without_losing_raw_netup_values() -> None:
+    raw = synthetic_subscriber()
+    first, second = raw.services
+    pool_row, _ = first.groups[0].rows
+    configured = NetupGroupRow(
+        row_id=12,
+        ip_type=4,
+        ip=1_681_916_518,
+        mask=-1,
+        ip_ext=0,
+        mask_ext=0,
+        pool_id=0,
+        switch_id=0,
+        switch_name=None,
+        port_id=0,
+        vlan_id=0,
+        ranges=(),
+    )
+    group = NetupGroup(9, (pool_row, configured))
+    raw = NetupSubscriber(
+        **{**raw.__dict__, "services": (NetupService(301, 202, first.name, 3, (group,)), second)}
+    )
+
+    rows = normalize_netup(raw).connections[0].ip_groups[0].rows
+    assert rows[0].address_assignment == "AUTO_POOL"
+    assert rows[0].configured_ipv4 is None
+    assert rows[1].configured_ipv4 == "100.64.2.102"
+    assert rows[1].configured_prefix_length == 32
+    assert rows[1].address_assignment == "CONFIGURED"
+    assert rows[1].ip_raw == 1_681_916_518
+    assert rows[1].mask_raw == -1
+    assert rows[1].field_meta["configured_ipv4"].quality == DataQuality.KNOWN
 
 
 def test_tariff_and_finance_remain_separate_billing_observations() -> None:
@@ -389,6 +428,7 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
                         "home_telephone": "",
                         "email": "",
                         "actual_address": "Synthetic address",
+                        "building": "20",
                     }
                 ]
             elif sql.startswith("SELECT DISTINCT a.id,a.balance"):
@@ -463,6 +503,7 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
     assert len(raw.accounts) == 2 and len(raw.services) == 2
     assert len(raw.services[0].groups) == 1
     assert len(raw.services[0].groups[0].rows) == 2
+    assert raw.building == "20"
     assert raw.services[0].groups[0].rows[0].ranges[0].range_id == 5
     assert connection.rolled_back and connection.closed
     assert len(cursor.calls) == 12  # 3 transaction commands and 9 bounded data queries
@@ -871,7 +912,8 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             snapshot = db.get(SubscriberSnapshot, snapshot_id)
             stored_connection = db.get(ConnectionSnapshot, connection_id)
             assert snapshot is not None and stored_connection is not None
-            assert snapshot.actual_address is None and snapshot.accounts == []
+            assert snapshot.actual_address is None and snapshot.house_number is None
+            assert snapshot.accounts == []
             assert snapshot.contacts == []
             assert snapshot.financial_accounts == []
             assert stored_connection.service_id is None and stored_connection.ip_groups == []
@@ -931,6 +973,7 @@ def test_0005_upgrade_preserves_existing_immutable_snapshots(
             assert reloaded_connection.ip_groups == expected_groups
             assert [group["group_id"] for group in reloaded_connection.ip_groups] == ["9", "10"]
             assert len(reloaded_connection.ip_groups[0]["rows"]) == 3
+            assert reloaded_connection.ip_groups[0]["rows"][1]["configured_ipv4"] == "192.0.2.10"
             assert reloaded_connection.field_meta["device"]["quality"] == "CONFLICT"
     finally:
         engine.dispose()

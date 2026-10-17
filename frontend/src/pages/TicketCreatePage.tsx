@@ -9,6 +9,7 @@ import { Notice } from '../shared/ui/Notice'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { priorityLabel, statusLabel, ticketTitle } from '../features/tickets/presentation'
 import type { CreateTicketInput, SubscriberCard, TicketPriority, TicketType } from '../features/tickets/types'
+import { formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import { formatDate } from '../features/tickets/presentation'
 
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
@@ -159,7 +160,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
             <div className="lookup-search"><label className="field"><span>Лицевой счёт</span><input id="billing-account" name="billing-account" value={accountNo} maxLength={100} placeholder="Номер ЛС" onChange={(event) => { setAccountNo(event.target.value); currentAccount.current = event.target.value.trim(); setCard(null); setOtherProblem(false); setDuplicateReason(''); setActivePage(1); lookup.reset(); edited() }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); performLookup() } }} /></label><Button type="button" icon={<Search size={16} />} onClick={performLookup} disabled={!accountNo.trim() || lookup.isPending}>{lookup.isPending ? 'Ищем…' : 'Найти'}</Button></div>
             {lookup.isError && <Notice tone="error">{errorText(lookup.error)} Данные абонента не подтверждены; заявка по абоненту не создана.</Notice>}
             {card && <div className="lookup-card"><div className="lookup-card__top"><div><span className="eyebrow">ПОДТВЕРЖДЁННАЯ КАРТОЧКА</span><h3>{card.subscriber.full_name || card.subscriber.organization_name || 'Имя неизвестно'}</h3><span>ЛС {card.subscriber.billing_account}</span></div><span className="source-chip">{card.source} · {formatDate(card.fetched_at)}</span></div>
-              <div className="lookup-facts"><span>Контакт: <strong>{card.subscriber.phone || 'UNKNOWN'}</strong></span><span>Адрес: <strong>{card.subscriber.actual_address || 'UNKNOWN'}</strong></span></div>
+              <div className="lookup-facts"><span>Контакт: <strong>{card.subscriber.phone || 'UNKNOWN'}</strong></span><span>Адрес: <strong>{formatSubscriberAddress(card.subscriber.actual_address, card.subscriber.house_number) || 'UNKNOWN'}</strong></span></div>
               {ambiguousService && <label className="field"><span>Услуга <em>*</em></span><select aria-label="Услуга" value={serviceId} onChange={(event) => { setServiceId(event.target.value); setConnectionId(''); edited() }}><option value="">Выберите услугу</option>{eligibleServices.map((service) => <option key={service.service_id} value={service.service_id}>{service.name || service.service_id} · {service.service_id}</option>)}</select></label>}
               {eligibleServices.length === 1 && <p className="lookup-single">Услуга: {eligibleServices[0]!.name || eligibleServices[0]!.service_id}</p>}
               {eligibleServices.length === 0 && card.services.length > 0 && <Notice tone="error">Услуги относятся к другому ЛС. Найдите нужный лицевой счёт для связанной заявки.</Notice>}

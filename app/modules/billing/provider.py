@@ -84,6 +84,7 @@ class Subscriber360(BaseModel):
     contacts: list[Contact] = Field(default_factory=list, max_length=10)
     email: str | None = Field(default=None, max_length=200)
     actual_address: str | None = Field(default=None, max_length=300)
+    house_number: str | None = Field(default=None, max_length=100)
     accounts: list[BillingAccount] = Field(default_factory=list)
     financial_accounts: list[FinancialAccount] = Field(default_factory=list)
     contracts: list[Contract]

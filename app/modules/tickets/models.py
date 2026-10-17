@@ -61,6 +61,7 @@ class SubscriberSnapshot(Base):
     organization_name: Mapped[str | None] = mapped_column(String(200))
     email: Mapped[str | None] = mapped_column(String(200))
     actual_address: Mapped[str | None] = mapped_column(String(300))
+    house_number: Mapped[str | None] = mapped_column(String(100))
     accounts: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )

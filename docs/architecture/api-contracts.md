@@ -265,6 +265,12 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 `accounts[]`, `services[].account_id`, `connections[].service_id`,
 `connections[].ip_groups[]` с отдельными исходными строками и
 `subscriber.actual_address`. Старые ключи и mock snapshots сохраняются.
+Новые nullable поля `subscriber.house_number` и строки
+`configured_ipv4/configured_prefix_length/address_assignment` внутри
+`ip_groups[].rows[]` сохраняют исходные `users.building` и настроенную
+адресацию NetUP. Пул остаётся отдельным от конкретного IPv4; конфигурация
+группы не объявляется активной DHCP/RADIUS-сессией. Старые snapshots читаются
+с `house_number=null` и без новых JSON-ключей.
 Новые ошибки: `422 account_format_unsupported`, `409 billing_ambiguous`,
 `409 billing_incomplete`; `404` и `503` сохраняют прежнюю семантику.
 Выбранные услуга и подключение должны относиться к запрошенному ЛС и друг

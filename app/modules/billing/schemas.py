@@ -43,6 +43,7 @@ class SubscriberInfo(BaseModel):
     contacts: list[Contact] = Field(default_factory=list)
     email: str | None
     actual_address: str | None = None
+    house_number: str | None = None
     field_meta: dict[str, FieldOrigin]
 
 

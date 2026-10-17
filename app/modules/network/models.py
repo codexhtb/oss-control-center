@@ -27,6 +27,9 @@ class IpGroupRow(BaseModel):
 
     row_id: str
     ip_type_code: int
+    configured_ipv4: str | None = Field(default=None, max_length=18)
+    configured_prefix_length: int | None = Field(default=None, ge=0, le=32)
+    address_assignment: str | None = Field(default=None, max_length=32)
     ip_raw: int | None = None
     mask_raw: int | None = None
     ip_ext_raw: int | None = None

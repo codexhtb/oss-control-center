@@ -646,6 +646,7 @@ def test_synthetic_netup_http_snapshot_ticket_round_trip(
             NetupService(302, 202, "Synthetic extra", 2, ()),
         ),
         fetched_at=when,
+        building="20",
     )
 
     class SyntheticRepository:
@@ -662,6 +663,7 @@ def test_synthetic_netup_http_snapshot_ticket_round_trip(
     assert response.headers["Cache-Control"] == "no-store"
     card = response.json()
     assert card["source"] == "NETUP"
+    assert card["subscriber"]["house_number"] == "20"
     assert card["subscriber"]["phone"] is None
     assert len(card["subscriber"]["contacts"]) == 2
     assert card["connections"][0]["service_id"] == "301"
@@ -672,6 +674,7 @@ def test_synthetic_netup_http_snapshot_ticket_round_trip(
     with Session(billing_engine) as db:
         snapshot = db.get(SubscriberSnapshot, UUID(card["lookup_id"]))
         assert snapshot is not None and len(snapshot.contacts) == 2
+        assert snapshot.house_number == "20"
         stored_group = db.scalar(
             select(ConnectionSnapshot).where(
                 ConnectionSnapshot.subscriber_snapshot_id == snapshot.id
@@ -695,6 +698,7 @@ def test_synthetic_netup_http_snapshot_ticket_round_trip(
         assert protected_response.status_code == 200
         assert protected_response.headers["Cache-Control"] == "no-store"
     assert detail.json()["subscriber"]["contacts"] == card["subscriber"]["contacts"]
+    assert detail.json()["subscriber"]["house_number"] == "20"
     assert detail.json()["selected_connection"]["ip_groups"] == card["connections"][0]["ip_groups"]
     login(billing_client, "netup_engineer")
     assert len(lookup(billing_client, "202").json()["subscriber"]["contacts"]) == 2

@@ -40,6 +40,13 @@ PostgreSQL — единственный source of truth для обращени�
 
 **Stage 3C:** ревизия `0010_subscriber_finance` добавляет `financial_accounts JSONB NOT NULL DEFAULT []` к immutable `subscriber_snapshots`; старые записи остаются без искусственно восстановленного баланса. `0011_subscriber_history_index` добавляет частичный индекс `(source, subscriber_id, id)` для истории связанных заявок по нескольким счетам. Данные тарифа и биллингового состояния услуги хранятся в уже существующем `services JSONB` с собственным `field_meta`. Финансовые наблюдения никогда не определяют `technical_state` и не выдаются инженеру через Subscriber 360. Заявки и их история остаются бессрочными.
 
+**NetUP address/IP extension:** ревизия `0019_subscriber_address_ip` добавляет
+nullable `subscriber_snapshots.house_number` для исходного `users.building`.
+Старые snapshots остаются `NULL` и не переписываются. Настроенные IPv4 и
+префиксы сохраняются в существующем immutable `connection_snapshots.ip_groups`
+JSONB вместе с raw числами каждой строки; DHCP-пул и текущая сессия остаются
+отдельными понятиями.
+
 **OSS Diagnostics:** `0012_oss_diagnostics` добавляет immutable `diagnostic_checks` для неподтверждённого server-side preview связанной заявки. `diagnostic_snapshots.check_id` уникально связывает подтверждённый `AUTOMATED` snapshot с check; исторические `MANUAL` snapshots имеют `NULL`. Сохранение события истории и аудита выполняется вместе со snapshot. Кратность IP-групп и исходные строки NetUP не изменяются; см. [границу диагностики](oss-diagnostics.md).
 
 **BDCOM ONU read-only:** `disconnection_at` и `disconnection_time_basis` —

@@ -68,3 +68,4 @@ class NetupSubscriber:
     services: tuple[NetupService, ...]
     fetched_at: datetime
     source_as_of: datetime | None = None
+    building: str | None = None

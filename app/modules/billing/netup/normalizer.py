@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from ipaddress import IPv4Address, IPv4Network
 
 from app.modules.billing.netup.dto import NetupGroup, NetupSubscriber
 from app.modules.billing.provider import (
@@ -39,6 +40,21 @@ def field(value: object, when: datetime, *, semantic_known: bool = True) -> Fiel
     )
 
 
+def _configured_ipv4(ip_raw: int, mask_raw: int) -> tuple[str | None, int | None]:
+    """Decode UTM5's signed/unsigned 32-bit IPv4 pair without changing raw values."""
+    if not ip_raw or not mask_raw:
+        return None, None
+    if not (-2**31 <= ip_raw <= 2**32 - 1 and -2**31 <= mask_raw <= 2**32 - 1):
+        return None, None
+    address = IPv4Address(ip_raw & 0xFFFFFFFF)
+    mask = IPv4Address(mask_raw & 0xFFFFFFFF)
+    try:
+        prefix = IPv4Network(f"0.0.0.0/{mask}").prefixlen
+    except ValueError:
+        return None, None
+    return str(address), prefix
+
+
 def _phone(raw: NetupSubscriber, when: datetime) -> tuple[str | None, FieldOrigin, list[Contact]]:
     raw_values = (
         ("mobile", "mobile_telephone", raw.mobile_phone),
@@ -69,6 +85,14 @@ def _phone(raw: NetupSubscriber, when: datetime) -> tuple[str | None, FieldOrigi
 def _group(group: NetupGroup, when: datetime) -> IpGroup:
     rows = []
     for item in group.rows:
+        configured_ipv4, prefix_length = _configured_ipv4(item.ip, item.mask)
+        assignment = (
+            "CONFIGURED"
+            if configured_ipv4 is not None
+            else "AUTO_POOL"
+            if item.pool_id > 0
+            else None
+        )
         ranges = [
             DhcpRange(range_id=str(r.range_id), first_ip_raw=r.first_ip, last_ip_raw=r.last_ip)
             for r in item.ranges
@@ -85,6 +109,9 @@ def _group(group: NetupGroup, when: datetime) -> IpGroup:
             "device": item.switch_name if item.switch_id > 0 else None,
             "port_id": item.port_id,
             "vlan_id": item.vlan_id,
+            "configured_ipv4": configured_ipv4,
+            "configured_prefix_length": prefix_length,
+            "address_assignment": assignment,
         }
         uncertain_raw = {
             "ip_raw",
@@ -196,6 +223,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
     full_name = bounded(raw.full_name, 200)
     email = bounded(raw.email, 200)
     actual_address = bounded(raw.actual_address, 300)
+    house_number = bounded(raw.building, 100)
     services = [
         Service(
             service_id=str(item.link_id),
@@ -232,6 +260,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
         contacts=contacts,
         email=email,
         actual_address=actual_address,
+        house_number=house_number,
         accounts=[
             BillingAccount(
                 account_id=str(item.account_id),
@@ -279,6 +308,7 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
             ),
             "email": field(email, when),
             "actual_address": field(actual_address, when),
+            "house_number": field(house_number, when),
             "contracts": origin(when, DataQuality.UNKNOWN),
         },
         source="NETUP",

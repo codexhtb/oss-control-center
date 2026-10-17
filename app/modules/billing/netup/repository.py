@@ -120,7 +120,7 @@ class NetupRepository:
         users = select(
             cursor,
             "SELECT id,basic_account,full_name,is_juridical,mobile_telephone,"
-            "work_telephone,home_telephone,email,actual_address "
+            "work_telephone,home_telephone,email,actual_address,building "
             "FROM users WHERE id=%s AND is_deleted=0",
             (user_id,),
             deadline,
@@ -315,4 +315,5 @@ class NetupRepository:
             services=tuple(services),
             fetched_at=datetime.now(UTC),
             source_as_of=self._lab_as_of_utc,
+            building=user["building"],
         )

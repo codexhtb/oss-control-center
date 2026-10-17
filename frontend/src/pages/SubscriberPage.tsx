@@ -7,6 +7,7 @@ import { ticketApi } from '../features/tickets/ticket-api'
 import { MonitoringReport } from '../features/tickets/MonitoringReport'
 import { SubscriberOnuCard } from '../features/tickets/OnuCard'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow } from '../features/tickets/types'
+import { configuredIpv4, formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import type { MeResponse } from '../shared/api/types'
 import { errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
@@ -29,6 +30,8 @@ function Fact({ label, value, meta }: { label: string; value: string | number | 
 
 function ConnectionBlock({ connection, service, lookupId, canCheck }: { connection: SubscriberConnectionCard; service: string; lookupId: string; canCheck: boolean }) {
   const check = useMutation({ mutationFn: () => ticketApi.checkSubscriber(lookupId, connection.connection_snapshot_id) })
+  const addresses = configuredIpv4(connection.ip_groups.flatMap((group) => group.rows))
+  const hasAutoPool = connection.ip_groups.some((group) => group.rows.some((row) => row.address_assignment === 'AUTO_POOL'))
   return <article className="subscriber-service">
     <div className="subscriber-service__head"><div><span className="eyebrow">ПОДКЛЮЧЕНИЕ · {service}</span><h3>{connection.device || 'Устройство неизвестно'}</h3></div><Origin meta={connection.field_meta.device} /></div>
     <div className="subscriber-facts subscriber-facts--three">
@@ -37,13 +40,15 @@ function ConnectionBlock({ connection, service, lookupId, canCheck }: { connecti
       <Fact label="VLAN" value={connection.vlan} meta={connection.field_meta.vlan} />
       <Fact label="ONU" value={connection.onu_id} meta={connection.field_meta.onu_id} />
       <Fact label="IP-группа" value={connection.ip_group} meta={connection.field_meta.ip_group} />
+      <Fact label="IPv4 в конфигурации NetUP" value={addresses.length ? addresses.join(', ') : 'IP не определён'} meta={connection.ip_groups.flatMap((group) => group.rows).find((row) => row.configured_ipv4)?.field_meta.configured_ipv4} />
+      {hasAutoPool && <Fact label="Текущий динамический IP" value="IP не определён · нужна активная DHCP/RADIUS-сессия" />}
     </div>
     {connection.ip_groups.map((group) => <div key={group.group_id} className="ip-group"><h4>IP-группа {group.group_id} <span>{group.rows.length} записей</span></h4>
       <div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Запись</th><th>Адресация</th><th>DHCP</th><th>Коммутатор</th><th>Порт</th><th>VLAN</th></tr></thead><tbody>
         {group.rows.map((row: SubscriberIpRow) => <tr key={row.row_id}>
           <td>{row.row_id}</td>
-          <td>{row.ip_raw ? <span title="Формат IP в UTM5 не подтверждён">Код {row.ip_raw} <Origin meta={row.field_meta.ip_raw} /></span> : 'UNKNOWN'}</td>
-          <td>{row.dhcp_pool_id ? <>Пул {row.dhcp_pool_id} <Origin meta={row.field_meta.dhcp_pool_id} /></> : 'UNKNOWN'}</td>
+          <td>{row.configured_ipv4 && row.configured_prefix_length !== null && row.configured_prefix_length !== undefined ? <>{row.configured_ipv4}/{row.configured_prefix_length} <Origin meta={row.field_meta.configured_ipv4} /></> : row.address_assignment === 'AUTO_POOL' ? '[Авто]' : 'IP не определён'}</td>
+          <td>{row.dhcp_pool_id ? <>Пул {row.dhcp_pool_id} <Origin meta={row.field_meta.dhcp_pool_id} /></> : 'Пул не задан'}</td>
           <td>{row.device || 'UNKNOWN'} <Origin meta={row.field_meta.device} /></td>
           <td>{row.port_id || 'UNKNOWN'} <Origin meta={row.field_meta.port_id} /></td>
           <td>{row.vlan_id || 'UNKNOWN'} <Origin meta={row.field_meta.vlan_id} /></td>
@@ -70,7 +75,7 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
     {subscriber.field_meta.billing_account?.quality === 'STALE' && <Notice tone="error">Данные лабораторной копии устарели. Сведения о состоянии услуг и балансе относятся к дате источника.</Notice>}
     {card.is_expired && <Notice tone="error">Для создания заявки карточку нужно обновить повторным поиском.</Notice>}
     <div className="subscriber-columns"><section className="subscriber-panel"><div className="subscriber-section-title"><h2>Абонент и контакты</h2><Origin meta={subscriber.field_meta.full_name} /></div>
-      <div className="subscriber-facts"><Fact label="ID абонента" value={subscriber.subscriber_id} meta={subscriber.field_meta.subscriber_id} /><Fact label="Адрес в биллинге" value={subscriber.actual_address} meta={subscriber.field_meta.actual_address} /><Fact label="E-mail" value={subscriber.email} meta={subscriber.field_meta.email} /></div>
+      <div className="subscriber-facts"><Fact label="ID абонента" value={subscriber.subscriber_id} meta={subscriber.field_meta.subscriber_id} /><Fact label="Адрес в биллинге" value={formatSubscriberAddress(subscriber.actual_address, subscriber.house_number)} meta={subscriber.field_meta.actual_address} /><Fact label="E-mail" value={subscriber.email} meta={subscriber.field_meta.email} /></div>
       <h3>Телефоны</h3>{subscriber.contacts.length ? <div className="contact-list">{subscriber.contacts.map((contact, index) => <div key={`${contact.type}-${index}`}><span>{({ mobile: 'Мобильный', work: 'Рабочий', home: 'Домашний' })[contact.type]}</span><strong>{contact.value}</strong><Origin meta={{ source: card.source as 'MOCK' | 'NETUP', observed_at: contact.observed_at, quality: contact.quality }} /></div>)}</div> : <p className="muted">Контакты UNKNOWN</p>}
     </section><section className="subscriber-panel"><div className="subscriber-section-title"><h2>Счета и договоры</h2><Origin meta={subscriber.field_meta.contracts} /></div>
       <div className="account-list">{card.accounts.length ? card.accounts.map((account) => <div key={account.account_id}><strong>ЛС {account.account_id}</strong><span>{account.is_primary ? 'Основной' : 'Дополнительный'}</span><Origin meta={account.field_meta.account_id} /></div>) : <p className="muted">Счета не представлены источником</p>}</div>

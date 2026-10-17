@@ -61,7 +61,7 @@ export interface SubscriberConnection {
   ip_group: string | null
   address: string | null
   service_id: string | null
-  ip_groups: unknown[]
+  ip_groups: SubscriberIpGroup[]
   field_meta: Record<string, unknown>
 }
 
@@ -72,6 +72,7 @@ export interface TicketDetail extends Ticket {
     phone: string | null
     contacts?: Array<{ type: string; value: string; source: string; observed_at: string; quality: string }>
     actual_address: string | null
+    house_number?: string | null
     fetched_at: string
     source: string
     services: Array<{ service_id?: string; id?: string; name?: string | null }>
@@ -107,6 +108,9 @@ export interface SubscriberService {
 export interface SubscriberIpRow {
   row_id: string
   ip_type_code: number
+  configured_ipv4?: string | null
+  configured_prefix_length?: number | null
+  address_assignment?: 'CONFIGURED' | 'AUTO_POOL' | null
   ip_raw: number | null
   mask_raw: number | null
   ip_ext_raw: number | null
@@ -118,6 +122,11 @@ export interface SubscriberIpRow {
   vlan_id: number | null
   field_meta: Record<string, FieldOrigin>
 }
+export interface SubscriberIpGroup {
+  group_id: string
+  rows: SubscriberIpRow[]
+  field_meta: Record<string, FieldOrigin>
+}
 export interface SubscriberConnectionCard {
   connection_snapshot_id: string
   access_type: string
@@ -127,7 +136,7 @@ export interface SubscriberConnectionCard {
   onu_id: string | null
   ip_group: string | null
   service_id: string | null
-  ip_groups: Array<{ group_id: string; rows: SubscriberIpRow[]; field_meta: Record<string, FieldOrigin> }>
+  ip_groups: SubscriberIpGroup[]
   field_meta: Record<string, FieldOrigin>
 }
 export interface SubscriberCard {
@@ -144,6 +153,7 @@ export interface SubscriberCard {
     contacts: Array<{ type: 'mobile' | 'work' | 'home'; value: string; source: string; observed_at: string; quality: DataQuality }>
     email: string | null
     actual_address: string | null
+    house_number?: string | null
     subscriber_id: string | null
     field_meta: Record<string, FieldOrigin>
   }

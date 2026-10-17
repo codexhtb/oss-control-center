@@ -14,8 +14,13 @@
 | `accounts[]` | Все live счета найденного пользователя: `account_id`, `is_primary`, `field_meta`. `subscriber.billing_account` — запрошенный ЛС. |
 | `services[].account_id` | Счёт конкретной сервисной связки. Старые mock записи могут иметь `null`. |
 | `connections[].service_id` | ID сервисной связки, породившей подключение. Для старых snapshots `null`. |
-| `connections[].ip_groups[]` | Ключи группы и **все** исходные live строки. Одна строка содержит `row_id`, `ip_type_code`, raw числовые `ip/mask/ip_ext/mask_ext`, `pool_id_raw`, `switch_id_raw`, `port_id`, `vlan_id`, отдельно пригодные для отображения `dhcp_pool_id`, `switch_id`, `device`, DHCP-диапазоны и происхождение. Нулевые исходные значения остаются нулями; коды и raw адреса не представляются как декодированный IPv4. |
-| `subscriber.actual_address` | Адрес пользователя в биллинге; это не подтверждённый адрес подключения. |
+| `connections[].ip_groups[]` | Ключи группы и **все** исходные live строки. Одна строка содержит `row_id`, `ip_type_code`, raw числовые `ip/mask/ip_ext/mask_ext`, `pool_id_raw`, `switch_id_raw`, `port_id`, `vlan_id`, отдельно пригодные для отображения `configured_ipv4`, `configured_prefix_length`, `address_assignment`, `dhcp_pool_id`, `switch_id`, `device`, DHCP-диапазоны и provenance. Нулевые raw значения сохраняются. `configured_ipv4/prefix` — конфигурация IP-группы NetUP, не доказательство активной DHCP/RADIUS-сессии. |
+| `subscriber.actual_address`, `subscriber.house_number` | Исходные `users.actual_address` и `users.building`. UI добавляет `house_number` как `д. …`, если номер ещё не присутствует в адресной строке. Это адресные данные пользователя в биллинге, не подтверждённый адрес конкретного подключения. |
+
+Текущий динамически выданный IPv4 не входит в контракт: `dhcp_leases` не содержит
+прямого account ID, журналы lease/session являются отдельными историческими
+источниками и в этой версии не запрашиваются. При наличии `[Авто]` UI показывает
+пул отдельно и сообщает, что текущий IP не определён.
 | `subscriber.contacts[]` | Добавочный список телефонных наблюдений с `type ∈ {mobile,work,home}`, `value`, точным `source`, `observed_at` и `quality`. Оператор и инженер с `subscriber.read` видят все варианты. `subscriber.phone` остаётся прежним полем; при разных номерах или единственном номере длиннее 50 символов оно `null` с `CONFLICT`, без выбора «основного». |
 
 Прежние `connections[].device/port/vlan/ip_group` остаются. Это удобная

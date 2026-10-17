@@ -24,8 +24,8 @@ const card: SubscriberCard = {
       { type: 'mobile', value: 'synthetic-phone-a', source: 'NETUP.users.mobile_telephone', observed_at: timestamp, quality: 'CONFLICT' },
       { type: 'work', value: 'synthetic-phone-b', source: 'NETUP.users.work_telephone', observed_at: timestamp, quality: 'CONFLICT' },
     ],
-    email: null, actual_address: null,
-    field_meta: { billing_account: stale, full_name: stale, actual_address: unknown, email: unknown, subscriber_id: stale, contracts: unknown },
+    email: null, actual_address: 'г. Тест, ул. Примерная', house_number: '20',
+    field_meta: { billing_account: stale, full_name: stale, actual_address: stale, house_number: stale, email: unknown, subscriber_id: stale, contracts: unknown },
   },
   accounts: [{ account_id: 'synthetic-account', is_primary: true, field_meta: { account_id: stale } }],
   financial_accounts: [{ account_id: 'synthetic-account', balance: '10.5', credit: '0', account_blocked: false, field_meta: { balance: stale, credit: stale, account_blocked: stale } }],
@@ -36,10 +36,10 @@ const card: SubscriberCard = {
     access_type: 'UNKNOWN', device: null, port: null, vlan: null, onu_id: null, ip_group: 'synthetic-group',
     field_meta: { device: unknown, port: unknown, vlan: unknown, access_type: unknown, onu_id: unknown, ip_group: stale },
     ip_groups: [{ group_id: 'synthetic-group', field_meta: {}, rows: [{
-      row_id: 'synthetic-row', ip_type_code: 4, ip_raw: 12345, mask_raw: 65535,
+      row_id: 'synthetic-row', ip_type_code: 4, configured_ipv4: '192.0.2.10', configured_prefix_length: 32, address_assignment: 'CONFIGURED', ip_raw: 3221225994, mask_raw: 4294967295,
       ip_ext_raw: null, mask_ext_raw: null, dhcp_pool_id: null,
       switch_id: null, device: null, port_id: null, vlan_id: null,
-      field_meta: { ip_raw: unknown, device: unknown, port_id: unknown, vlan_id: unknown },
+      field_meta: { ip_raw: unknown, configured_ipv4: stale, device: unknown, port_id: unknown, vlan_id: unknown },
     }] }],
   }],
   technical_state: 'UNKNOWN',
@@ -79,7 +79,8 @@ it('renders source quality, multiple contacts, tariff, IP rows, finance and link
   expect(screen.getByText(/Тариф: Синтетический тариф/)).toBeInTheDocument()
   expect(screen.getByText('synthetic-phone-a')).toBeInTheDocument()
   expect(screen.getByText('synthetic-phone-b')).toBeInTheDocument()
-  expect(screen.getByText('Код 12345')).toBeInTheDocument()
+  expect(screen.getAllByText('192.0.2.10/32').length).toBeGreaterThan(0)
+  expect(screen.getByText('г. Тест, ул. Примерная, д. 20')).toBeInTheDocument()
   expect(screen.getByText('10.5')).toBeInTheDocument()
   expect(screen.getByText('Номер договора UNKNOWN')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Создать заявку/ })).toHaveAttribute('href', `/tickets/new?lookup=${card.lookup_id}`)

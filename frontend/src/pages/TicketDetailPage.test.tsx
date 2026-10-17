@@ -92,13 +92,18 @@ it('shows only confirmed connection fields and opens a fresh subscriber lookup',
     ...base, ticket_type: 'SUBSCRIBER_LINKED', account_no: accountNo,
     subscriber: {
       full_name: 'Синтетический абонент', organization_name: null, phone: null,
-      actual_address: null, fetched_at: base.created_at, source: 'MOCK',
+      actual_address: 'г. Тест, ул. Примерная', house_number: '20', fetched_at: base.created_at, source: 'MOCK',
       services: [], connections: [],
     },
     selected_connection: {
       id: '00000000-0000-4000-8000-000000000020', access_type: 'UNKNOWN',
       device: 'synthetic-device', port: 'synthetic-port', vlan: '100', onu_id: null,
-      address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {},
+      address: null, service_id: null, ip_group: null, ip_groups: [{ group_id: 'synthetic-group', field_meta: {}, rows: [{
+        row_id: 'synthetic-row', ip_type_code: 4, configured_ipv4: '192.0.2.10', configured_prefix_length: 32,
+        address_assignment: 'CONFIGURED', ip_raw: 3221225994, mask_raw: -1, ip_ext_raw: null,
+        mask_ext_raw: null, dhcp_pool_id: null, switch_id: null, device: null, port_id: null,
+        vlan_id: null, field_meta: {},
+      }] }], field_meta: {},
     },
   })
   vi.mocked(ticketApi.lookup).mockResolvedValue({ lookup_id: '00000000-0000-4000-8000-000000000030' } as never)
@@ -107,6 +112,8 @@ it('shows only confirmed connection fields and opens a fresh subscriber lookup',
   expect(screen.getByText(`ЛС ${accountNo}`)).toBeInTheDocument()
   expect(screen.getByText('Порт: synthetic-port')).toBeInTheDocument()
   expect(screen.getByText('VLAN: 100')).toBeInTheDocument()
+  expect(screen.getByText('Адрес: г. Тест, ул. Примерная, д. 20')).toBeInTheDocument()
+  expect(screen.getByText('IPv4 в NetUP: 192.0.2.10/32')).toBeInTheDocument()
   expect(screen.queryByText(/Технология: UNKNOWN|ONU: UNKNOWN|Техническое состояние: UNKNOWN/)).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /Открыть карточку абонента/ }))
   await waitFor(() => expect(ticketApi.lookup).toHaveBeenCalledWith(accountNo))
