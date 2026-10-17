@@ -199,7 +199,7 @@ export interface FieldWorkHandoff {
   ticket_id: string
   reason: string
   delivery_status: 'DRAFT' | 'SENDING' | 'SENT' | 'FAILED' | 'UNCERTAIN'
-  work_status: 'AWAITING_REPORT'
+  work_status: 'AWAITING_REPORT' | 'REPORTED' | 'VERIFIED'
   chat_id: string
   telegram_message_id: number | null
   message_preview: string | null
@@ -212,7 +212,21 @@ export interface FieldWorkHandoff {
   created_at: string
   send_started_at: string | null
   sent_at: string | null
+  reported_at: string | null
+  verified_by: string | null
+  verified_by_name: string | null
+  verified_at: string | null
   updated_at: string
+}
+
+export interface FieldExternalMessage {
+  id: string
+  handoff_id: string
+  kind: 'TEXT_REPLY' | 'COMPLETION_CALLBACK'
+  sender_name: string
+  body: string | null
+  telegram_created_at: string
+  received_at: string
 }
 
 export interface Diagnostic {

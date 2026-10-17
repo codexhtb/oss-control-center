@@ -29,7 +29,13 @@ from app.modules.billing.quality import DataQuality
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.correlation import DiagnosticReport, Observation
 from app.modules.field_dispatch.gateway import DispatchReceipt, DispatchRejected, DispatchUncertain
-from app.modules.field_dispatch.models import FieldWorkDeliveryAttempt, FieldWorkHandoff
+from app.modules.field_dispatch.inbound import process_update
+from app.modules.field_dispatch.models import (
+    FieldDispatchUpdate,
+    FieldExternalMessage,
+    FieldWorkDeliveryAttempt,
+    FieldWorkHandoff,
+)
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -2814,8 +2820,11 @@ class RecordingFieldGateway:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
-    def send_message(self, chat_id: str, message: str) -> DispatchReceipt:
+    def send_message(
+        self, chat_id: str, message: str, *, completion_callback_data: str | None = None
+    ) -> DispatchReceipt:
         self.calls.append((chat_id, message))
+        assert completion_callback_data and completion_callback_data.startswith("field_done:")
         return DispatchReceipt(chat_id=chat_id, message_id="701")
 
 
@@ -2824,7 +2833,14 @@ class RejectingFieldGateway:
         self.calls = 0
         self.uncertain = uncertain
 
-    def send_message(self, _chat_id: str, _message: str) -> DispatchReceipt:
+    def send_message(
+        self,
+        _chat_id: str,
+        _message: str,
+        *,
+        completion_callback_data: str | None = None,
+    ) -> DispatchReceipt:
+        assert completion_callback_data
         self.calls += 1
         if self.uncertain:
             raise DispatchUncertain
@@ -2934,3 +2950,117 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
             )
             == 1
         )
+
+
+def test_telegram_replies_completion_and_engineer_verification_are_independent(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "telegram_t2_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(
+        ticket_engine,
+        engineer,
+        phone="+000000001",
+        actual_address="г. Тест, ул. Монтажная",
+        house_number="7",
+    )
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    ticket_id = created.json()["id"]
+    path = f"/api/v1/tickets/{ticket_id}"
+    assert ticket_client.post(
+        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    ).status_code == 200
+    assert ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Synthetic field visit"},
+    ).status_code == 200
+    handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
+    assert ticket_client.post(
+        f"{path}/field-work-handoffs/{handoff['id']}/send",
+        headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4())},
+    ).status_code == 200
+
+    callback = {
+        "update_id": 9001,
+        "callback_query": {
+            "id": "synthetic-callback-1",
+            "from": {"id": 501, "is_bot": False, "first_name": "Монтажник", "last_name": "Тест"},
+            "data": f"field_done:{handoff['id']}",
+            "message": {
+                "message_id": 701,
+                "date": 1_800_000_000,
+                "chat": {"id": -5319791765, "type": "group"},
+            },
+        },
+    }
+    reply = {
+        "update_id": 9002,
+        "message": {
+            "message_id": 702,
+            "date": 1_800_000_010,
+            "from": {"id": 501, "is_bot": False, "first_name": "Монтажник", "last_name": "Тест"},
+            "chat": {"id": -5319791765, "type": "group"},
+            "reply_to_message": {"message_id": 701},
+            "text": "Кабель заменён, связь проверена.",
+        },
+    }
+    denied = {
+        "update_id": 9003,
+        "message": {
+            "message_id": 703,
+            "date": 1_800_000_020,
+            "from": {"id": 999, "is_bot": False, "first_name": "Посторонний"},
+            "chat": {"id": -5319791765, "type": "group"},
+            "reply_to_message": {"message_id": 701},
+            "text": "Must not be imported",
+        },
+    }
+    with Session(ticket_engine) as db:
+        first = process_update(db, callback, frozenset({501}), allowed_chat_id="-5319791765")
+        assert first.outcome == "PROCESSED"
+        assert process_update(
+            db, callback, frozenset({501}), allowed_chat_id="-5319791765"
+        ).outcome == "DUPLICATE"
+        repeated = {
+            **callback,
+            "update_id": 9004,
+            "callback_query": {
+                **callback["callback_query"],
+                "id": "synthetic-callback-2",
+            },
+        }
+        assert process_update(
+            db, repeated, frozenset({501}), allowed_chat_id="-5319791765"
+        ).outcome == "DUPLICATE"
+        assert process_update(
+            db, reply, frozenset({501}), allowed_chat_id="-5319791765"
+        ).outcome == "PROCESSED"
+        assert process_update(
+            db, denied, frozenset({501}), allowed_chat_id="-5319791765"
+        ).outcome == "DENIED"
+        saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
+        assert saved is not None and saved.work_status == "REPORTED"
+        assert db.scalar(select(func.count()).select_from(FieldExternalMessage)) == 2
+        assert db.scalar(select(func.count()).select_from(FieldDispatchUpdate)) == 4
+        ticket = db.get(Ticket, UUID(ticket_id))
+        assert ticket is not None and ticket.status == TicketStatus.IN_PROGRESS
+
+    messages_path = f"{path}/field-work-handoffs/{handoff['id']}/messages"
+    messages = ticket_client.get(messages_path)
+    assert messages.status_code == 200
+    assert [item["kind"] for item in messages.json()["items"]] == [
+        "COMPLETION_CALLBACK",
+        "TEXT_REPLY",
+    ]
+    assert messages.json()["items"][1]["body"] == "Кабель заменён, связь проверена."
+    verify_path = f"{path}/field-work-handoffs/{handoff['id']}/verify"
+    assert ticket_client.post(verify_path).status_code == 403
+    verified = ticket_client.post(verify_path, headers=csrf(ticket_client))
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["work_status"] == "VERIFIED"
+    assert verified.json()["verified_by"] == str(engineer.id)
+    assert ticket_client.get(path).json()["status"] == "IN_PROGRESS"

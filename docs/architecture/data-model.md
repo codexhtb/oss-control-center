@@ -231,10 +231,19 @@ erDiagram
     text update_id
     text body
   }
+  field_dispatch_updates {
+    uuid id PK
+    text bot_identity
+    bigint update_id
+    text kind
+    text outcome
+    uuid handoff_id_nullable FK
+    text sync_status
+  }
 ```
 
 `field_work_handoffs` и `field_work_delivery_attempts` введены в Telegram T1.
-`field_external_messages` остаётся будущим входящим этапом. Автоматические
+`field_external_messages` и `field_dispatch_updates` введены в Telegram T2. Автоматические
 источники в `diagnostic_snapshots` вводятся в Phase 4; Phase 1 может сохранять
 ручное наблюдение инженера.
 
@@ -268,7 +277,14 @@ erDiagram
   `(handoff_id, client_request_id)`, автора, состояние, технический код ошибки,
   подтверждённый Telegram message ID и времена. Это защищает от двойного
   нажатия; при `UNCERTAIN` автоматический повтор запрещён.
-- `field_external_messages`: `id`, `handoff_id`, `chat_id`, `message_id`, `update_id`, отправитель при разрешённом хранении, текст, время. Уникальность `(chat_id, message_id)` и `(bot_identity, update_id)` защищает от повторного импорта. Данные хранятся в PostgreSQL.
+- `field_external_messages`: `id`, `handoff_id`, `update_record_id`, `chat_id`,
+  nullable Telegram message ID, проверенный отправитель, вид, текст и времена.
+  Уникальность входящего `(chat_id, message_id)` и одной completion-записи на
+  handoff защищает доменную историю; транспортный `update_id` хранится в receipt.
+- `field_dispatch_updates`: минимальный обезличенный receipt каждого принятого,
+  отклонённого или повторного update. Уникальность `(bot_identity, update_id)`
+  обеспечивает транспортную идемпотентность; raw Telegram payload не хранится.
+  Статус синхронизации callback с Telegram отделён от доменного результата.
 - Закрытие заявки требует отдельного решения инженера в `ticket_decisions` и обновления `tickets.status=CLOSED`. Получение сообщения или изменение `work_state` не вызывает закрытия.
 
 ## Транзакционные инварианты

@@ -317,3 +317,19 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
   `has_hidden_active=true`, без номера, темы и описания. `MANUAL`/`INTERNAL`
   не участвуют в сопоставлении. Отказ BillingProvider не порождает фиктивный
   lookup. Проверки выполняются на синтетических данных в `oss_test_*` БД.
+
+## Telegram T2 — ответы монтажников
+
+- Исходящее сообщение содержит inline-кнопку «✅ Выполнено»; подтверждение
+  `sendMessage` по-прежнему обязательно до `SENT`.
+- Синтетические updates проверяют разрешённый/чужой sender, фиксированный chat,
+  reply на исходный message ID, callback payload и mismatch handoff.
+- Один и тот же `update_id`, повторное нажатие с новым update и повторный
+  входящий message ID не создают дубликатов. Raw update и данные отклонённого
+  пользователя не сохраняются.
+- Текст отображается как внешнее сообщение. Callback переводит только
+  `work_status` в `REPORTED`; инженер с `tickets.field_work` отдельно ставит
+  `VERIFIED`. Во всех сценариях `Ticket.status` и решение остаются прежними.
+- Миграция `0021` применяется только в `oss_test_*`, затем к dev после
+  проверенного backup/restore. Poller profile остаётся выключенным до живой
+  приёмки allowlist и стартового offset.

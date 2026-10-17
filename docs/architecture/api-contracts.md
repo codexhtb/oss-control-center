@@ -149,6 +149,8 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /tickets/{ticket_id}/field-work-request` | `tickets.field_work` | `{reason}` + `If-Match` | Атомарно сохраняет причину, историю, аудит и `FieldWorkHandoff` со статусом `DRAFT`; статус заявки не меняется, Telegram не вызывается |
 | `GET /tickets/{ticket_id}/field-work-handoffs/latest` | `tickets.field_work` | — | Последняя сохранённая передача, точный preview из ticket snapshot, недостающие поля и состояние доставки |
 | `POST /tickets/{ticket_id}/field-work-handoffs/{handoff_id}/send` | `tickets.field_work` + CSRF | `{client_request_id}` | Только LAB: отдельная подтверждённая отправка в фиксированный чат. `SENT` и `message_id` сохраняются лишь после ответа Bot API; `FAILED` допускает явный повтор, `UNCERTAIN` блокирует автоматический повтор |
+| `GET /tickets/{ticket_id}/field-work-handoffs/{handoff_id}/messages` | `tickets.field_work` | `page`, `size` | Пагинированные проверенные текстовые ответы и отметка выполнения без Telegram ID отправителя |
+| `POST /tickets/{ticket_id}/field-work-handoffs/{handoff_id}/verify` | `tickets.field_work` + CSRF | — | Идемпотентно подтверждает только `REPORTED`; не меняет статус заявки или решение |
 | `POST /tickets/{ticket_id}/comments` | Оператор, инженер | `{body}` | `201` комментарий, история и аудит; закрытая заявка в Phase 1 не изменяется |
 | `GET /tickets/{ticket_id}/comments`, `/manual-diagnostics`, `/decisions` | Оператор, инженер | `page`, `size` | Страницы сохранённых записей |
 | `POST /tickets/{ticket_id}/manual-diagnostics` | Инженер | `{finding, observed_at, connection_snapshot_id?}` | `201` snapshot с `source_kind=MANUAL`, история и аудит; требуется `IN_PROGRESS` |

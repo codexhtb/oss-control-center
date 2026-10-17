@@ -4,6 +4,7 @@ import type {
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
   ResolutionReason,
   FieldWorkHandoff,
+  FieldExternalMessage,
 } from './types'
 
 function withQuery(path: `/api/v1/${string}`, values: Record<string, string | number | boolean | undefined>) {
@@ -103,6 +104,16 @@ export const ticketApi = {
     apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/send`, {
       method: 'POST', json: { client_request_id: requestId },
     }),
+  fieldWorkMessages: (id: string, handoffId: string, signal?: AbortSignal) =>
+    apiRequest<Page<FieldExternalMessage>>(
+      `${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/messages?page=1&size=50`,
+      { signal },
+    ),
+  verifyFieldWork: (id: string, handoffId: string) =>
+    apiRequest<FieldWorkHandoff>(
+      `${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/verify`,
+      { method: 'POST' },
+    ),
   addComment: (id: string, body: string) =>
     apiRequest<TicketComment>(`${ticketPath(id)}/comments`, { method: 'POST', json: { body } }),
   addDiagnostic: (id: string, finding: string, connectionId?: string) =>

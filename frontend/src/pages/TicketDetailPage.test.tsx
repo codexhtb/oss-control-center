@@ -12,6 +12,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   decisions: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
+  fieldWorkMessages: vi.fn(), verifyFieldWork: vi.fn(),
   addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
 
@@ -56,6 +57,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.callbacks).mockResolvedValue(empty)
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
   vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff: null })
+  vi.mocked(ticketApi.fieldWorkMessages).mockResolvedValue(empty)
   vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
     source: 'BDCOM', retrieved_at: base.created_at,
     availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
@@ -106,6 +108,7 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
     ready_to_send: true, missing_fields: [], created_by: staff.user.id,
     sent_by: null, sent_by_name: null, last_error_code: null,
     created_at: base.created_at, send_started_at: null, sent_at: null,
+    reported_at: null, verified_by: null, verified_by_name: null, verified_at: null,
     updated_at: base.updated_at,
   }
   vi.mocked(ticketApi.latestFieldWork)
@@ -432,4 +435,41 @@ it.each([true, false])('applies delete.own to ownership, own=%s, including CLOSE
   expect(panel.queryByText('Назначить инженера')).not.toBeInTheDocument()
   expect(panel.queryByText('Выездные работы')).not.toBeInTheDocument()
   expect(panel.queryByText('Дополнительно') !== null).toBe(own)
+})
+
+it('shows installer replies and lets an authorised engineer verify reported field work', async () => {
+  const staff = session('engineer')
+  const privileged: MeResponse = { ...staff, permissions: [...staff.permissions, 'tickets.field_work'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, status: 'IN_PROGRESS', assigned_engineer_id: staff.user.id,
+  })
+  const handoff = {
+    id: '00000000-0000-4000-8000-000000000041', ticket_id: ticketId,
+    reason: 'Проверить линию', delivery_status: 'SENT' as const,
+    work_status: 'REPORTED' as const, chat_id: '-5319791765', telegram_message_id: 702,
+    message_preview: 'Заявка #73', ready_to_send: false, missing_fields: [],
+    created_by: staff.user.id, sent_by: staff.user.id, sent_by_name: staff.user.display_name,
+    last_error_code: null, created_at: base.created_at, send_started_at: base.created_at,
+    sent_at: base.created_at, reported_at: base.updated_at, verified_by: null,
+    verified_by_name: null, verified_at: null, updated_at: base.updated_at,
+  }
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff })
+  vi.mocked(ticketApi.fieldWorkMessages).mockResolvedValue({
+    items: [{
+      id: '00000000-0000-4000-8000-000000000042', handoff_id: handoff.id,
+      kind: 'TEXT_REPLY', sender_name: 'Монтажник Тест', body: 'Работы выполнены.',
+      telegram_created_at: base.updated_at, received_at: base.updated_at,
+    }], page: 1, size: 50, total: 1,
+  })
+  vi.mocked(ticketApi.verifyFieldWork).mockResolvedValue({
+    ...handoff, work_status: 'VERIFIED', verified_by: staff.user.id,
+    verified_by_name: staff.user.display_name, verified_at: base.updated_at,
+  })
+
+  renderDetail('engineer', privileged)
+  fireEvent.click(await screen.findByText('Выездные работы'))
+  expect(await screen.findByText('Работы выполнены.')).toBeInTheDocument()
+  expect(screen.getByText('Монтажники сообщили о выполнении')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить результат' }))
+  await waitFor(() => expect(ticketApi.verifyFieldWork).toHaveBeenCalledWith(ticketId, handoff.id))
 })

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
@@ -15,7 +15,11 @@ from app.modules.field_dispatch.gateway import (
     DispatchUncertain,
     FieldDispatchGateway,
 )
-from app.modules.field_dispatch.models import FieldWorkDeliveryAttempt, FieldWorkHandoff
+from app.modules.field_dispatch.models import (
+    FieldExternalMessage,
+    FieldWorkDeliveryAttempt,
+    FieldWorkHandoff,
+)
 from app.modules.field_dispatch.schemas import FieldWorkHandoffView
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
@@ -128,12 +132,18 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
         if handoff.sent_by
         else None
     )
+    verified_by_name = (
+        db.scalar(select(User.display_name).where(User.id == handoff.verified_by))
+        if handoff.verified_by
+        else None
+    )
     return FieldWorkHandoffView.model_validate(handoff).model_copy(
         update={
             "message_preview": handoff.message_text or data.text,
             "ready_to_send": not data.missing and handoff.delivery_status in {"DRAFT", "FAILED"},
             "missing_fields": list(data.missing),
             "sent_by_name": sender_name,
+            "verified_by_name": verified_by_name,
         }
     )
 
@@ -144,6 +154,7 @@ class PreparedSend:
     attempt_id: UUID
     chat_id: str
     text: str
+    completion_callback_data: str
 
 
 def prepare_send(
@@ -209,7 +220,13 @@ def prepare_send(
         )
     )
     db.commit()
-    return PreparedSend(handoff.id, attempt.id, handoff.chat_id, message.text or "")
+    return PreparedSend(
+        handoff.id,
+        attempt.id,
+        handoff.chat_id,
+        message.text or "",
+        f"field_done:{handoff.id}",
+    )
 
 
 def finalize_send(
@@ -279,7 +296,11 @@ def send_handoff(
     if isinstance(prepared, FieldWorkHandoff):
         return prepared
     try:
-        receipt = gateway.send_message(prepared.chat_id, prepared.text)
+        receipt = gateway.send_message(
+            prepared.chat_id,
+            prepared.text,
+            completion_callback_data=prepared.completion_callback_data,
+        )
     except DispatchRejected as exc:
         return finalize_send(db, prepared, error_code=exc.code)
     except DispatchUncertain:
@@ -287,3 +308,65 @@ def send_handoff(
             db, prepared, error_code="telegram_transport_uncertain", uncertain=True
         )
     return finalize_send(db, prepared, receipt=receipt)
+
+
+def verify_handoff(
+    db: Session, actor_id: UUID, ticket_id: UUID, handoff_id: UUID
+) -> FieldWorkHandoff:
+    actor = _actor(db, actor_id)
+    handoff = db.execute(
+        select(FieldWorkHandoff)
+        .where(FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if handoff is None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    if handoff.work_status == "VERIFIED":
+        return handoff
+    if handoff.work_status != "REPORTED":
+        raise ApiError(409, "field_work_not_reported", "Field work result is not reported")
+    now = datetime.now(UTC)
+    handoff.work_status = "VERIFIED"
+    handoff.verified_by = actor.id
+    handoff.verified_at = now
+    handoff.updated_at = now
+    ticket = db.get(Ticket, ticket_id)
+    db.add(
+        TicketEvent(
+            ticket_id=ticket_id,
+            event_type="field_work_verified",
+            actor_id=actor.id,
+            event_data={"handoff_id": str(handoff.id)},
+            ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
+        )
+    )
+    db.add(
+        TicketAudit(
+            ticket_id=ticket_id,
+            actor_id=actor.id,
+            action="field_work_verified",
+            outcome="success",
+            origin="API",
+        )
+    )
+    db.commit()
+    db.refresh(handoff)
+    return handoff
+
+
+def handoff_messages(
+    db: Session, handoff_id: UUID, page: int, size: int
+) -> tuple[list[FieldExternalMessage], int]:
+    where = FieldExternalMessage.handoff_id == handoff_id
+    total = db.scalar(select(func.count()).select_from(FieldExternalMessage).where(where)) or 0
+    items = list(
+        db.scalars(
+            select(FieldExternalMessage)
+            .where(where)
+            .order_by(FieldExternalMessage.telegram_created_at.asc(), FieldExternalMessage.id.asc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+    )
+    return items, total

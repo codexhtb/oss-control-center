@@ -8,7 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.modules.field_dispatch.models import FieldWorkDeliveryAttempt, FieldWorkHandoff
+from app.modules.field_dispatch.models import (
+    FieldDispatchUpdate,
+    FieldExternalMessage,
+    FieldWorkDeliveryAttempt,
+    FieldWorkHandoff,
+)
 from app.modules.field_dispatch.service import create_handoff
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
@@ -235,6 +240,13 @@ def purge_ticket(
         ticket.resolved_at = None
         db.flush()
     handoff_ids = select(FieldWorkHandoff.id).where(FieldWorkHandoff.ticket_id == ticket_id)
+    update_ids = select(FieldDispatchUpdate.id).where(
+        FieldDispatchUpdate.handoff_id.in_(handoff_ids)
+    )
+    db.execute(
+        delete(FieldExternalMessage).where(FieldExternalMessage.handoff_id.in_(handoff_ids))
+    )
+    db.execute(delete(FieldDispatchUpdate).where(FieldDispatchUpdate.id.in_(update_ids)))
     db.execute(
         delete(FieldWorkDeliveryAttempt).where(
             FieldWorkDeliveryAttempt.handoff_id.in_(handoff_ids)

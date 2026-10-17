@@ -1,0 +1,74 @@
+services:
+  telegram_sender_registry_init:
+    profiles: [telegram-t2]
+    image: alpine:3.22
+    user: "0:0"
+    restart: "no"
+    command:
+      - /bin/sh
+      - -eu
+      - -c
+      - >-
+        rm -f /run/telegram-t2/allowed-senders.json.tmp
+        /run/telegram-t2/allowed-senders.json &&
+        cp /run/source/allowed-senders.json /run/telegram-t2/allowed-senders.json.tmp &&
+        chmod 0400 /run/telegram-t2/allowed-senders.json.tmp &&
+        chown 1001:1001 /run/telegram-t2/allowed-senders.json.tmp &&
+        mv -f /run/telegram-t2/allowed-senders.json.tmp
+        /run/telegram-t2/allowed-senders.json
+    volumes:
+      - type: bind
+        source: /root/oss-secrets/telegram-allowed-senders.json
+        target: /run/source/allowed-senders.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - telegram_sender_registry_runtime:/run/telegram-t2
+    networks:
+      - backend
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+
+  telegram_poller:
+    profiles: [telegram-t2]
+    image: oss-control-dev-api:local
+    user: "1001:1001"
+    restart: unless-stopped
+    env_file:
+      - .env.dev
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      TELEGRAM_BOT_TOKEN_FILE: /run/telegram/telegram-bot-token
+      TELEGRAM_ALLOWED_SENDERS_FILE: /run/telegram-t2/allowed-senders.json
+      TELEGRAM_FIELD_CHAT_ID: "-5319791765"
+      TELEGRAM_INITIAL_UPDATE_OFFSET: "${TELEGRAM_INITIAL_UPDATE_OFFSET:-}"
+    command: ["python", "-m", "app.modules.field_dispatch.poller", "--forever"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      telegram_secret_init:
+        condition: service_completed_successfully
+      telegram_sender_registry_init:
+        condition: service_completed_successfully
+    volumes:
+      - telegram_secret_runtime:/run/telegram:ro
+      - telegram_sender_registry_runtime:/run/telegram-t2:ro
+    networks:
+      - backend
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 25s
+
+volumes:
+  telegram_sender_registry_runtime:

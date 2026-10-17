@@ -18,16 +18,20 @@ from app.modules.field_dispatch.gateway import (
     TelegramBotGateway,
     TelegramGatewayConfig,
 )
+from app.modules.field_dispatch.models import FieldWorkHandoff
 from app.modules.field_dispatch.schemas import (
+    FieldExternalMessagePage,
     FieldWorkHandoffView,
     LatestFieldWorkHandoff,
     SendFieldWork,
 )
 from app.modules.field_dispatch.service import (
     LAB_CHAT_ID,
+    handoff_messages,
     handoff_view,
     latest_handoff,
     send_handoff,
+    verify_handoff,
 )
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
@@ -714,6 +718,45 @@ def send_field_work(
     item = send_handoff(
         db, gateway, identity.user.id, ticket_id, handoff_id, payload.client_request_id
     )
+    return handoff_view(db, item, identity.user)
+
+
+@router.get(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/messages",
+    response_model=FieldExternalMessagePage,
+)
+def field_work_messages(
+    ticket_id: UUID,
+    handoff_id: UUID,
+    identity: FieldReadDep,
+    db: SessionDep,
+    page: PageNumber = 1,
+    size: PageSize = 20,
+):
+    _mutation_scope(db, identity, ticket_id)
+    handoff = db.scalar(
+        select(FieldWorkHandoff).where(
+            FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id
+        )
+    )
+    if handoff is None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    items, total = handoff_messages(db, handoff_id, page, size)
+    return {"items": items, "page": page, "size": size, "total": total}
+
+
+@router.post(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/verify",
+    response_model=FieldWorkHandoffView,
+)
+def verify_field_work(
+    ticket_id: UUID,
+    handoff_id: UUID,
+    identity: FieldDep,
+    db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = verify_handoff(db, identity.user.id, ticket_id, handoff_id)
     return handoff_view(db, item, identity.user)
 
 

@@ -20,7 +20,7 @@ class FieldWorkHandoffView(BaseModel):
     ticket_id: UUID
     reason: str
     delivery_status: Literal["DRAFT", "SENDING", "SENT", "FAILED", "UNCERTAIN"]
-    work_status: Literal["AWAITING_REPORT"]
+    work_status: Literal["AWAITING_REPORT", "REPORTED", "VERIFIED"]
     chat_id: str
     telegram_message_id: int | None
     message_preview: str | None = None
@@ -33,8 +33,31 @@ class FieldWorkHandoffView(BaseModel):
     created_at: datetime
     send_started_at: datetime | None
     sent_at: datetime | None
+    reported_at: datetime | None
+    verified_by: UUID | None
+    verified_by_name: str | None = None
+    verified_at: datetime | None
     updated_at: datetime
 
 
 class LatestFieldWorkHandoff(BaseModel):
     handoff: FieldWorkHandoffView | None
+
+
+class FieldExternalMessageView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    handoff_id: UUID
+    kind: Literal["TEXT_REPLY", "COMPLETION_CALLBACK"]
+    sender_name: str
+    body: str | None
+    telegram_created_at: datetime
+    received_at: datetime
+
+
+class FieldExternalMessagePage(BaseModel):
+    items: list[FieldExternalMessageView]
+    page: int
+    size: int
+    total: int

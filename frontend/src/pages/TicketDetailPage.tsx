@@ -97,6 +97,12 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const callbacks = useQuery({ queryKey: ['ticket-callbacks', id, callbackPage], queryFn: ({ signal }) => ticketApi.callbacks(id, callbackPage, signal), enabled: related && linked && (resolved || callbacksOpen) })
   const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
   const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork })
+  const handoffId = fieldHandoff.data?.handoff?.id
+  const fieldMessages = useQuery({
+    queryKey: ['ticket-field-work-messages', id, handoffId],
+    queryFn: ({ signal }) => ticketApi.fieldWorkMessages(id, handoffId!, signal),
+    enabled: !!handoffId && fieldHandoff.data?.handoff?.delivery_status === 'SENT',
+  })
 
   async function runAction(name: string, action: () => Promise<unknown>, after?: () => void) {
     if (busy) return
@@ -113,6 +119,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         queryClient.invalidateQueries({ queryKey: ['ticket-decisions', id] }),
         queryClient.invalidateQueries({ queryKey: ['ticket-callbacks', id] }),
         queryClient.invalidateQueries({ queryKey: ['ticket-field-work', id] }),
+        queryClient.invalidateQueries({ queryKey: ['ticket-field-work-messages', id] }),
         queryClient.invalidateQueries({ queryKey: ['tickets'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       ])
@@ -250,7 +257,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               <div><dt>Исполнитель</dt><dd>{ticket.assigned_engineer_id ? assignedName || 'Имя не указано' : 'Не назначен'}</dd></div>
               <div><dt>Обновлена</dt><dd><time dateTime={ticket.updated_at}>{formatDate(ticket.updated_at)}</time></dd></div>
             </dl>
-            {(open && (activeWork && (canManualAssign || (canClaim && (ticket.assigned_engineer_id === null || ticket.assigned_engineer_id === session.user.id)) || (canStart && ticket.status === 'OPEN' && ticket.assigned_engineer_id === session.user.id) || (inProgress && (canWriteVerdict || session.permissions.includes('tickets.field_work')))) || (ticket.status === 'RESOLVED' && (ticket.ticket_type === 'SUBSCRIBER_LINKED' ? canCallback : canClose)))) && <div className="ticket-action-panel__actions">
+            {((open && (activeWork && (canManualAssign || (canClaim && (ticket.assigned_engineer_id === null || ticket.assigned_engineer_id === session.user.id)) || (canStart && ticket.status === 'OPEN' && ticket.assigned_engineer_id === session.user.id) || (inProgress && (canWriteVerdict || session.permissions.includes('tickets.field_work')))) || (ticket.status === 'RESOLVED' && (ticket.ticket_type === 'SUBSCRIBER_LINKED' ? canCallback : canClose)))) || (canFieldWork && !!fieldHandoff.data?.handoff)) && <div className="ticket-action-panel__actions">
               {activeWork && canClaim && ticket.assigned_engineer_id === null && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('claim', () => ticketApi.claim(id, ticket.version))}>Взять в работу <ArrowRight size={15} /></Button>}
               {activeWork && canClaim && ticket.assigned_engineer_id === session.user.id && <Button variant="secondary" disabled={!!busy} onClick={() => void runAction('release', () => ticketApi.release(id, ticket.version))}>Освободить заявку</Button>}
               {ticket.status === 'OPEN' && canStart && ticket.assigned_engineer_id === session.user.id && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('start', () => ticketApi.start(id, ticket.version))}>Начать работу <ArrowRight size={15} /></Button>}
@@ -263,9 +270,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               </details>}
               {ticket.status === 'RESOLVED' && ticket.ticket_type === 'SUBSCRIBER_LINKED' && canCallback && <div className="ticket-action-form"><strong>Результат звонка</strong><label className="field"><span>Комментарий (обязателен, если проблема осталась)</span><textarea aria-label="Комментарий обзвона" value={callbackComment} maxLength={2000} rows={2} onChange={(event) => setCallbackComment(event.target.value)} /></label><Button variant="primary" disabled={!!busy} onClick={() => submitCallback('CONFIRMED')}>Проблема устранена</Button><Button disabled={!!busy || !callbackComment.trim()} onClick={() => submitCallback('STILL_BROKEN')}>Проблема осталась</Button><Button variant="quiet" disabled={!!busy} onClick={() => submitCallback('NO_ANSWER')}>Не дозвонилась</Button></div>}
               {ticket.status === 'RESOLVED' && ticket.ticket_type !== 'SUBSCRIBER_LINKED' && canClose && <details className="ticket-action-disclosure"><summary>Закрыть без обзвона</summary><div className="ticket-action-form"><label className="field"><span>Причина закрытия без звонка</span><textarea aria-label="Причина закрытия без звонка" value={closeReason} maxLength={1000} rows={2} onChange={(event) => setCloseReason(event.target.value)} /></label><Button disabled={!!busy || !closeReason.trim()} onClick={() => void runAction('close', () => ticketApi.close(id, ticket.resolved_decision_id!, ticket.version, closeReason.trim()))}>Закрыть заявку</Button></div></details>}
-              {inProgress && canFieldWork && <details className="ticket-action-disclosure"><summary>Выездные работы</summary><div className="ticket-action-form">
-                <label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={2000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label>
-                <Button disabled={!fieldReason.trim() || !!busy} onClick={() => void runAction('field', () => ticketApi.requestFieldWork(id, fieldReason.trim(), ticket.version), () => setFieldReason(''))}>Зафиксировать запрос</Button>
+              {(inProgress || !!fieldHandoff.data?.handoff) && canFieldWork && <details className="ticket-action-disclosure"><summary>Выездные работы</summary><div className="ticket-action-form">
+                {inProgress && <><label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={2000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label>
+                <Button disabled={!fieldReason.trim() || !!busy} onClick={() => void runAction('field', () => ticketApi.requestFieldWork(id, fieldReason.trim(), ticket.version), () => setFieldReason(''))}>Зафиксировать запрос</Button></>}
                 {fieldHandoff.isPending && <p className="rail-note">Проверяем сохранённую передачу…</p>}
                 {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
                 {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
@@ -273,6 +280,18 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   <pre>{fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>
                   {fieldHandoff.data.handoff.missing_fields.length > 0 && <p className="rail-note">Не хватает данных: {fieldHandoff.data.handoff.missing_fields.join(', ')}.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
+                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-live="polite">
+                    <strong>{fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' ? 'Ожидается результат монтажников' : fieldHandoff.data.handoff.work_status === 'REPORTED' ? 'Монтажники сообщили о выполнении' : 'Результат подтверждён инженером'}</strong>
+                    {fieldHandoff.data.handoff.reported_at && <span>Ответ: {formatDate(fieldHandoff.data.handoff.reported_at)}</span>}
+                    {fieldHandoff.data.handoff.verified_at && <span>Подтвердил: {fieldHandoff.data.handoff.verified_by_name || 'инженер'}, {formatDate(fieldHandoff.data.handoff.verified_at)}</span>}
+                  </div>}
+                  {fieldMessages.isPending && fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Загружаем ответы монтажников…</p>}
+                  {fieldMessages.isError && <Notice tone="error">Не удалось загрузить ответы монтажников.</Notice>}
+                  {fieldMessages.data?.items.length ? <div className="field-work-replies" aria-label="Ответы монтажников">{fieldMessages.data.items.map((message) => <article key={message.id}>
+                    <div><strong>{message.sender_name}</strong><time dateTime={message.telegram_created_at}>{formatDate(message.telegram_created_at)}</time></div>
+                    <p>{message.kind === 'COMPLETION_CALLBACK' ? 'Отметил выездные работы выполненными.' : message.body}</p>
+                  </article>)}</div> : null}
+                  {fieldHandoff.data.handoff.work_status === 'REPORTED' && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-verify', () => ticketApi.verifyFieldWork(id, fieldHandoff.data!.handoff!.id))}>Подтвердить результат</Button>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENDING' && <p className="rail-note">Отправка выполняется. Повторный запрос заблокирован.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">Telegram отклонил отправку. Можно повторить отдельным действием.</Notice>}
                   {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <Notice tone="error">Результат отправки неизвестен. Автоматический повтор заблокирован во избежание дубля.</Notice>}
