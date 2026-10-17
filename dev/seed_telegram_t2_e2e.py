@@ -13,6 +13,7 @@ from app.db.engine import get_engine
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
 from app.modules.identity.crypto import hash_password
@@ -119,38 +120,38 @@ def main() -> None:
         reply = FieldDispatchUpdate(
             bot_identity="oss_field_service_bot",
             update_id=91002,
-            kind="TEXT_REPLY",
+            kind="COMPLETION_REPORT",
             outcome="PROCESSED",
             handoff_id=handoff.id,
-            sync_status="NOT_REQUIRED",
+            sync_status="SYNCED",
         )
         db.add_all([callback, reply])
         db.flush()
-        db.add_all(
-            [
-                FieldExternalMessage(
-                    handoff_id=handoff.id,
-                    update_record_id=callback.id,
-                    chat_id=handoff.chat_id,
-                    telegram_message_id=None,
-                    sender_telegram_id=501,
-                    sender_name="Монтажник Тест",
-                    kind="COMPLETION_CALLBACK",
-                    body=None,
-                    telegram_created_at=now,
-                ),
-                FieldExternalMessage(
-                    handoff_id=handoff.id,
-                    update_record_id=reply.id,
-                    chat_id=handoff.chat_id,
-                    telegram_message_id=7002,
-                    sender_telegram_id=501,
-                    sender_name="Монтажник Тест",
-                    kind="TEXT_REPLY",
-                    body="Синтетический ответ: работы выполнены.",
-                    telegram_created_at=now + timedelta(seconds=1),
-                ),
-            ]
+        db.add(
+            FieldWorkCompletionPrompt(
+                handoff_id=handoff.id,
+                callback_update_id=callback.id,
+                chat_id=handoff.chat_id,
+                sender_telegram_id=501,
+                sender_name="Монтажник Тест",
+                status="COMPLETED",
+                telegram_message_id=7003,
+                sent_at=now,
+                completed_at=now + timedelta(seconds=1),
+            )
+        )
+        db.add(
+            FieldExternalMessage(
+                handoff_id=handoff.id,
+                update_record_id=reply.id,
+                chat_id=handoff.chat_id,
+                telegram_message_id=7002,
+                sender_telegram_id=501,
+                sender_name="Монтажник Тест",
+                kind="COMPLETION_REPORT",
+                body="Синтетический ответ: работы выполнены.",
+                telegram_created_at=now + timedelta(seconds=1),
+            )
         )
         db.commit()
     print("Disposable Telegram T2 browser data seeded")

@@ -23,7 +23,6 @@ async function main() {
     await page.getByText('Выездные работы').click()
     await page.getByText('Монтажники сообщили о выполнении').waitFor()
     await page.getByText('Синтетический ответ: работы выполнены.').waitFor()
-    await page.getByText('Отметил выездные работы выполненными.').waitFor()
     const response = page.waitForResponse((item) =>
       item.url().endsWith('/verify') && item.request().method() === 'POST')
     await page.getByRole('button', { name: 'Подтвердить результат' }).click()

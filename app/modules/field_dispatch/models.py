@@ -152,7 +152,7 @@ class FieldDispatchUpdate(Base):
     __table_args__ = (
         UniqueConstraint("bot_identity", "update_id", name="uq_field_updates_bot_update"),
         CheckConstraint(
-            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','UNSUPPORTED')",
+            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT','UNSUPPORTED')",
             name="ck_field_updates_kind",
         ),
         CheckConstraint(
@@ -191,13 +191,16 @@ class FieldExternalMessage(Base):
     __table_args__ = (
         UniqueConstraint("update_record_id", name="uq_field_messages_update"),
         CheckConstraint(
-            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK')", name="ck_field_messages_kind"
+            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT')",
+            name="ck_field_messages_kind",
         ),
         CheckConstraint("length(btrim(sender_name)) > 0", name="ck_field_messages_sender"),
         CheckConstraint(
             "(kind = 'TEXT_REPLY' AND body IS NOT NULL AND length(btrim(body)) > 0 "
             "AND telegram_message_id IS NOT NULL) OR "
-            "(kind = 'COMPLETION_CALLBACK' AND body IS NULL)",
+            "(kind = 'COMPLETION_CALLBACK' AND body IS NULL) OR "
+            "(kind = 'COMPLETION_REPORT' AND body IS NOT NULL AND length(btrim(body)) > 0 "
+            "AND telegram_message_id IS NOT NULL)",
             name="ck_field_messages_content",
         ),
         Index("ix_field_messages_handoff_created", "handoff_id", "telegram_created_at", "id"),
@@ -237,3 +240,64 @@ class FieldExternalMessage(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class FieldWorkCompletionPrompt(Base):
+    """Durable ForceReply question binding one installer to one handoff."""
+
+    __tablename__ = "field_work_completion_prompts"
+    __table_args__ = (
+        UniqueConstraint("callback_update_id", name="uq_field_prompts_callback_update"),
+        CheckConstraint(
+            "status IN ('REQUESTING','WAITING','FAILED','UNCERTAIN','COMPLETED')",
+            name="ck_field_prompts_status",
+        ),
+        CheckConstraint(
+            "(status = 'REQUESTING' AND telegram_message_id IS NULL AND sent_at IS NULL "
+            "AND completed_at IS NULL AND error_code IS NULL) OR "
+            "(status = 'WAITING' AND telegram_message_id IS NOT NULL AND sent_at IS NOT NULL "
+            "AND completed_at IS NULL AND error_code IS NULL) OR "
+            "(status IN ('FAILED','UNCERTAIN') AND telegram_message_id IS NULL "
+            "AND sent_at IS NULL AND completed_at IS NULL AND error_code IS NOT NULL) OR "
+            "(status = 'COMPLETED' AND telegram_message_id IS NOT NULL AND sent_at IS NOT NULL "
+            "AND completed_at IS NOT NULL AND error_code IS NULL)",
+            name="ck_field_prompts_receipt",
+        ),
+        Index("ix_field_prompts_handoff_created", "handoff_id", "created_at", "id"),
+        Index(
+            "uq_field_prompts_active_handoff",
+            "handoff_id",
+            unique=True,
+            postgresql_where=text("status IN ('REQUESTING','WAITING','UNCERTAIN')"),
+        ),
+        Index(
+            "uq_field_prompts_chat_message",
+            "chat_id",
+            "telegram_message_id",
+            unique=True,
+            postgresql_where=text("telegram_message_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    handoff_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    callback_update_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_dispatch_updates.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    sender_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sender_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

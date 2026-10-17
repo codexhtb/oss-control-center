@@ -38,6 +38,10 @@ class FieldWorkHandoffView(BaseModel):
     verified_by_name: str | None = None
     verified_at: datetime | None
     updated_at: datetime
+    completion_prompt_status: (
+        Literal["REQUESTING", "WAITING", "FAILED", "UNCERTAIN", "COMPLETED"] | None
+    ) = None
+    completion_prompt_sent_at: datetime | None = None
 
 
 class LatestFieldWorkHandoff(BaseModel):
@@ -49,7 +53,7 @@ class FieldExternalMessageView(BaseModel):
 
     id: UUID
     handoff_id: UUID
-    kind: Literal["TEXT_REPLY", "COMPLETION_CALLBACK"]
+    kind: Literal["TEXT_REPLY", "COMPLETION_CALLBACK", "COMPLETION_REPORT"]
     sender_name: str
     body: str | None
     telegram_created_at: datetime

@@ -33,9 +33,11 @@ from app.modules.field_dispatch.inbound import process_update
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
 )
+from app.modules.field_dispatch.poller import _send_prompt
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -2969,20 +2971,29 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     created = create(ticket_client, snapshot, connections[0])
     ticket_id = created.json()["id"]
     path = f"/api/v1/tickets/{ticket_id}"
-    assert ticket_client.post(
-        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
-    ).status_code == 200
-    assert ticket_client.post(
-        f"{path}/field-work-request",
-        headers={**csrf(ticket_client), "If-Match": '"2"'},
-        json={"reason": "Synthetic field visit"},
-    ).status_code == 200
+    assert (
+        ticket_client.post(
+            f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+        ).status_code
+        == 200
+    )
+    assert (
+        ticket_client.post(
+            f"{path}/field-work-request",
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"reason": "Synthetic field visit"},
+        ).status_code
+        == 200
+    )
     handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
-    assert ticket_client.post(
-        f"{path}/field-work-handoffs/{handoff['id']}/send",
-        headers=csrf(ticket_client),
-        json={"client_request_id": str(uuid4())},
-    ).status_code == 200
+    assert (
+        ticket_client.post(
+            f"{path}/field-work-handoffs/{handoff['id']}/send",
+            headers=csrf(ticket_client),
+            json={"client_request_id": str(uuid4())},
+        ).status_code
+        == 200
+    )
 
     callback = {
         "update_id": 9001,
@@ -3004,7 +3015,7 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
             "date": 1_800_000_010,
             "from": {"id": 501, "is_bot": False, "first_name": "Монтажник", "last_name": "Тест"},
             "chat": {"id": -5319791765, "type": "group"},
-            "reply_to_message": {"message_id": 701},
+            "reply_to_message": {"message_id": 704},
             "text": "Кабель заменён, связь проверена.",
         },
     }
@@ -3019,12 +3030,74 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
             "text": "Must not be imported",
         },
     }
+    ordinary_reply = {
+        "update_id": 9006,
+        "message": {
+            "message_id": 706,
+            "date": 1_800_000_005,
+            "from": {"id": 501, "is_bot": False, "first_name": "Монтажник", "last_name": "Тест"},
+            "chat": {"id": -5319791765, "type": "group"},
+            "reply_to_message": {"message_id": 701},
+            "text": "Приступили к работе.",
+        },
+    }
+    wrong_installer = {
+        "update_id": 9005,
+        "message": {
+            "message_id": 705,
+            "date": 1_800_000_015,
+            "from": {"id": 502, "is_bot": False, "first_name": "Другой монтажник"},
+            "chat": {"id": -5319791765, "type": "group"},
+            "reply_to_message": {"message_id": 704},
+            "text": "Не должен завершить чужой запрос.",
+        },
+    }
     with Session(ticket_engine) as db:
         first = process_update(db, callback, frozenset({501}), allowed_chat_id="-5319791765")
         assert first.outcome == "PROCESSED"
-        assert process_update(
-            db, callback, frozenset({501}), allowed_chat_id="-5319791765"
-        ).outcome == "DUPLICATE"
+        saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
+        assert saved is not None and saved.work_status == "AWAITING_REPORT"
+        prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
+        assert prompt is not None and prompt.status == "REQUESTING"
+
+        class PromptGateway:
+            calls = 0
+
+            def send_completion_prompt(self, chat_id: str, message_id: int) -> DispatchReceipt:
+                self.calls += 1
+                assert chat_id == "-5319791765" and message_id == 701
+                with Session(ticket_engine) as separate_db:
+                    persisted = separate_db.get(FieldWorkCompletionPrompt, first.prompt_id)
+                    assert persisted is not None and persisted.status == "UNCERTAIN"
+                return DispatchReceipt(chat_id, "704")
+
+        prompt_gateway = PromptGateway()
+        _send_prompt(db, prompt_gateway, first.prompt_id)
+        _send_prompt(db, prompt_gateway, first.prompt_id)
+        assert prompt_gateway.calls == 1
+        prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
+        assert prompt is not None and prompt.status == "WAITING"
+        assert prompt.error_code is None and prompt.telegram_message_id == 704
+        assert (
+            process_update(
+                db, ordinary_reply, frozenset({501}), allowed_chat_id="-5319791765"
+            ).outcome
+            == "PROCESSED"
+        )
+        assert (
+            process_update(
+                db,
+                {**ordinary_reply, "update_id": 9007},
+                frozenset({501}),
+                allowed_chat_id="-5319791765",
+            ).outcome
+            == "DUPLICATE"
+        )
+        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "AWAITING_REPORT"
+        assert (
+            process_update(db, callback, frozenset({501}), allowed_chat_id="-5319791765").outcome
+            == "DUPLICATE"
+        )
         repeated = {
             **callback,
             "update_id": 9004,
@@ -3033,19 +3106,39 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
                 "id": "synthetic-callback-2",
             },
         }
-        assert process_update(
-            db, repeated, frozenset({501}), allowed_chat_id="-5319791765"
-        ).outcome == "DUPLICATE"
-        assert process_update(
-            db, reply, frozenset({501}), allowed_chat_id="-5319791765"
-        ).outcome == "PROCESSED"
-        assert process_update(
-            db, denied, frozenset({501}), allowed_chat_id="-5319791765"
-        ).outcome == "DENIED"
+        assert (
+            process_update(db, repeated, frozenset({501}), allowed_chat_id="-5319791765").outcome
+            == "DUPLICATE"
+        )
+        assert db.scalar(select(func.count()).select_from(FieldWorkCompletionPrompt)) == 1
+        assert (
+            process_update(
+                db, wrong_installer, frozenset({501, 502}), allowed_chat_id="-5319791765"
+            ).outcome
+            == "DENIED"
+        )
+        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "AWAITING_REPORT"
+        assert (
+            process_update(db, reply, frozenset({501}), allowed_chat_id="-5319791765").outcome
+            == "PROCESSED"
+        )
+        assert (
+            process_update(
+                db,
+                {**reply, "update_id": 9008},
+                frozenset({501}),
+                allowed_chat_id="-5319791765",
+            ).outcome
+            == "DUPLICATE"
+        )
+        assert (
+            process_update(db, denied, frozenset({501}), allowed_chat_id="-5319791765").outcome
+            == "DENIED"
+        )
         saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert saved is not None and saved.work_status == "REPORTED"
         assert db.scalar(select(func.count()).select_from(FieldExternalMessage)) == 2
-        assert db.scalar(select(func.count()).select_from(FieldDispatchUpdate)) == 4
+        assert db.scalar(select(func.count()).select_from(FieldDispatchUpdate)) == 8
         ticket = db.get(Ticket, UUID(ticket_id))
         assert ticket is not None and ticket.status == TicketStatus.IN_PROGRESS
 
@@ -3053,8 +3146,8 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     messages = ticket_client.get(messages_path)
     assert messages.status_code == 200
     assert [item["kind"] for item in messages.json()["items"]] == [
-        "COMPLETION_CALLBACK",
         "TEXT_REPLY",
+        "COMPLETION_REPORT",
     ]
     assert messages.json()["items"][1]["body"] == "Кабель заменён, связь проверена."
     verify_path = f"{path}/field-work-handoffs/{handoff['id']}/verify"
@@ -3064,3 +3157,81 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     assert verified.json()["work_status"] == "VERIFIED"
     assert verified.json()["verified_by"] == str(engineer.id)
     assert ticket_client.get(path).json()["status"] == "IN_PROGRESS"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_code"),
+    [
+        (DispatchRejected("telegram_http_400"), "FAILED", "telegram_http_400"),
+        (DispatchUncertain(), "UNCERTAIN", "telegram_transport_uncertain"),
+    ],
+)
+def test_completion_prompt_failure_never_retries_automatically(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+    failure: Exception,
+    expected_status: str,
+    expected_code: str,
+) -> None:
+    engineer = seed_user(ticket_engine, f"prompt_failure_{expected_status.lower()}", Role.ENGINEER)
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client)
+    with Session(ticket_engine) as db:
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]),
+            ticket_version=1,
+            reason="Synthetic field visit",
+            delivery_status="SENT",
+            work_status="AWAITING_REPORT",
+            chat_id="-5319791765",
+            telegram_message_id=701,
+            created_by=engineer.id,
+            sent_by=engineer.id,
+            sent_at=datetime.now(UTC),
+        )
+        db.add(handoff)
+        db.flush()
+        update = FieldDispatchUpdate(
+            bot_identity="oss_field_service_bot",
+            update_id=91001,
+            kind="COMPLETION_CALLBACK",
+            outcome="PROCESSED",
+            handoff_id=handoff.id,
+            sync_status="PENDING",
+        )
+        db.add(update)
+        db.flush()
+        prompt = FieldWorkCompletionPrompt(
+            handoff_id=handoff.id,
+            callback_update_id=update.id,
+            chat_id=handoff.chat_id,
+            sender_telegram_id=501,
+            sender_name="Монтажник Тест",
+            status="REQUESTING",
+        )
+        db.add(prompt)
+        db.commit()
+        prompt_id = prompt.id
+
+        class FailingGateway:
+            calls = 0
+
+            def send_completion_prompt(self, chat_id: str, message_id: int) -> DispatchReceipt:
+                self.calls += 1
+                assert chat_id == "-5319791765" and message_id == 701
+                with Session(ticket_engine) as separate_db:
+                    persisted = separate_db.get(FieldWorkCompletionPrompt, prompt_id)
+                    assert persisted is not None and persisted.status == "UNCERTAIN"
+                raise failure
+
+        gateway = FailingGateway()
+        _send_prompt(db, gateway, prompt_id)
+        _send_prompt(db, gateway, prompt_id)
+        assert gateway.calls == 1
+        saved = db.get(FieldWorkCompletionPrompt, prompt_id)
+        assert saved is not None and saved.status == expected_status
+        assert saved.error_code == expected_code
+        assert saved.telegram_message_id is None
+        receipt = db.get(FieldDispatchUpdate, update.id)
+        assert receipt is not None and receipt.sync_status == "FAILED"
+        assert receipt.sync_error_code == expected_code

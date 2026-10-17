@@ -327,9 +327,14 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 - Один и тот же `update_id`, повторное нажатие с новым update и повторный
   входящий message ID не создают дубликатов. Raw update и данные отклонённого
   пользователя не сохраняются.
-- Текст отображается как внешнее сообщение. Callback переводит только
-  `work_status` в `REPORTED`; инженер с `tickets.field_work` отдельно ставит
-  `VERIFIED`. Во всех сценариях `Ticket.status` и решение остаются прежними.
-- Миграция `0021` применяется только в `oss_test_*`, затем к dev после
+- Callback создаёт только prompt; подтверждённый ForceReply сохраняет
+  `message_id`, а неизвестный исход блокирует автоматический повтор. Только
+  текстовый ответ на этот prompt от того же монтажника создаёт
+  `COMPLETION_REPORT` и переводит `work_status` в `REPORTED`. Чужой монтажник,
+  обычный reply и пустой текст не завершают работы. Инженер с
+  `tickets.field_work` отдельно ставит `VERIFIED`; `Ticket.status` и решение
+  остаются прежними.
+- Миграция `0022` сохраняет старые T2 callbacks и применяется сначала в
+  `oss_test_*`, затем к dev после
   проверенного backup/restore. Poller profile остаётся выключенным до живой
   приёмки allowlist и стартового offset.

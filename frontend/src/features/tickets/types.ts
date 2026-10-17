@@ -217,12 +217,14 @@ export interface FieldWorkHandoff {
   verified_by_name: string | null
   verified_at: string | null
   updated_at: string
+  completion_prompt_status?: 'REQUESTING' | 'WAITING' | 'FAILED' | 'UNCERTAIN' | 'COMPLETED' | null
+  completion_prompt_sent_at?: string | null
 }
 
 export interface FieldExternalMessage {
   id: string
   handoff_id: string
-  kind: 'TEXT_REPLY' | 'COMPLETION_CALLBACK'
+  kind: 'TEXT_REPLY' | 'COMPLETION_CALLBACK' | 'COMPLETION_REPORT'
   sender_name: string
   body: string | null
   telegram_created_at: string

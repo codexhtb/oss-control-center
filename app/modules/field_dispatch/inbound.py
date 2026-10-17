@@ -1,4 +1,4 @@
-"""Verified, idempotent import of Telegram replies and completion callbacks."""
+"""Verified, idempotent import of Telegram replies and completion reports."""
 
 import json
 from dataclasses import dataclass
@@ -14,12 +14,14 @@ from sqlalchemy.orm import Session
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 
 BOT_IDENTITY = "oss_field_service_bot"
 COMPLETION_PREFIX = "field_done:"
+ACTIVE_PROMPT_STATUSES = ("REQUESTING", "WAITING", "UNCERTAIN")
 
 
 class SenderRegistryError(RuntimeError):
@@ -60,6 +62,7 @@ class InboundResult:
     callback_query_id: str | None = None
     sender_name: str | None = None
     duplicate: bool = False
+    prompt_id: UUID | None = None
 
 
 def _integer(value: object) -> int | None:
@@ -128,7 +131,10 @@ def _receipt(
         if existing is None:
             raise RuntimeError("telegram_update_deduplication_failed")
         return existing, False
-    return db.get(FieldDispatchUpdate, receipt_id), True
+    receipt = db.get(FieldDispatchUpdate, receipt_id)
+    if receipt is None:
+        raise RuntimeError("telegram_update_receipt_missing")
+    return receipt, True
 
 
 def _ignored(db: Session, update_id: int, kind: str, outcome: str, code: str) -> InboundResult:
@@ -137,6 +143,272 @@ def _ignored(db: Session, update_id: int, kind: str, outcome: str, code: str) ->
     return InboundResult(
         update_id, "DUPLICATE" if not created else receipt.outcome, kind, duplicate=not created
     )
+
+
+def _callback(
+    db: Session,
+    update_id: int,
+    callback: dict[str, Any],
+    source_message: dict[str, Any],
+    source_message_id: int,
+    sender_id: int,
+    sender_name: str,
+    allowed_chat_id: str,
+) -> InboundResult:
+    kind = "COMPLETION_CALLBACK"
+    callback_id = callback.get("id")
+    callback_data = callback.get("data")
+    if not isinstance(callback_data, str) or not callback_data.startswith(COMPLETION_PREFIX):
+        return _ignored(db, update_id, kind, "IGNORED", "telegram_callback_unknown")
+    try:
+        requested_handoff = UUID(callback_data[len(COMPLETION_PREFIX) :])
+    except (ValueError, TypeError):
+        return _ignored(db, update_id, kind, "IGNORED", "telegram_callback_invalid")
+    handoff = db.scalar(
+        select(FieldWorkHandoff).where(FieldWorkHandoff.id == requested_handoff).with_for_update()
+    )
+    if (
+        handoff is None
+        or handoff.delivery_status != "SENT"
+        or handoff.chat_id != allowed_chat_id
+        or handoff.telegram_message_id != source_message_id
+    ):
+        return _ignored(db, update_id, kind, "DENIED", "telegram_handoff_mismatch")
+    if handoff.work_status != "AWAITING_REPORT":
+        _receipt(
+            db,
+            update_id,
+            kind,
+            "DUPLICATE",
+            handoff_id=handoff.id,
+            error_code="field_work_already_reported",
+        )
+        db.commit()
+        return InboundResult(
+            update_id, "DUPLICATE", kind, handoff.id, callback_id, sender_name, True
+        )
+    active = db.scalar(
+        select(FieldWorkCompletionPrompt)
+        .where(
+            FieldWorkCompletionPrompt.handoff_id == handoff.id,
+            FieldWorkCompletionPrompt.status.in_(ACTIVE_PROMPT_STATUSES),
+        )
+        .with_for_update()
+    )
+    if active is not None:
+        _receipt(
+            db,
+            update_id,
+            kind,
+            "DUPLICATE",
+            handoff_id=handoff.id,
+            error_code="completion_description_already_requested",
+        )
+        db.commit()
+        return InboundResult(
+            update_id,
+            "DUPLICATE",
+            kind,
+            handoff.id,
+            callback_id,
+            sender_name,
+            True,
+            active.id,
+        )
+    receipt, created = _receipt(
+        db, update_id, kind, "PROCESSED", handoff_id=handoff.id, sync_status="PENDING"
+    )
+    if not created:
+        db.rollback()
+        return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+    prompt = FieldWorkCompletionPrompt(
+        handoff_id=handoff.id,
+        callback_update_id=receipt.id,
+        chat_id=allowed_chat_id,
+        sender_telegram_id=sender_id,
+        sender_name=sender_name,
+        status="REQUESTING",
+    )
+    db.add(prompt)
+    db.commit()
+    return InboundResult(
+        update_id,
+        "PROCESSED",
+        kind,
+        handoff.id,
+        callback_id,
+        sender_name,
+        False,
+        prompt.id,
+    )
+
+
+def _text_reply(
+    db: Session,
+    update_id: int,
+    message: dict[str, Any],
+    source_message_id: int,
+    sender_id: int,
+    sender_name: str,
+    allowed_chat_id: str,
+) -> InboundResult:
+    reply = message.get("reply_to_message")
+    reply_message_id = _integer(reply.get("message_id")) if isinstance(reply, dict) else None
+    text = message.get("text")
+    if reply_message_id is None or not isinstance(text, str) or not text.strip():
+        return _ignored(db, update_id, "TEXT_REPLY", "IGNORED", "telegram_reply_invalid")
+    body = text.strip()
+    if len(body) > 4000 or any(char == "\x00" for char in body):
+        return _ignored(db, update_id, "TEXT_REPLY", "IGNORED", "telegram_reply_invalid")
+
+    imported = db.scalar(
+        select(FieldExternalMessage).where(
+            FieldExternalMessage.chat_id == allowed_chat_id,
+            FieldExternalMessage.telegram_message_id == source_message_id,
+        )
+    )
+    if imported is not None:
+        _receipt(
+            db,
+            update_id,
+            imported.kind,
+            "DUPLICATE",
+            handoff_id=imported.handoff_id,
+            error_code="telegram_message_already_imported",
+        )
+        db.commit()
+        return InboundResult(
+            update_id, "DUPLICATE", imported.kind, imported.handoff_id, duplicate=True
+        )
+
+    prompt = db.scalar(
+        select(FieldWorkCompletionPrompt)
+        .where(
+            FieldWorkCompletionPrompt.chat_id == allowed_chat_id,
+            FieldWorkCompletionPrompt.telegram_message_id == reply_message_id,
+        )
+        .with_for_update()
+    )
+    if prompt is not None:
+        kind = "COMPLETION_REPORT"
+        if sender_id != prompt.sender_telegram_id:
+            return _ignored(db, update_id, kind, "DENIED", "completion_sender_mismatch")
+        handoff = db.scalar(
+            select(FieldWorkHandoff)
+            .where(FieldWorkHandoff.id == prompt.handoff_id)
+            .with_for_update()
+        )
+        if handoff is None:
+            return _ignored(db, update_id, kind, "IGNORED", "telegram_handoff_missing")
+        if prompt.status != "WAITING" or handoff.work_status != "AWAITING_REPORT":
+            _receipt(
+                db,
+                update_id,
+                kind,
+                "DUPLICATE",
+                handoff_id=handoff.id,
+                error_code="field_work_already_reported",
+            )
+            db.commit()
+            return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+        event_time = _event_time(message.get("date"))
+        receipt, created = _receipt(
+            db, update_id, kind, "PROCESSED", handoff_id=handoff.id, sync_status="PENDING"
+        )
+        if not created:
+            db.rollback()
+            return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+        db.add(
+            FieldExternalMessage(
+                handoff_id=handoff.id,
+                update_record_id=receipt.id,
+                chat_id=allowed_chat_id,
+                telegram_message_id=source_message_id,
+                sender_telegram_id=sender_id,
+                sender_name=sender_name,
+                kind=kind,
+                body=body,
+                telegram_created_at=event_time,
+            )
+        )
+        prompt.status = "COMPLETED"
+        prompt.completed_at = event_time
+        handoff.work_status = "REPORTED"
+        handoff.reported_at = event_time
+        handoff.updated_at = datetime.now(UTC)
+        ticket = db.get(Ticket, handoff.ticket_id)
+        db.add(
+            TicketEvent(
+                ticket_id=handoff.ticket_id,
+                event_type="field_work_reported",
+                actor_id=None,
+                event_data={"handoff_id": str(handoff.id), "message_kind": kind},
+                ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
+            )
+        )
+        db.add(
+            TicketAudit(
+                ticket_id=handoff.ticket_id,
+                actor_id=None,
+                action="field_work_reported",
+                outcome="success",
+                origin="SYSTEM",
+            )
+        )
+        db.commit()
+        return InboundResult(update_id, "PROCESSED", kind, handoff.id, sender_name=sender_name)
+
+    kind = "TEXT_REPLY"
+    handoff = db.scalar(
+        select(FieldWorkHandoff)
+        .where(
+            FieldWorkHandoff.chat_id == allowed_chat_id,
+            FieldWorkHandoff.telegram_message_id == reply_message_id,
+            FieldWorkHandoff.delivery_status == "SENT",
+        )
+        .with_for_update()
+    )
+    if handoff is None:
+        return _ignored(db, update_id, kind, "IGNORED", "telegram_reply_unmatched")
+    receipt, created = _receipt(db, update_id, kind, "PROCESSED", handoff_id=handoff.id)
+    if not created:
+        db.rollback()
+        return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+    event_time = _event_time(message.get("date"))
+    db.add(
+        FieldExternalMessage(
+            handoff_id=handoff.id,
+            update_record_id=receipt.id,
+            chat_id=allowed_chat_id,
+            telegram_message_id=source_message_id,
+            sender_telegram_id=sender_id,
+            sender_name=sender_name,
+            kind=kind,
+            body=body,
+            telegram_created_at=event_time,
+        )
+    )
+    ticket = db.get(Ticket, handoff.ticket_id)
+    db.add(
+        TicketEvent(
+            ticket_id=handoff.ticket_id,
+            event_type="field_external_message_received",
+            actor_id=None,
+            event_data={"handoff_id": str(handoff.id), "message_kind": kind},
+            ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
+        )
+    )
+    db.add(
+        TicketAudit(
+            ticket_id=handoff.ticket_id,
+            actor_id=None,
+            action="field_external_message_received",
+            outcome="success",
+            origin="SYSTEM",
+        )
+    )
+    db.commit()
+    return InboundResult(update_id, "PROCESSED", kind, handoff.id, sender_name=sender_name)
 
 
 def process_update(
@@ -169,7 +441,6 @@ def process_update(
         source_message = callback.get("message")
         sender_value = callback.get("from")
         callback_id = callback.get("id")
-        callback_data = callback.get("data")
         if (
             not isinstance(callback_id, str)
             or not callback_id
@@ -180,8 +451,6 @@ def process_update(
         kind = "TEXT_REPLY"
         source_message = message
         sender_value = message.get("from")
-        callback_id = None
-        callback_data = None
     else:
         return _ignored(db, update_id, "UNSUPPORTED", "IGNORED", "telegram_update_unsupported")
 
@@ -194,125 +463,27 @@ def process_update(
     if sender is None or sender[0] not in allowed_sender_ids:
         return _ignored(db, update_id, kind, "DENIED", "telegram_sender_not_allowed")
     sender_id, sender_name = sender
-
     source_message_id = _integer(source_message.get("message_id"))
     if source_message_id is None:
         return _ignored(db, update_id, kind, "IGNORED", "telegram_message_invalid")
 
-    if kind == "COMPLETION_CALLBACK":
-        if not isinstance(callback_data, str) or not callback_data.startswith(COMPLETION_PREFIX):
-            return _ignored(db, update_id, kind, "IGNORED", "telegram_callback_unknown")
-        try:
-            requested_handoff = UUID(callback_data[len(COMPLETION_PREFIX) :])
-        except (ValueError, TypeError):
-            return _ignored(db, update_id, kind, "IGNORED", "telegram_callback_invalid")
-        handoff = db.scalar(
-            select(FieldWorkHandoff)
-            .where(FieldWorkHandoff.id == requested_handoff)
-            .with_for_update()
+    if isinstance(callback, dict):
+        return _callback(
+            db,
+            update_id,
+            callback,
+            source_message,
+            source_message_id,
+            sender_id,
+            sender_name,
+            allowed_chat_id,
         )
-        if (
-            handoff is None
-            or handoff.delivery_status != "SENT"
-            or handoff.chat_id != allowed_chat_id
-            or handoff.telegram_message_id != source_message_id
-        ):
-            return _ignored(db, update_id, kind, "DENIED", "telegram_handoff_mismatch")
-        if handoff.work_status != "AWAITING_REPORT":
-            receipt, created = _receipt(
-                db,
-                update_id,
-                kind,
-                "DUPLICATE",
-                handoff_id=handoff.id,
-                error_code="field_work_already_reported",
-            )
-            db.commit()
-            return InboundResult(
-                update_id,
-                "DUPLICATE",
-                kind,
-                handoff.id,
-                callback_id,
-                sender_name,
-                duplicate=True,
-            )
-        telegram_message_id = None
-        body = None
-        # CallbackQuery has no event timestamp. Message.date belongs to the
-        # original bot message, so the only truthful time is OSS receipt time.
-        event_time = datetime.now(UTC)
-    else:
-        reply = source_message.get("reply_to_message")
-        reply_message_id = _integer(reply.get("message_id")) if isinstance(reply, dict) else None
-        text = message.get("text")
-        if reply_message_id is None or not isinstance(text, str) or not text.strip():
-            return _ignored(db, update_id, kind, "IGNORED", "telegram_reply_invalid")
-        body = text.strip()
-        if len(body) > 4000 or any(char == "\x00" for char in body):
-            return _ignored(db, update_id, kind, "IGNORED", "telegram_reply_invalid")
-        handoff = db.scalar(
-            select(FieldWorkHandoff)
-            .where(
-                FieldWorkHandoff.chat_id == allowed_chat_id,
-                FieldWorkHandoff.telegram_message_id == reply_message_id,
-                FieldWorkHandoff.delivery_status == "SENT",
-            )
-            .with_for_update()
-        )
-        if handoff is None:
-            return _ignored(db, update_id, kind, "IGNORED", "telegram_reply_unmatched")
-        telegram_message_id = source_message_id
-        event_time = _event_time(source_message.get("date"))
-
-    receipt, created = _receipt(
+    return _text_reply(
         db,
         update_id,
-        kind,
-        "PROCESSED",
-        handoff_id=handoff.id,
-        sync_status="PENDING" if kind == "COMPLETION_CALLBACK" else "NOT_REQUIRED",
+        message,
+        source_message_id,
+        sender_id,
+        sender_name,
+        allowed_chat_id,
     )
-    if not created:
-        db.rollback()
-        return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
-    external = FieldExternalMessage(
-        handoff_id=handoff.id,
-        update_record_id=receipt.id,
-        chat_id=allowed_chat_id,
-        telegram_message_id=telegram_message_id,
-        sender_telegram_id=sender_id,
-        sender_name=sender_name,
-        kind=kind,
-        body=body,
-        telegram_created_at=event_time,
-    )
-    db.add(external)
-    ticket = db.get(Ticket, handoff.ticket_id)
-    if kind == "COMPLETION_CALLBACK":
-        handoff.work_status = "REPORTED"
-        handoff.reported_at = event_time
-        handoff.updated_at = datetime.now(UTC)
-        event_type = "field_work_reported"
-    else:
-        event_type = "field_external_message_received"
-    db.add(
-        TicketEvent(
-            ticket_id=handoff.ticket_id,
-            event_type=event_type,
-            actor_id=None,
-            event_data={"handoff_id": str(handoff.id), "message_kind": kind},
-            ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
-        )
-    )
-    db.add(
-        TicketAudit(
-            ticket_id=handoff.ticket_id,
-            actor_id=None,
-            action=event_type,
-            outcome="success",
-            origin="SYSTEM",
-        )
-    )
-    db.commit()
-    return InboundResult(update_id, "PROCESSED", kind, handoff.id, callback_id, sender_name)

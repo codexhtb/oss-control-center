@@ -17,6 +17,7 @@ from app.modules.field_dispatch.gateway import (
 )
 from app.modules.field_dispatch.models import (
     FieldExternalMessage,
+    FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
 )
@@ -137,6 +138,12 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
         if handoff.verified_by
         else None
     )
+    completion_prompt = db.scalar(
+        select(FieldWorkCompletionPrompt)
+        .where(FieldWorkCompletionPrompt.handoff_id == handoff.id)
+        .order_by(FieldWorkCompletionPrompt.created_at.desc(), FieldWorkCompletionPrompt.id.desc())
+        .limit(1)
+    )
     return FieldWorkHandoffView.model_validate(handoff).model_copy(
         update={
             "message_preview": handoff.message_text or data.text,
@@ -144,6 +151,8 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
             "missing_fields": list(data.missing),
             "sent_by_name": sender_name,
             "verified_by_name": verified_by_name,
+            "completion_prompt_status": completion_prompt.status if completion_prompt else None,
+            "completion_prompt_sent_at": completion_prompt.sent_at if completion_prompt else None,
         }
     )
 

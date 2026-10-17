@@ -76,6 +76,7 @@ erDiagram
   tickets ||--o{ field_work_handoffs : may_have
   field_work_handoffs ||--o{ field_work_delivery_attempts : attempts
   field_work_handoffs ||--o{ field_external_messages : receives
+  field_work_handoffs ||--o{ field_work_completion_prompts : prompts
   app_users ||--o{ ticket_comments : writes
   app_users ||--o{ ticket_decisions : records
 
@@ -240,6 +241,16 @@ erDiagram
     uuid handoff_id_nullable FK
     text sync_status
   }
+  field_work_completion_prompts {
+    uuid id PK
+    uuid handoff_id FK
+    uuid callback_update_id FK
+    text chat_id
+    bigint sender_telegram_id
+    text status
+    bigint telegram_message_id_nullable
+    text error_code_nullable
+  }
 ```
 
 `field_work_handoffs` и `field_work_delivery_attempts` введены в Telegram T1.
@@ -285,6 +296,12 @@ erDiagram
   отклонённого или повторного update. Уникальность `(bot_identity, update_id)`
   обеспечивает транспортную идемпотентность; raw Telegram payload не хранится.
   Статус синхронизации callback с Telegram отделён от доменного результата.
+- `field_work_completion_prompts` (`0022`): один callback receipt на prompt,
+  числовой ID запросившего монтажника, подтверждённый Telegram message ID
+  вопроса и состояние `REQUESTING`, `WAITING`, `FAILED`, `UNCERTAIN` или
+  `COMPLETED`. Частичный уникальный индекс допускает только один активный
+  prompt на handoff. При `UNCERTAIN` автоматическая повторная отправка
+  запрещена. Исторические T2 сообщения и факты `REPORTED` сохраняются.
 - Закрытие заявки требует отдельного решения инженера в `ticket_decisions` и обновления `tickets.status=CLOSED`. Получение сообщения или изменение `work_state` не вызывает закрытия.
 
 ## Транзакционные инварианты

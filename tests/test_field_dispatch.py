@@ -130,6 +130,31 @@ def test_gateway_acknowledges_callback_and_disables_completion_button(
     }
 
 
+def test_gateway_asks_for_completion_description_with_force_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = token_file(tmp_path)
+    monkeypatch.setattr("http.client.HTTPSConnection", FakeConnection)
+    FakeConnection.response = FakeResponse(
+        200, {"ok": True, "result": {"message_id": 704, "chat": {"id": -5319791765}}}
+    )
+
+    receipt = TelegramBotGateway(TelegramGatewayConfig(path)).send_completion_prompt(
+        "-5319791765", 701
+    )
+
+    assert receipt.message_id == "704"
+    args, kwargs = FakeConnection.request_args or ((), {})
+    assert args[1].endswith("/sendMessage")
+    request_body = json.loads(kwargs["body"])
+    assert request_body["text"] == "Что было сделано?"
+    assert request_body["reply_parameters"]["message_id"] == 701
+    assert request_body["reply_markup"] == {
+        "force_reply": True,
+        "input_field_placeholder": "Опишите выполненные работы",
+    }
+
+
 @pytest.mark.integration
 def test_real_lab_gateway_confirms_synthetic_message() -> None:
     if os.environ.get("RUN_TELEGRAM_LAB_TEST") != "1":

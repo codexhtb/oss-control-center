@@ -138,6 +138,35 @@ class TelegramBotGateway:
         if result is not True:
             raise DispatchUncertain from None
 
+    def send_completion_prompt(self, chat_id: str, handoff_message_id: int) -> DispatchReceipt:
+        """Ask for the report and bind the next reply to this exact prompt."""
+
+        if chat_id != self.config.allowed_chat_id:
+            raise DispatchRejected("telegram_chat_not_allowed")
+        result = self._call(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": "Что было сделано?",
+                "reply_parameters": {
+                    "message_id": handoff_message_id,
+                    "allow_sending_without_reply": False,
+                },
+                "reply_markup": {
+                    "force_reply": True,
+                    "input_field_placeholder": "Опишите выполненные работы",
+                },
+            },
+        )
+        if not isinstance(result, dict):
+            raise DispatchUncertain from None
+        result_chat = result.get("chat")
+        message_id = result.get("message_id")
+        confirmed_chat = result_chat.get("id") if isinstance(result_chat, dict) else None
+        if str(confirmed_chat) != chat_id or not isinstance(message_id, int):
+            raise DispatchUncertain from None
+        return DispatchReceipt(chat_id=chat_id, message_id=str(message_id))
+
     def mark_message_completed(self, chat_id: str, message_id: int) -> None:
         if chat_id != self.config.allowed_chat_id:
             raise DispatchRejected("telegram_chat_not_allowed")

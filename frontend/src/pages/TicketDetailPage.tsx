@@ -282,6 +282,10 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-live="polite">
                     <strong>{fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' ? 'Ожидается результат монтажников' : fieldHandoff.data.handoff.work_status === 'REPORTED' ? 'Монтажники сообщили о выполнении' : 'Результат подтверждён инженером'}</strong>
+                    {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'REQUESTING' && <span>Бот готовит запрос описания работ.</span>}
+                    {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'WAITING' && <span>Бот запросил описание выполненных работ{fieldHandoff.data.handoff.completion_prompt_sent_at ? ` ${formatDate(fieldHandoff.data.handoff.completion_prompt_sent_at)}` : ''}.</span>}
+                    {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'FAILED' && <span>Бот не смог запросить описание. Монтажник может нажать кнопку снова.</span>}
+                    {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'UNCERTAIN' && <span>Доставка запроса описания не подтверждена.</span>}
                     {fieldHandoff.data.handoff.reported_at && <span>Ответ: {formatDate(fieldHandoff.data.handoff.reported_at)}</span>}
                     {fieldHandoff.data.handoff.verified_at && <span>Подтвердил: {fieldHandoff.data.handoff.verified_by_name || 'инженер'}, {formatDate(fieldHandoff.data.handoff.verified_at)}</span>}
                   </div>}
