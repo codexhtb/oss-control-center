@@ -321,7 +321,12 @@ class TicketResolution(Base):
     __table_args__ = (
         UniqueConstraint("id", "ticket_id", name="uq_ticket_decisions_ticket"),
         CheckConstraint("length(decision_text) > 0", name="ck_ticket_decisions_text"),
-        CheckConstraint("length(performed_actions) > 0", name="ck_ticket_decisions_actions"),
+        CheckConstraint(
+            "reason IS NULL OR reason IN ('CABLE_BREAK', 'CUSTOMER_EQUIPMENT', 'ONU_POWER', "
+            "'NETWORK_FAULT', 'CONFIGURATION_IP', 'CONNECTION_SETUP', 'CONSULTATION', "
+            "'OTHER', 'NOT_ESTABLISHED')",
+            name="ck_ticket_decisions_reason",
+        ),
         Index("ix_ticket_decisions_ticket_created", "ticket_id", "created_at", "id"),
     )
 
@@ -333,7 +338,8 @@ class TicketResolution(Base):
         PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False
     )
     decision_text: Mapped[str] = mapped_column(Text, nullable=False)
-    performed_actions: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(32))
+    performed_actions: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

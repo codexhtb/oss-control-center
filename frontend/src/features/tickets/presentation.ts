@@ -1,4 +1,16 @@
-import type { TicketPriority, TicketStatus, TicketType } from './types'
+import type { ResolutionReason, TicketPriority, TicketStatus, TicketType } from './types'
+
+export const resolutionReasonLabel: Record<ResolutionReason, string> = {
+  CABLE_BREAK: 'Обрыв кабеля',
+  CUSTOMER_EQUIPMENT: 'Оборудование абонента',
+  ONU_POWER: 'Питание ONU',
+  NETWORK_FAULT: 'Неисправность сети',
+  CONFIGURATION_IP: 'Конфигурация / IP',
+  CONNECTION_SETUP: 'Подключение / настройка',
+  CONSULTATION: 'Консультация',
+  OTHER: 'Другое',
+  NOT_ESTABLISHED: 'Причина не установлена',
+}
 
 export const typeLabel: Record<TicketType, string> = {
   SUBSCRIBER_LINKED: 'По абоненту',

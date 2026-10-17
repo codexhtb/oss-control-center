@@ -9,8 +9,8 @@ import { Notice } from '../shared/ui/Notice'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { MonitoringTicketSection } from '../features/tickets/MonitoringTicketSection'
 import { isDiagnosticReport, MonitoringReport } from '../features/tickets/MonitoringReport'
-import { eventLabel, formatDate, priorityLabel, statusLabel, ticketTitle, typeLabel } from '../features/tickets/presentation'
-import type { CallbackOutcome } from '../features/tickets/types'
+import { eventLabel, formatDate, priorityLabel, resolutionReasonLabel, statusLabel, ticketTitle, typeLabel } from '../features/tickets/presentation'
+import type { CallbackOutcome, ResolutionReason } from '../features/tickets/types'
 
 const callbackLabels: Record<CallbackOutcome, string> = {
   CONFIRMED: 'Проблема устранена', STILL_BROKEN: 'Проблема осталась', NO_ANSWER: 'Не дозвонилась',
@@ -52,9 +52,12 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [closeReason, setCloseReason] = useState('')
   const callbackRequest = useRef({ id: crypto.randomUUID(), outcome: '' })
   const [comment, setComment] = useState('')
-  const [finding, setFinding] = useState('')
   const [decisionText, setDecisionText] = useState('')
-  const [performedActions, setPerformedActions] = useState('')
+  const [decisionReason, setDecisionReason] = useState<ResolutionReason>('NOT_ESTABLISHED')
+  const [technicalOpen, setTechnicalOpen] = useState(false)
+  const [decisionsOpen, setDecisionsOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [callbacksOpen, setCallbacksOpen] = useState(false)
   const [fieldReason, setFieldReason] = useState('')
   const [engineerId, setEngineerId] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -75,7 +78,6 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const canAssign = session.permissions.includes('tickets.assign')
   const canStart = session.permissions.includes('tickets.start')
   const canClaim = canStart && session.user.role === 'engineer'
-  const canDiagnose = session.permissions.includes('tickets.diagnose')
   const canReadDiagnostics = session.permissions.includes('diagnostics.read')
   const canDecide = session.permissions.includes('tickets.resolve')
   const canClose = session.permissions.includes('tickets.close')
@@ -84,12 +86,14 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
 
   const ticketQuery = useQuery({ queryKey: ['ticket', id], queryFn: ({ signal }) => ticketApi.get(id, signal), enabled: !!id })
   const related = !!id && ticketQuery.isSuccess
+  const resolved = ticketQuery.data?.status === 'RESOLVED'
+  const linked = ticketQuery.data?.ticket_type === 'SUBSCRIBER_LINKED'
   const comments = useQuery({ queryKey: ['ticket-comments', id, commentPage], queryFn: ({ signal }) => ticketApi.comments(id, commentPage, signal), enabled: related })
-  const history = useQuery({ queryKey: ['ticket-history', id, historyPage], queryFn: ({ signal }) => ticketApi.history(id, historyPage, signal), enabled: related })
-  const diagnostics = useQuery({ queryKey: ['ticket-diagnostics', id, diagnosticPage], queryFn: ({ signal }) => ticketApi.diagnostics(id, diagnosticPage, signal), enabled: related && canReadDiagnostics })
-  const decisions = useQuery({ queryKey: ['ticket-decisions', id, decisionPage], queryFn: ({ signal }) => ticketApi.decisions(id, decisionPage, signal), enabled: related })
-  const callbacks = useQuery({ queryKey: ['ticket-callbacks', id, callbackPage], queryFn: ({ signal }) => ticketApi.callbacks(id, callbackPage, signal), enabled: related })
-  const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign })
+  const history = useQuery({ queryKey: ['ticket-history', id, historyPage], queryFn: ({ signal }) => ticketApi.history(id, historyPage, signal), enabled: related && historyOpen })
+  const diagnostics = useQuery({ queryKey: ['ticket-diagnostics', id, diagnosticPage], queryFn: ({ signal }) => ticketApi.diagnostics(id, diagnosticPage, signal), enabled: related && canReadDiagnostics && technicalOpen })
+  const decisions = useQuery({ queryKey: ['ticket-decisions', id, decisionPage], queryFn: ({ signal }) => ticketApi.decisions(id, decisionPage, signal), enabled: related && (decisionsOpen || (resolved && linked)) })
+  const callbacks = useQuery({ queryKey: ['ticket-callbacks', id, callbackPage], queryFn: ({ signal }) => ticketApi.callbacks(id, callbackPage, signal), enabled: related && linked && (resolved || callbacksOpen) })
+  const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
 
   async function runAction(name: string, action: () => Promise<unknown>, after?: () => void) {
     if (busy) return
@@ -183,33 +187,22 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
     })
   }
 
-  function submitDiagnostic(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!finding.trim()) return
-    void runAction('diagnostic', () => ticketApi.addDiagnostic(id, finding.trim(), ticket.connection_snapshot_id || undefined), () => {
-      setFinding('')
-      setDiagnosticPage(Math.ceil(((diagnostics.data?.total || 0) + 1) / 20))
-    })
-  }
-
   function submitDecision(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!decisionText.trim() || !performedActions.trim()) return
+    if (!decisionText.trim()) return
     void runAction('decision', async () => {
-      await ticketApi.addDecision(id, decisionText.trim(), performedActions.trim())
+      await ticketApi.addDecision(id, decisionText.trim(), decisionReason)
     }, () => {
       setDecisionText('')
-      setPerformedActions('')
       setDecisionPage(Math.ceil(((decisions.data?.total || 0) + 1) / 20))
     })
   }
 
   function submitResolve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!decisionText.trim() || !performedActions.trim() || busy) return
-    void runAction('resolve', () => ticketApi.resolve(id, decisionText.trim(), performedActions.trim(), ticket.version), () => {
+    if (!decisionText.trim() || busy) return
+    void runAction('resolve', () => ticketApi.resolve(id, decisionText.trim(), decisionReason, ticket.version), () => {
       setDecisionText('')
-      setPerformedActions('')
       setDecisionPage(1)
     })
   }
@@ -234,19 +227,20 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
           </section>
           {!ticket.subscriber && <div className="unlinked-note">Заявка без привязки к абоненту.</div>}
           <section className="detail-panel"><div className="detail-panel__heading"><h2><MessageSquareText size={17} /> Комментарии</h2><span>{comments.data?.total ?? '—'} записей</span></div>{comments.isPending ? <p className="muted">Загружаем комментарии…</p> : comments.isError ? <Notice tone="error">{errorText(comments.error)}</Notice> : comments.data.items.length ? <div className="fact-list">{comments.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{item.author_name || "Сотрудник"}</strong><time>{formatDate(item.created_at)}</time></div><p>{item.body}</p></article>)}</div> : <p className="empty-facts">Комментариев пока нет.</p>}<Pager page={commentPage} total={comments.data?.total || 0} change={setCommentPage} />{canComment && open && <form className="inline-form" onSubmit={submitComment}><label className="field"><span>Добавить сведения</span><textarea aria-label="Новый комментарий" value={comment} maxLength={10000} rows={3} onChange={(event) => setComment(event.target.value)} /></label><Button type="submit" disabled={!comment.trim() || !!busy}>Сохранить комментарий</Button></form>}</section>
-          {canReadDiagnostics && <section className="detail-panel"><div className="detail-panel__heading"><h2><Wrench size={17} /> Записи диагностики</h2><span>{diagnostics.data?.total ?? '—'} записей</span></div>{diagnostics.isPending ? <p className="muted">Загружаем наблюдения…</p> : diagnostics.isError ? <Notice tone="error">{errorText(diagnostics.error)}</Notice> : diagnostics.data.items.length ? <div className="fact-list">{diagnostics.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{item.source_kind === 'AUTOMATED' ? 'Проверка мониторинга' : 'Ручная проверка'}</strong><time>{formatDate(item.observed_at)}</time></div><div>{isDiagnosticReport(item.observation) ? <details className="diagnostic-details"><summary>Результат проверки оборудования</summary><MonitoringReport report={item.observation} /></details> : item.observation.finding || 'Результат не указан'}</div></article>)}</div> : <p className="empty-facts">Записей пока нет.</p>}<Pager page={diagnosticPage} total={diagnostics.data?.total || 0} change={setDiagnosticPage} />{canDiagnose && inProgress && <form className="inline-form" onSubmit={submitDiagnostic}><label className="field"><span>Наблюдение инженера</span><textarea aria-label="Наблюдение инженера" value={finding} maxLength={10000} rows={3} onChange={(event) => setFinding(event.target.value)} /></label><Button type="submit" disabled={!finding.trim() || !!busy}>Записать диагностику</Button></form>}</section>}
-          <section className="detail-panel"><div className="detail-panel__heading"><h2><ClipboardCheck size={17} /> Решения</h2><span>{decisions.data?.total ?? '—'} версий</span></div>{decisions.isPending ? <p className="muted">Загружаем решения…</p> : decisions.isError ? <Notice tone="error">{errorText(decisions.error)}</Notice> : decisions.data.items.length ? <div className="fact-list">{decisions.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{item.id === ticket.resolved_decision_id ? 'Текущий вердикт' : 'Решение инженера'}</strong><time>{formatDate(item.created_at)}</time></div><p>{item.decision_text}</p><p className="fact-item__secondary">{item.engineer_name || 'Инженер'} · Выполнено: {item.performed_actions}</p></article>)}</div> : <p className="empty-facts">Решение ещё не зафиксировано.</p>}<Pager page={decisionPage} total={decisions.data?.total || 0} change={setDecisionPage} />{canWriteVerdict && ticket.status === 'RESOLVED' && <form className="inline-form" onSubmit={submitDecision}><label className="field"><span>Уточнить вердикт</span><textarea aria-label="Уточнить вердикт" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} /></label><label className="field"><span>Выполненные действия</span><textarea aria-label="Выполненные действия" value={performedActions} maxLength={10000} rows={3} onChange={(event) => setPerformedActions(event.target.value)} /></label><Button type="submit" disabled={!decisionText.trim() || !performedActions.trim() || !!busy}>Сохранить новую версию</Button></form>}</section>
-          {ticket.ticket_type === 'SUBSCRIBER_LINKED' && (ticket.status === 'RESOLVED' || callbacks.data?.total) && <section className="detail-panel" aria-label="Контрольный обзвон"><div className="detail-panel__heading"><h2>Контрольный обзвон</h2><span>{callbacks.data?.total ?? '—'} попыток</span></div>
+          {canReadDiagnostics && <details className="detail-panel detail-disclosure" onToggle={(event) => setTechnicalOpen(event.currentTarget.open)}><summary><Wrench size={17} /> Технические сведения</summary>{technicalOpen && <div className="detail-disclosure__body">{diagnostics.isPending ? <p className="muted">Загружаем сохранённую диагностику…</p> : diagnostics.isError ? <Notice tone="error">{errorText(diagnostics.error)}</Notice> : diagnostics.data?.items.length ? <div className="fact-list">{diagnostics.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{item.source_kind === 'AUTOMATED' ? 'Проверка мониторинга' : 'Историческое наблюдение инженера'}</strong><time>{formatDate(item.observed_at)}</time></div><div>{isDiagnosticReport(item.observation) ? <MonitoringReport report={item.observation} /> : item.observation.finding || 'Результат не указан'}</div></article>)}</div> : <p className="empty-facts">Сохранённых технических записей нет.</p>}<Pager page={diagnosticPage} total={diagnostics.data?.total || 0} change={setDiagnosticPage} /></div>}</details>}
+          <details className="detail-panel detail-disclosure" onToggle={(event) => setDecisionsOpen(event.currentTarget.open)}><summary><ClipboardCheck size={17} /> Исторические решения</summary>{decisionsOpen && <div className="detail-disclosure__body">{decisions.isPending ? <p className="muted">Загружаем решения…</p> : decisions.isError ? <Notice tone="error">{errorText(decisions.error)}</Notice> : decisions.data?.items.length ? <div className="fact-list">{decisions.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{item.id === ticket.resolved_decision_id ? 'Текущий вердикт' : 'Решение инженера'}</strong><time>{formatDate(item.created_at)}</time></div><p>{item.decision_text}</p><p className="fact-item__secondary">{item.engineer_name || 'Инженер'} · {item.reason ? resolutionReasonLabel[item.reason] : 'Причина не указана в исторической записи'}</p>{item.performed_actions && <p className="fact-item__secondary">Ранее указанные действия: {item.performed_actions}</p>}</article>)}</div> : <p className="empty-facts">Решение ещё не зафиксировано.</p>}<Pager page={decisionPage} total={decisions.data?.total || 0} change={setDecisionPage} />{canWriteVerdict && ticket.status === 'RESOLVED' && <form className="inline-form" onSubmit={submitDecision}><label className="field"><span>Причина решения</span><select aria-label="Причина решения" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value as ResolutionReason)}>{Object.entries(resolutionReasonLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Уточнить решение</span><textarea aria-label="Уточнить решение" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} /></label><Button type="submit" disabled={!decisionText.trim() || !!busy}>Сохранить новую версию</Button></form>}</div>}</details>
+          {ticket.ticket_type === 'SUBSCRIBER_LINKED' && ticket.status === 'RESOLVED' && <section className="detail-panel" aria-label="Контрольный обзвон"><div className="detail-panel__heading"><h2>Контрольный обзвон</h2><span>{callbacks.data?.total ?? '—'} попыток</span></div>
             {ticket.status === 'RESOLVED' && <div className="subscriber-summary"><strong>{ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Абонент не указан'}</strong><span>ЛС {ticket.account_no}</span><span>Звонящий: {ticket.caller_phone || 'Номер не указан'}</span>{ticket.subscriber?.phone && <span>Контакт NetUP: {ticket.subscriber.phone}</span>}{ticket.subscriber?.contacts?.map((contact, index) => <span key={`${contact.value}-${index}`}>Дополнительный контакт ({contact.type}, {contact.source}): {contact.value}</span>)}<span>Решил: {ticket.resolved_by_name || 'Инженер'} · {ticket.resolved_at ? formatDate(ticket.resolved_at) : 'время не указано'}</span>{decisions.data?.items.find((item) => item.id === ticket.resolved_decision_id) && <p>Вердикт: {decisions.data.items.find((item) => item.id === ticket.resolved_decision_id)?.decision_text}</p>}</div>}
             {callbacks.isPending ? <p className="muted">Загружаем звонки…</p> : callbacks.isError ? <Notice tone="error">{errorText(callbacks.error)}</Notice> : callbacks.data?.items.length ? <div className="fact-list">{callbacks.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{callbackLabels[item.outcome]}</strong><time>{formatDate(item.occurred_at)}</time></div><p className="fact-item__secondary">{item.actor_name || 'Сотрудник'}{item.comment ? ` · ${item.comment}` : ''}</p></article>)}</div> : <p className="empty-facts">Звонков пока не было.</p>}<Pager page={callbackPage} total={callbacks.data?.total || 0} change={setCallbackPage} />
           </section>}
-          <section className="detail-panel"><div className="detail-panel__heading"><h2><Clock3 size={17} /> История</h2><span>{history.data?.total ?? '—'} событий</span></div>{history.isPending ? <p className="muted">Загружаем историю…</p> : history.isError ? <Notice tone="error">{errorText(history.error)}</Notice> : history.data.items.length ? <ol className="history-list">{history.data.items.map((item) => <li key={item.id}><span className="history-dot" /><div><strong>{eventLabel[item.event_type] || item.event_type}</strong><span>{item.actor_name || "Система"} · версия {item.ticket_version}</span>{item.event_type === 'ticket_edited' && <EditedFields data={item.event_data} />}</div><time>{formatDate(item.occurred_at)}</time></li>)}</ol> : <p className="empty-facts">История пуста.</p>}<Pager page={historyPage} total={history.data?.total || 0} change={setHistoryPage} /></section>
+          {ticket.ticket_type === 'SUBSCRIBER_LINKED' && ticket.status !== 'RESOLVED' && <details className="detail-panel detail-disclosure" onToggle={(event) => setCallbacksOpen(event.currentTarget.open)}><summary>История контрольных обзвонов</summary>{callbacksOpen && <div className="detail-disclosure__body">{callbacks.isPending ? <p className="muted">Загружаем звонки…</p> : callbacks.isError ? <Notice tone="error">{errorText(callbacks.error)}</Notice> : callbacks.data?.items.length ? <div className="fact-list">{callbacks.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{callbackLabels[item.outcome]}</strong><time>{formatDate(item.occurred_at)}</time></div><p className="fact-item__secondary">{item.actor_name || 'Сотрудник'}{item.comment ? ` · ${item.comment}` : ''}</p></article>)}</div> : <p className="empty-facts">Контрольных звонков пока не было.</p>}<Pager page={callbackPage} total={callbacks.data?.total || 0} change={setCallbackPage} /></div>}</details>}
+          <details className="detail-panel detail-disclosure" onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary><Clock3 size={17} /> История событий</summary>{historyOpen && <div className="detail-disclosure__body">{history.isPending ? <p className="muted">Загружаем историю…</p> : history.isError ? <Notice tone="error">{errorText(history.error)}</Notice> : history.data?.items.length ? <ol className="history-list">{history.data.items.map((item) => <li key={item.id}><span className="history-dot" /><div><strong>{eventLabel[item.event_type] || item.event_type}</strong><span>{item.actor_name || "Система"} · версия {item.ticket_version}</span>{item.event_type === 'ticket_edited' && <EditedFields data={item.event_data} />}</div><time>{formatDate(item.occurred_at)}</time></li>)}</ol> : <p className="empty-facts">История пуста.</p>}<Pager page={historyPage} total={history.data?.total || 0} change={setHistoryPage} /></div>}</details>
         </div>
         <aside className="ticket-detail-rail ticket-action-rail" aria-label="Управление заявкой">
           <section className="detail-panel ticket-action-panel">
             <header className="ticket-action-panel__header"><h2>Заявка #{ticket.number}</h2><span className="type-label">{typeLabel[ticket.ticket_type]}</span></header>
             <div className="ticket-action-panel__state"><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></div>
-            {ticket.status === 'RESOLVED' && <p className="rail-note">Ожидает подтверждения абонента. Инженерное решение сохранено{ticket.resolved_at ? ` ${formatDate(ticket.resolved_at)}` : ''}.</p>}
+            {ticket.status === 'RESOLVED' && <p className="rail-note">{ticket.ticket_type === 'SUBSCRIBER_LINKED' ? 'Ожидает подтверждения абонента. ' : 'Готова к закрытию без обзвона. '}Инженерное решение сохранено{ticket.resolved_at ? ` ${formatDate(ticket.resolved_at)}` : ''}.</p>}
             <dl className="ticket-meta">
               <div><dt>Автор</dt><dd>{ticket.created_by_name || 'Сотрудник'}</dd></div>
               <div><dt>Исполнитель</dt><dd>{ticket.assigned_engineer_id ? assignedName || 'Имя не указано' : 'Не назначен'}</dd></div>
@@ -256,7 +250,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               {activeWork && canClaim && ticket.assigned_engineer_id === null && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('claim', () => ticketApi.claim(id, ticket.version))}>Взять в работу <ArrowRight size={15} /></Button>}
               {activeWork && canClaim && ticket.assigned_engineer_id === session.user.id && <Button variant="secondary" disabled={!!busy} onClick={() => void runAction('release', () => ticketApi.release(id, ticket.version))}>Освободить заявку</Button>}
               {ticket.status === 'OPEN' && canStart && ticket.assigned_engineer_id === session.user.id && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('start', () => ticketApi.start(id, ticket.version))}>Начать работу <ArrowRight size={15} /></Button>}
-              {inProgress && canWriteVerdict && <form className="ticket-action-form" onSubmit={submitResolve}><label className="field"><span>Решение инженера</span><textarea ref={decisionInput} aria-label="Решение инженера" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} required /></label><label className="field"><span>Выполненные действия</span><textarea aria-label="Выполненные действия" value={performedActions} maxLength={10000} rows={2} onChange={(event) => setPerformedActions(event.target.value)} required /></label><Button type="submit" variant="primary" disabled={!decisionText.trim() || !performedActions.trim() || !!busy}>Решено</Button></form>}
+              {inProgress && canWriteVerdict && <form className="ticket-action-form" onSubmit={submitResolve}><label className="field"><span>Причина решения</span><select aria-label="Причина решения" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value as ResolutionReason)}>{Object.entries(resolutionReasonLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Решение инженера</span><textarea ref={decisionInput} aria-label="Решение инженера" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} required /></label><Button type="submit" variant="primary" disabled={!decisionText.trim() || !!busy}>Решено</Button></form>}
               {activeWork && canManualAssign && <details className="ticket-action-disclosure"><summary>Назначить инженера</summary>
                 {engineers.isPending ? <p className="rail-note">Загружаем инженеров…</p> : engineers.isError ? <Notice tone="error">{errorText(engineers.error)}</Notice> : engineers.data.items.some((item) => item.id !== ticket.assigned_engineer_id) ? <div className="ticket-action-form">
                   <label className="field"><span>Активный инженер</span><select aria-label="Активный инженер" value={engineerId} onChange={(event) => setEngineerId(event.target.value)}><option value="">Выберите инженера</option>{engineers.data.items.filter((item) => item.id !== ticket.assigned_engineer_id).map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>

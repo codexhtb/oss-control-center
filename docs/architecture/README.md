@@ -18,6 +18,7 @@
 - [Phase 5.1: предупреждение о повторных обращениях](phase-5.1-duplicate-tickets.md)
 - [Категории обращений и телефон звонящего](ticket-categories-caller-phone.md)
 - [Phase 5.7: контрольный обзвон и закрытие](phase-5.7-callback.md)
+- [Phase 5.8: упрощённая карточка и причины решения](phase-5.8-simplified-ticket-ui.md)
 - [Решения ревью и остающиеся вопросы](review.md)
 
 **Source of truth:** PostgreSQL хранит заявки, комментарии, решения, историю, аудит и диагностические snapshots. ServiceDesk Plus остаётся только в AS-IS и временном миграционном процессе; синхронизация с ним не разрабатывается. Нет необходимости знать production API NetUP, чтобы начать Phase 1.

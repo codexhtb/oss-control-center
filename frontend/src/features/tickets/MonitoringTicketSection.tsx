@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { ApiError, errorText } from '../../shared/api/client'
+import { errorText } from '../../shared/api/client'
 import { Button } from '../../shared/ui/Button'
 import { Notice } from '../../shared/ui/Notice'
 import { ticketApi } from './ticket-api'
@@ -20,7 +20,6 @@ export function MonitoringTicketSection({ ticket }: { ticket: TicketDetail }) {
     retry: false,
     staleTime: 30_000,
   })
-  const onuDenied = onu.error instanceof ApiError && [401, 403].includes(onu.error.status)
   const check = useMutation({
     mutationFn: () => ticketApi.checkTicket(ticket.id, ticket.version),
     onSuccess: () => setSaved(false),
@@ -37,6 +36,9 @@ export function MonitoringTicketSection({ ticket }: { ticket: TicketDetail }) {
     },
   })
   if (!hasConnection) return null
+  const matchedOnu = onu.data?.availability === 'AVAILABLE'
+    && onu.data.association === 'MATCHED_BY_RULE' && onu.data.candidates.length > 0
+  if (!isEthernet && !onu.isPending && !matchedOnu) return null
   const monitoring = <>
     {ticket.status !== 'CLOSED' && <div className="monitoring-action"><Button variant="secondary" disabled={check.isPending || confirm.isPending} onClick={() => check.mutate()}>{check.isPending ? 'Проверяем…' : 'Проверить подключение'}</Button></div>}
     {check.isError && <Notice tone="error">{errorText(check.error)}</Notice>}
@@ -47,7 +49,7 @@ export function MonitoringTicketSection({ ticket }: { ticket: TicketDetail }) {
   </>
   return <section className="detail-panel">
     <div className="detail-panel__heading"><h2>Диагностика подключения</h2></div>
-    {!isEthernet && (onu.isPending ? <p className="muted">Проверяем источник ONU…</p> : onu.isError && (!onu.data || onuDenied) ? <><Notice tone="error">{errorText(onu.error)}</Notice>{!onuDenied && <Button variant="quiet" onClick={() => void onu.refetch()}>Обновить данные</Button>}</> : <OnuCard result={onu.data!} vlan={ticket.selected_connection?.vlan} onRefresh={async () => (await onu.refetch({ throwOnError: true })).data!} refreshing={onu.isFetching} />)}
+    {!isEthernet && (onu.isPending ? <p className="muted">Проверяем источник ONU…</p> : <OnuCard result={onu.data!} vlan={ticket.selected_connection?.vlan} onRefresh={async () => (await onu.refetch({ throwOnError: true })).data!} refreshing={onu.isFetching} />)}
     {isEthernet && monitoring}
   </section>
 }

@@ -1818,6 +1818,54 @@ def test_0015_upgrade_preserves_existing_ticket(
         engine.dispose()
 
 
+def test_0018_upgrade_preserves_historical_decisions(
+    isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    monkeypatch.setenv(
+        "ALEMBIC_DATABASE_URL", isolated_postgres_url.render_as_string(hide_password=False)
+    )
+    command.upgrade(config, "0017_ticket_callbacks")
+    engine = create_engine(isolated_postgres_url)
+    try:
+        engineer = seed_legacy_user(engine, "reason_historical", Role.ENGINEER)
+        ticket_id, decision_id = uuid4(), uuid4()
+        with engine.begin() as connection:
+            connection.execute(
+                text("""INSERT INTO tickets
+                (id, ticket_type, description, status, priority, created_by,
+                 client_request_id, version)
+                VALUES (:id, 'INTERNAL', 'Historical decision', 'OPEN',
+                        'NORMAL', :engineer, :request, 1)"""),
+                {"id": ticket_id, "engineer": engineer, "request": uuid4()},
+            )
+            connection.execute(
+                text("""INSERT INTO ticket_decisions
+                (id, ticket_id, engineer_id, decision_text, performed_actions)
+                VALUES (:id, :ticket_id, :engineer, 'Historical verdict', 'Historical actions')"""),
+                {"id": decision_id, "ticket_id": ticket_id, "engineer": engineer},
+            )
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            historical = connection.execute(
+                text("SELECT reason, performed_actions FROM ticket_decisions WHERE id = :id"),
+                {"id": decision_id},
+            ).one()
+            assert historical == (None, "Historical actions")
+            connection.execute(
+                text("""INSERT INTO ticket_decisions
+                (id, ticket_id, engineer_id, decision_text, reason, performed_actions)
+                VALUES (:id, :ticket_id, :engineer, 'New verdict', 'CONSULTATION', NULL)"""),
+                {"id": uuid4(), "ticket_id": ticket_id, "engineer": engineer},
+            )
+            assert (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                == "0018_resolution_reasons"
+            )
+    finally:
+        engine.dispose()
+
+
 def test_category_disable_and_ticket_create_serialize(ticket_engine: Engine) -> None:
     """A pending non-key UPDATE must hold creation until the inactive row is visible."""
     operator = seed_user(ticket_engine, "category_race_operator", Role.OPERATOR)
@@ -2451,6 +2499,8 @@ def test_resolved_verdict_permissions_history_and_queues(
         decisions["total"] == 1
         and decisions["items"][0]["decision_text"] == payload["decision_text"]
     )
+    assert decisions["items"][0].get("reason") == "NOT_ESTABLISHED", decisions
+    assert decisions["items"][0]["performed_actions"] == "Synthetic check"
     assert [
         item["event_type"] for item in ticket_client.get(path + "/history").json()["items"]
     ].count("ticket_resolved") == 1
@@ -2477,9 +2527,19 @@ def test_resolved_verdict_permissions_history_and_queues(
     revision = ticket_client.post(
         path + "/decisions",
         headers=csrf(ticket_client),
-        json={"decision_text": "Synthetic revised verdict", "performed_actions": "Second check"},
+        json={"decision_text": "Synthetic revised verdict", "reason": "CABLE_BREAK"},
     )
     assert revision.status_code == 201, revision.text
+    assert revision.json()["reason"] == "CABLE_BREAK"
+    assert revision.json()["performed_actions"] is None
+    assert (
+        ticket_client.post(
+            path + "/decisions",
+            headers=csrf(ticket_client),
+            json={"decision_text": "Invalid reason", "reason": "GUESSED_FROM_ONU"},
+        ).status_code
+        == 422
+    )
     latest = ticket_client.get(path).json()
     assert latest["resolved_decision_id"] == revision.json()["id"]
     assert latest["resolved_at"] == data["resolved_at"]

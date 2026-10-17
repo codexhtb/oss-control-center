@@ -37,7 +37,7 @@ from app.modules.tickets.schemas import (
     RecordCallback,
     TicketDetail,
 )
-from app.modules.tickets.status import TicketStatus, TicketType
+from app.modules.tickets.status import ResolutionReason, TicketStatus, TicketType
 
 
 def _actor(db: Session, actor_id: UUID, permission: Permission) -> User:
@@ -837,6 +837,7 @@ def add_decision(
         ticket_id=ticket_id,
         engineer_id=actor_id,
         decision_text=payload.decision_text,
+        reason=(payload.reason or ResolutionReason.NOT_ESTABLISHED).value,
         performed_actions=payload.performed_actions,
     )
     db.add(item)
@@ -860,13 +861,14 @@ def resolve_ticket(
         raise ApiError(409, "invalid_transition", "Only in-progress tickets can be resolved")
     if ticket.assigned_engineer_id != actor_id and actor.role != Role.ADMIN:
         raise ApiError(403, "forbidden", "Only the assigned engineer can resolve this ticket")
-    if not payload.decision_text.strip() or not payload.performed_actions.strip():
-        raise ApiError(422, "empty_decision", "Engineer verdict and actions are required")
+    if not payload.decision_text.strip():
+        raise ApiError(422, "empty_decision", "Engineer verdict is required")
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,
         decision_text=payload.decision_text.strip(),
-        performed_actions=payload.performed_actions.strip(),
+        reason=(payload.reason or ResolutionReason.NOT_ESTABLISHED).value,
+        performed_actions=payload.performed_actions,
     )
     db.add(item)
     db.flush()

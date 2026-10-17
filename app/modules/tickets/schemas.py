@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.billing.provider import Contact
-from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
+from app.modules.tickets.status import ResolutionReason, TicketPriority, TicketStatus, TicketType
 
 
 class StrictModel(BaseModel):
@@ -187,7 +187,18 @@ class ManualDiagnostic(StrictModel):
 
 class AddDecision(StrictModel):
     decision_text: str = Field(min_length=1, max_length=10000)
-    performed_actions: str = Field(min_length=1, max_length=10000)
+    reason: ResolutionReason = ResolutionReason.NOT_ESTABLISHED
+    performed_actions: str | None = Field(default=None, min_length=1, max_length=10000)
+
+    @field_validator("decision_text", "performed_actions")
+    @classmethod
+    def valid_decision_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or any(category(ch) == "Cc" for ch in value):
+            raise ValueError("decision text must contain text without control characters")
+        return value
 
 
 class CloseTicket(StrictModel):
@@ -343,7 +354,8 @@ class DecisionView(BaseModel):
     engineer_id: UUID
     engineer_name: str | None = None
     decision_text: str
-    performed_actions: str
+    reason: ResolutionReason | None
+    performed_actions: str | None
     created_at: datetime
 
 

@@ -168,7 +168,8 @@ erDiagram
     uuid ticket_id FK
     uuid engineer_id FK
     text decision_text
-    text performed_actions
+    varchar reason nullable
+    text performed_actions nullable
   }
   diagnostic_snapshots {
     uuid id PK
@@ -223,7 +224,7 @@ erDiagram
 | `connection_snapshots` | `id`, `subscriber_snapshot_id`, `access_type ∈ {ETHERNET, EPON, GPON, UNKNOWN}`, nullable адрес, устройство, порт, VLAN, IP-группа, ONU ID и `field_meta`. ONU не требуется и не создаётся для Ethernet или неизвестного типа. Несколько подключений сохраняются раздельно. |
 | `tickets` | `id`, уникальный `number`, nullable `account_no`, `subscriber_snapshot_id`, `connection_snapshot_id`, `selected_service_id`, `subject VARCHAR(160)`, обязательное `description`, `status ∈ {OPEN, IN_PROGRESS, RESOLVED, CLOSED}`, `priority ∈ {LOW, NORMAL, HIGH, URGENT}`, `created_by`, nullable `assigned_engineer_id`, timestamps, nullable `resolved_by`/`resolved_at`/`resolved_decision_id` и `closed_by`/`closed_at`/`closed_decision_id`, `version`, `client_request_id`. `subject` добавлен в `0009` без заполнения исторических строк; CHECK запрещает пустое значение и управляющие символы. Для linked выбранные услуга и подключение проверяются по неизменяемому snapshot; при неоднозначности выбор явный. Уникальность `(created_by, client_request_id)` защищает создание от повторного запроса. |
 | `ticket_comments` | `id`, `ticket_id`, `author_id`, `body`, `created_at`. Записи не подменяют решение или автоматические данные. |
-| `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, `performed_actions`, `created_at`. Неизменяемые версии решения; закрытие ссылается на выбранную версию той же заявки. |
+| `ticket_decisions` | `id`, `ticket_id`, `engineer_id`, `decision_text`, nullable структурированная `reason`, nullable совместимое `performed_actions`, `created_at`. Неизменяемые версии решения; старым строкам причина не приписывается, закрытие ссылается на выбранную версию той же заявки. |
 | `diagnostic_snapshots` | `id`, `ticket_id`, nullable `connection_snapshot_id`, `source_kind`, `availability ∈ {KNOWN, UNKNOWN}`, `observation`, `observed_at`, `recorded_at`, обязательный `recorded_by` для ручной проверки. В Phase 1 допускается `source_kind=MANUAL`; автоматические значения появляются только в Phase 4. |
 | `ticket_history` | `id`, `ticket_id`, `event_type`, nullable `actor_id`, `event_data`, `occurred_at`. Append-only история доменных фактов: создание, начало работы, комментарий, решение, закрытие. Индекс `0009` по `(occurred_at, id)` поддерживает глобальную ленту; публичная сводка не выдаёт `event_data`. |
 | `audit_events` | `id`, nullable `ticket_id`, nullable `actor_id`, `action`, `outcome`, `origin`, `occurred_at`. Append-only след изменений; полные ФИО, телефон, адрес, секреты и текст жалобы в технический аудит не копируются. Отказы доступа также отражаются в `identity_audit_events` по существующему механизму identity. |

@@ -2,6 +2,7 @@ import { apiRequest } from '../../shared/api/client'
 import type {
   ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
+  ResolutionReason,
 } from './types'
 
 function withQuery(path: `/api/v1/${string}`, values: Record<string, string | number | boolean | undefined>) {
@@ -106,13 +107,13 @@ export const ticketApi = {
         ...(connectionId ? { connection_snapshot_id: connectionId } : {}),
       },
     }),
-  addDecision: (id: string, decisionText: string, performedActions: string) =>
+  addDecision: (id: string, decisionText: string, reason: ResolutionReason) =>
     apiRequest<Decision>(`${ticketPath(id)}/decisions`, {
-      method: 'POST', json: { decision_text: decisionText, performed_actions: performedActions },
+      method: 'POST', json: { decision_text: decisionText, reason },
     }),
-  resolve: (id: string, decisionText: string, performedActions: string, version: number) =>
+  resolve: (id: string, decisionText: string, reason: ResolutionReason, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/resolve`, {
-      method: 'POST', json: { decision_text: decisionText, performed_actions: performedActions }, ifMatch: `"${version}"`,
+      method: 'POST', json: { decision_text: decisionText, reason }, ifMatch: `"${version}"`,
     }),
   close: (id: string, decisionId: string, version: number, reason: string) =>
     apiRequest<Ticket>(`${ticketPath(id)}/close`, {

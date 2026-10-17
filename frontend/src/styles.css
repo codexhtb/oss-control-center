@@ -596,6 +596,10 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .diagnostic-details summary { cursor: pointer; color: #bfd2d0; font-weight: 600; }
 .diagnostic-details[open] summary { margin-bottom: .7rem; }
 .diagnostic-details p { margin: .5rem 0; }
+.detail-disclosure > summary { display: flex; align-items: center; gap: .5rem; cursor: pointer; color: #d8e5e3; font-weight: 650; }
+.detail-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.detail-disclosure[open] > summary { margin-bottom: .9rem; }
+.detail-disclosure__body { border-top: 1px solid var(--line-soft); padding-top: .9rem; }
 .category-editor { display: grid; gap: .55rem; margin: .8rem 0 1rem; }
 .category-editor-row { display: grid; grid-template-columns: minmax(180px, 1fr) 90px auto auto; align-items: end; gap: .7rem; padding: .65rem 0; border-bottom: 1px solid var(--line-soft); }
 .category-editor-row .field { min-width: 0; }

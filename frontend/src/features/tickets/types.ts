@@ -1,6 +1,9 @@
 export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'INTERNAL'
 export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'
 export type TicketPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
+export type ResolutionReason = 'CABLE_BREAK' | 'CUSTOMER_EQUIPMENT' | 'ONU_POWER' |
+  'NETWORK_FAULT' | 'CONFIGURATION_IP' | 'CONNECTION_SETUP' | 'CONSULTATION' |
+  'OTHER' | 'NOT_ESTABLISHED'
 
 export interface Page<T> {
   items: T[]
@@ -259,7 +262,8 @@ export interface Decision {
   engineer_id: string
   engineer_name?: string | null
   decision_text: string
-  performed_actions: string
+  reason: ResolutionReason | null
+  performed_actions: string | null
   created_at: string
 }
 
