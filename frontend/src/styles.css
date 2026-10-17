@@ -93,6 +93,11 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .field input::placeholder { color: #65747b; }
 .field input:hover { border-color: #58736f; }
 .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(125, 224, 195, .12); }
+.password-field__control { position: relative; display: block; }
+.password-field__control input { padding-right: 46px; }
+.password-field__toggle { position: absolute; top: 50%; right: 6px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); transform: translateY(-50%); }
+.password-field__toggle:hover { background: var(--surface-hover); color: var(--text); }
+.password-field__toggle:focus-visible { outline-offset: 1px; }
 .login-card .button--primary { width: 100%; justify-content: space-between; height: 47px; margin-top: 7px; padding: 0 16px; }
 
 @keyframes login-backdrop-in { from { opacity: 0; } }
@@ -176,6 +181,10 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 
 .account-grid { display: grid; grid-template-columns: minmax(290px, .82fr) minmax(0, 1.18fr); gap: 20px; }
 .account-grid > .panel { padding: 27px; }
+.account-password-panel { margin-top: 20px; padding: 27px; }
+.account-password-panel h2 { margin: 0 0 7px; font-size: 20px; }
+.account-password-panel > .muted { margin: 0; font-size: 12px; }
+.account-password-form { max-width: 560px; }
 .identity-panel .eyebrow { margin-top: 24px; }
 .identity-panel h2 { margin: 9px 0 27px; font-size: 23px; letter-spacing: -.035em; }
 .detail-list { margin: 0; border-top: 1px solid var(--line); }
@@ -520,6 +529,8 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .inline-form { display: grid; justify-items: start; gap: 12px; padding-top: 17px; margin-top: 17px; border-top: 1px solid var(--line); }
 .inline-form .field { width: 100%; }
 .inline-form .button { margin-top: 2px; }
+.password-editor { width: 100%; }
+.password-editor h3 { margin: 0; font-size: 15px; }
 .history-list { display: grid; gap: 0; padding: 0; margin: 0; list-style: none; }
 .history-list li { display: flex; align-items: baseline; gap: 12px; min-height: 43px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
 .history-list li:last-child { border-bottom: 0; }

@@ -269,7 +269,11 @@ def _revoke_user_sessions(db: Session, target: User, actor: User) -> None:
 def create_user(db: Session, actor: User, request: CreateUserRequest) -> tuple[User, str | None]:
     _lock_admin_changes(db)
     _ensure_actor_can_manage(db, actor)
-    temporary_password = secrets.token_urlsafe(24)
+    supplied_password = (
+        request.password.get_secret_value() if request.password is not None else None
+    )
+    password = supplied_password or secrets.token_urlsafe(24)
+    temporary_password = None if supplied_password is not None else password
     grants = (
         set(request.permissions)
         if request.permissions is not None
@@ -279,8 +283,10 @@ def create_user(db: Session, actor: User, request: CreateUserRequest) -> tuple[U
         login=request.login,
         display_name=request.display_name,
         role=request.role,
-        password_hash=hash_password(temporary_password),
-        must_change_password=True,
+        password_hash=hash_password(password),
+        must_change_password=(
+            request.must_change_password if supplied_password is not None else True
+        ),
         permissions_customized=True,
     )
     db.add(user)
@@ -298,6 +304,7 @@ def create_user(db: Session, actor: User, request: CreateUserRequest) -> tuple[U
                 "display_name": user.display_name,
                 "role": user.role,
                 "permissions": sorted(grants),
+                "must_change_password": user.must_change_password,
             },
         )
         db.commit()
@@ -366,6 +373,31 @@ def reset_password(db: Session, actor: User, user_id: UUID) -> str:
     audit(db, "password_reset", "success", actor=actor.id, target=target.id)
     db.commit()
     return temporary_password
+
+
+def set_user_password(
+    db: Session,
+    actor: User,
+    user_id: UUID,
+    new_password: str,
+    must_change_password: bool,
+) -> None:
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    target = _get_target_for_update(db, user_id)
+    target.password_hash = hash_password(new_password)
+    target.must_change_password = must_change_password
+    target.updated_at = utc_now()
+    _revoke_user_sessions(db, target, actor)
+    audit(
+        db,
+        "password_set",
+        "success",
+        actor=actor.id,
+        target=target.id,
+        details={"must_change_password": must_change_password},
+    )
+    db.commit()
 
 
 def change_own_password(db: Session, identity: AuthContext, current: str, new: str) -> None:

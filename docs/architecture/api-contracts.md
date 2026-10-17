@@ -59,18 +59,20 @@
 Секция ниже заменяет исторические значения `ticket.*`, `subscriber.*` и
 `identity.manage` в таблицах прежних фаз. Актуальные ключи перечислены в
 [RBAC matrix](rbac.md). Все приватные ответы имеют `Cache-Control: no-store`.
-Никакой endpoint не принимает plaintext пароль при создании сотрудника.
+Пароль сотрудника принимается только в защищённом теле HTTPS-запроса и никогда
+не попадает в журналы или публичные ответы.
 
 | Метод и путь | Право | Контракт |
 | --- | --- | --- |
 | `GET /auth/me`, `GET /auth/permissions` | Сессия | `user.must_change_password`, актуальные индивидуальные `permissions` |
-| `POST /auth/password` | Сессия + Origin + CSRF | `{current_password,new_password}`; новый пароль от 12 символов, отзыв всех сессий и cookies; повторный вход |
+| `POST /auth/password` | Сессия + Origin + CSRF | `{current_password,new_password}`; новый пароль непустой, до 1024 символов; отзыв всех сессий и cookies; повторный вход |
 | `GET /users` | `users.read` | `page` 1+, `size` 1–100, список `id, login, display_name, role, is_active, must_change_password, permissions` |
 | `GET /users/{id}` | `users.read` | Те же публичные поля одного сотрудника |
-| `POST /users` | `users.manage` + CSRF | `{login,display_name,role,permissions?}`; `201` пользователь и однократно `temporary_password`; `permissions` без дублей, отсутствие списка использует профиль роли |
+| `POST /users` | `users.manage` + CSRF | `{login,display_name,role,permissions?,password?,must_change_password?}`; явный непустой пароль сохраняется через Argon2id, флаг смены по умолчанию `false`; старый запрос без `password` возвращает однократный `temporary_password` с обязательной сменой |
 | `PATCH /users/{id}` | `users.manage` + CSRF | `{login?,display_name?}`; до/после в identity audit, конфликт логина `409` |
 | `PUT /users/{id}/permissions` | `users.manage` + CSRF | `{permissions:[...]}`; полная замена, действие в текущей сессии, аудит до/после; нельзя отозвать последний `users.manage` активного admin |
 | `POST /users/{id}/reset-password` | `users.manage` + CSRF | Однократный `temporary_password`, отзыв сессий цели, обязательная смена |
+| `PUT /users/{id}/password` | `users.manage` + CSRF | `{new_password,must_change_password=false}`; Argon2id, отзыв всех сессий цели, аудит без значения пароля |
 | `POST /users/{id}/deactivate`, `/reactivate` | `users.manage` + CSRF | Состояние, отзыв сессий при отключении, last-admin guard |
 | `GET /users/audit` | `users.manage` + `audit.read` | Страница событий с актором, целью, временем и несекретными деталями |
 | `PATCH /tickets/{id}` | `tickets.edit.own` или `.all` + право чтения + CSRF | `{subject?,description?}`; `If-Match: "<version>"`; только незакрытая заявка; `200` с новым ETag, `428` без версии, `409` при конфликте; событие с before/after и аудит атомарны |
@@ -107,7 +109,7 @@ Phase 1.2A использует локальные учётные записи �
 | `POST /api/v1/auth/logout` | Сессия + CSRF | `200 {status:"logged_out"}`; серверный отзыв и удаление cookies |
 | `GET /api/v1/auth/me` | Сессия | `200 {user, permissions}` |
 | `GET /api/v1/auth/permissions` | Сессия | `200 {permissions}` |
-| `POST /api/v1/users` | `identity.manage` + CSRF | `{login, display_name, role, password}` → `201 User`; конфликт логина `409` |
+| `POST /api/v1/users` | Исторически `identity.manage`; актуально `users.manage` + CSRF | Текущий контракт описан в таблице выше; конфликт логина `409` |
 | `POST /api/v1/users/{user_id}/deactivate` | `identity.manage` + CSRF | `200 User`; сессии цели отзываются; последнего активного администратора деактивировать нельзя (`409`) |
 | `PATCH /api/v1/users/{user_id}/role` | `identity.manage` + CSRF | `{role}` → `200 User`; сессии цели отзываются; последнего активного администратора понизить нельзя (`409`) |
 

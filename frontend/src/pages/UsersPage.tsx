@@ -7,6 +7,7 @@ import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { roleLabel } from '../layout/AppShell'
 import { CategoryManager } from '../features/tickets/CategoryManager'
+import { PasswordInput } from '../shared/ui/PasswordInput'
 
 type ManagedUser = User & { permissions: Permission[] }
 type Page<T> = { items: T[]; page: number; size: number; total: number }
@@ -42,6 +43,12 @@ const presets: Record<Role, Permission[]> = {
   admin: permissionGroups.flatMap((group) => group.values.map((entry) => entry.key)),
 }
 
+function generatePassword(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_'
+  const bytes = crypto.getRandomValues(new Uint8Array(24))
+  return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')
+}
+
 function PermissionEditor({ selected, change }: { selected: Permission[]; change: (next: Permission[]) => void }) {
   return <div className="permission-editor">{permissionGroups.map((group) => <fieldset key={group.title}>
     <legend>{group.title}</legend>
@@ -62,6 +69,11 @@ export function UsersPage() {
   const [role, setRole] = useState<Role>('operator')
   const [permissions, setPermissions] = useState<Permission[]>(presets.operator)
   const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null)
+  const [password, setPassword] = useState('')
+  const [passwordRepeat, setPasswordRepeat] = useState('')
+  const [mustChangePassword, setMustChangePassword] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [passwordWasGenerated, setPasswordWasGenerated] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [message, setMessage] = useState('')
@@ -83,30 +95,55 @@ export function UsersPage() {
 
   function beginCreate() {
     setSelectedId(null); setCreating(true); setLogin(''); setName(''); setRole('operator'); setPermissions(presets.operator)
-    setTemporaryPassword(null); setError(null)
+    setTemporaryPassword(null); setPassword(''); setPasswordRepeat(''); setMustChangePassword(false)
+    setChangingPassword(false); setPasswordWasGenerated(false); setError(null)
   }
 
   function beginEdit(user: ManagedUser) {
     setCreating(false); setSelectedId(user.id); setLogin(user.login); setName(user.display_name)
-    setRole(user.role); setPermissions(user.permissions); setTemporaryPassword(null); setError(null)
+    setRole(user.role); setPermissions(user.permissions); setTemporaryPassword(null); setPassword('')
+    setPasswordRepeat(''); setMustChangePassword(false); setChangingPassword(false)
+    setPasswordWasGenerated(false); setError(null)
+  }
+
+  function fillGeneratedPassword() {
+    const generated = generatePassword()
+    setPassword(generated); setPasswordRepeat(generated); setPasswordWasGenerated(true)
   }
 
   function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!password || password !== passwordRepeat) return
     void save(async () => {
-      const result = await apiRequest<ManagedUser & { temporary_password: string }>('/api/v1/users', {
-        method: 'POST', json: { login, display_name: name, role, permissions },
+      const result = await apiRequest<ManagedUser & { temporary_password: string | null }>('/api/v1/users', {
+        method: 'POST', json: { login, display_name: name, role, permissions, password, must_change_password: mustChangePassword },
       })
-      setTemporaryPassword(result.temporary_password)
+      if (passwordWasGenerated) setTemporaryPassword(password)
+      setPassword(''); setPasswordRepeat(''); setPasswordWasGenerated(false)
       setCreating(false); setSelectedId(result.id)
-    }, 'Пользователь создан. Передайте временный пароль защищённым способом.')
+    }, 'Пользователь создан.')
+  }
+
+  function submitPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selected || !password || password !== passwordRepeat) return
+    const nextPassword = password
+    const generated = passwordWasGenerated
+    void save(async () => {
+      await apiRequest(`/api/v1/users/${selected.id}/password`, {
+        method: 'PUT', json: { new_password: nextPassword, must_change_password: mustChangePassword },
+      })
+      if (generated) setTemporaryPassword(nextPassword)
+      setPassword(''); setPasswordRepeat(''); setMustChangePassword(false)
+      setPasswordWasGenerated(false); setChangingPassword(false)
+    }, 'Пароль изменён, прежние сессии отозваны.')
   }
 
   return <div className="page desk-page">
     <div className="page-heading"><div><p className="eyebrow">ДОСТУП / СОТРУДНИКИ</p><h1>Пользователи</h1></div><div className="user-actions"><Link to="/trash" className="back-link">Корзина заявок</Link><Button variant="primary" onClick={beginCreate}>Создать пользователя</Button></div></div>
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
     {message && <Notice>{message}</Notice>}
-    {temporaryPassword && <div className="detail-panel" role="status"><h2>Временный пароль</h2><p>Показан один раз. После закрытия получить его снова нельзя; потребуется сброс.</p><code className="temporary-password">{temporaryPassword}</code><div><Button onClick={() => setTemporaryPassword(null)}>Скрыть пароль</Button></div></div>}
+    {temporaryPassword && <div className="detail-panel" role="status"><h2>Сгенерированный пароль</h2><p>Скопируйте и передайте его сотруднику защищённым способом.</p><code className="temporary-password">{temporaryPassword}</code><div><Button onClick={() => setTemporaryPassword(null)}>Скрыть пароль</Button></div></div>}
     <div className="ticket-detail-layout"><div className="ticket-detail-main">
       <section className="detail-panel"><h2>Сотрудники</h2>
         {users.isPending ? <p role="status">Загружаем список…</p> : users.isError ? <Notice tone="error">{errorText(users.error)}</Notice> : <>
@@ -126,13 +163,16 @@ export function UsersPage() {
         <label className="field"><span>Логин</span><input value={login} onChange={(event) => setLogin(event.target.value)} required maxLength={64} /></label>
         <label className="field"><span>Имя сотрудника</span><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={150} /></label>
         {creating && <label className="field"><span>Базовый профиль</span><select value={role} onChange={(event) => { const next = event.target.value as Role; setRole(next); setPermissions(presets[next]) }}><option value="operator">Оператор</option><option value="engineer">Инженер OSS</option><option value="admin">Администратор</option></select></label>}
+        {creating && <div className="password-editor"><PasswordInput label="Пароль" name="new-password" value={password} onChange={(value) => { setPassword(value); setPasswordWasGenerated(false) }} /><PasswordInput label="Подтвердите пароль" name="repeat-password" value={passwordRepeat} onChange={setPasswordRepeat} />{password && passwordRepeat && password !== passwordRepeat && <Notice tone="error">Пароли не совпадают.</Notice>}<Button type="button" variant="quiet" onClick={fillGeneratedPassword}>Сгенерировать пароль</Button><label className="desk-check"><input type="checkbox" checked={mustChangePassword} onChange={(event) => setMustChangePassword(event.target.checked)} /> Потребовать смену при первом входе</label></div>}
         {creating && <PermissionEditor selected={permissions} change={setPermissions} />}
-        <Button type="submit" disabled={busy || !login.trim() || !name.trim()}>{creating ? 'Создать' : 'Сохранить имя и логин'}</Button>
+        <Button type="submit" disabled={busy || !login.trim() || !name.trim() || (creating && (!password || password !== passwordRepeat))}>{creating ? 'Создать' : 'Сохранить имя и логин'}</Button>
       </form>
       {selected && <>
         <PermissionEditor selected={permissions} change={setPermissions} />
         <Button disabled={busy || JSON.stringify([...permissions].sort()) === JSON.stringify([...selected.permissions].sort())} onClick={() => void save(() => apiRequest(`/api/v1/users/${selected.id}/permissions`, { method: 'PUT', json: { permissions } }), 'Разрешения обновлены.')}>Сохранить разрешения</Button>
-        <div className="user-actions"><Button variant="secondary" disabled={busy} onClick={() => void save(async () => { const result = await apiRequest<{ temporary_password: string }>(`/api/v1/users/${selected.id}/reset-password`, { method: 'POST' }); setTemporaryPassword(result.temporary_password) }, 'Пароль сброшен, прежние сессии отозваны.')}>Выдать временный пароль</Button>
+        {!changingPassword && <Button variant="secondary" disabled={busy} onClick={() => { setChangingPassword(true); setPassword(''); setPasswordRepeat(''); setMustChangePassword(false); setPasswordWasGenerated(false) }}>Изменить пароль</Button>}
+        {changingPassword && <form className="inline-form password-editor" onSubmit={submitPassword}><h3>Новый пароль</h3><PasswordInput label="Пароль" name="new-password" value={password} onChange={(value) => { setPassword(value); setPasswordWasGenerated(false) }} /><PasswordInput label="Подтвердите пароль" name="repeat-password" value={passwordRepeat} onChange={setPasswordRepeat} />{password && passwordRepeat && password !== passwordRepeat && <Notice tone="error">Пароли не совпадают.</Notice>}<Button type="button" variant="quiet" onClick={fillGeneratedPassword}>Сгенерировать пароль</Button><label className="desk-check"><input type="checkbox" checked={mustChangePassword} onChange={(event) => setMustChangePassword(event.target.checked)} /> Потребовать смену при первом входе</label><div className="user-actions"><Button type="submit" disabled={busy || !password || password !== passwordRepeat}>Сохранить пароль</Button><Button type="button" variant="quiet" disabled={busy} onClick={() => { setChangingPassword(false); setPassword(''); setPasswordRepeat('') }}>Отмена</Button></div></form>}
+        <div className="user-actions">
           <Button variant="quiet" disabled={busy} onClick={() => void save(() => apiRequest(`/api/v1/users/${selected.id}/${selected.is_active ? 'deactivate' : 'reactivate'}`, { method: 'POST' }), selected.is_active ? 'Доступ отключён.' : 'Доступ восстановлен.')}>{selected.is_active ? 'Отключить' : 'Включить'}</Button></div>
       </>}
     </section>}</aside></div>

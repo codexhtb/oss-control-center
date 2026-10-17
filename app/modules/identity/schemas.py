@@ -23,6 +23,8 @@ class CreateUserRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=150)
     role: Role
     permissions: list[Permission] | None = None
+    password: SecretStr | None = None
+    must_change_password: bool = False
 
     @field_validator("login")
     @classmethod
@@ -35,6 +37,13 @@ class CreateUserRequest(BaseModel):
         value = value.strip()
         if not value or any(char in value for char in "\r\n\x00"):
             raise ValueError("display_name is invalid")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def nonempty_password(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            validate_password(value.get_secret_value())
         return value
 
 
@@ -79,6 +88,18 @@ class ChangePasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def strong_new_password(cls, value: SecretStr) -> SecretStr:
+        validate_password(value.get_secret_value())
+        return value
+
+
+class SetUserPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    new_password: SecretStr
+    must_change_password: bool = False
+
+    @field_validator("new_password")
+    @classmethod
+    def nonempty_new_password(cls, value: SecretStr) -> SecretStr:
         validate_password(value.get_secret_value())
         return value
 

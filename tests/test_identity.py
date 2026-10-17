@@ -257,6 +257,14 @@ def test_no_horizontal_or_vertical_privilege_escalation(
         identity_client.post(f"/api/v1/users/{other.id}/deactivate", headers=headers).status_code
         == 403
     )
+    assert (
+        identity_client.put(
+            f"/api/v1/users/{other.id}/password",
+            json={"new_password": "1", "must_change_password": False},
+            headers=headers,
+        ).status_code
+        == 403
+    )
 
 
 def test_no_self_registration_and_admin_user_management(
@@ -597,6 +605,76 @@ def test_personal_grants_temporary_password_and_live_session_revocation(
             event.action for event in events
         }
         assert temp not in str([event.details for event in events])
+
+
+def test_admin_sets_unrestricted_password_and_employee_changes_it(
+    identity_engine: Engine, identity_client: TestClient
+) -> None:
+    admin = seed_user(identity_engine, "admin", Role.ADMIN)
+    assert login(identity_client, admin.login).status_code == 200
+    headers = csrf(identity_client)
+    created = identity_client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "login": "short-password-worker",
+            "display_name": "Short Password Worker",
+            "role": "operator",
+            "password": "1",
+            "must_change_password": False,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["temporary_password"] is None
+    assert created.json()["must_change_password"] is False
+    user_id = UUID(created.json()["id"])
+
+    with TestClient(identity_client.app, base_url=ORIGIN, headers={"Origin": ORIGIN}) as worker:
+        assert login(worker, "short-password-worker", "1").status_code == 200
+        changed = identity_client.put(
+            f"/api/v1/users/{user_id}/password",
+            headers=headers,
+            json={"new_password": "2", "must_change_password": True},
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.headers["cache-control"] == "no-store"
+        assert worker.get("/api/v1/auth/me").status_code == 401
+        assert login(worker, "short-password-worker", "2").status_code == 200
+        assert worker.get("/api/v1/auth/me").json()["user"]["must_change_password"] is True
+        own_change = worker.post(
+            "/api/v1/auth/password",
+            headers=csrf(worker),
+            json={"current_password": "2", "new_password": "3"},
+        )
+        assert own_change.status_code == 200, own_change.text
+        assert worker.get("/api/v1/auth/me").status_code == 401
+        assert login(worker, "short-password-worker", "3").status_code == 200
+
+    assert identity_client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "login": "empty-password-worker",
+            "display_name": "Empty Password Worker",
+            "role": "operator",
+            "password": "",
+        },
+    ).status_code == 422
+    with Session(identity_engine) as db:
+        target = db.get(User, user_id)
+        assert target.password_hash.startswith("$argon2id$")
+        events = db.scalars(
+            select(IdentityAuditEvent).where(IdentityAuditEvent.target_user_id == user_id)
+        ).all()
+        assert {event.action for event in events} >= {
+            "user_created",
+            "password_set",
+            "password_change",
+        }
+        assert all(
+            not ({"password", "new_password", "current_password"} & set(event.details or {}))
+            for event in events
+        )
 
 
 def test_admin_edit_reset_reactivate_and_last_grant_guard(

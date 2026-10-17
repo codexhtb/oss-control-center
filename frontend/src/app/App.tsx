@@ -57,7 +57,7 @@ function AppRoutes() {
     <AppShell session={session.data} onLoggedOut={sessionChanged}>
       <Routes>
         <Route path="/" element={<WorkspacePage session={session.data} />} />
-        <Route path="/account" element={<AccountPage session={session.data} />} />
+        <Route path="/account" element={<AccountPage session={session.data} onPasswordChanged={sessionChanged} />} />
         <Route path="/tickets" element={canReadTickets ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/new" element={session.data.permissions.includes('tickets.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/:id" element={canReadTickets ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />

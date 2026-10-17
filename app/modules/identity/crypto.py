@@ -24,8 +24,8 @@ def normalize_login(value: str) -> str:
 
 
 def validate_password(value: str) -> str:
-    if not 12 <= len(value) <= 1024:
-        raise ValueError("password must have 12-1024 characters")
+    if not 1 <= len(value) <= 1024:
+        raise ValueError("password must have 1-1024 characters")
     return value
 
 

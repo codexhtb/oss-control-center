@@ -29,6 +29,7 @@ from app.modules.identity.schemas import (
     PermissionsResponse,
     ResetPasswordResponse,
     SetPermissionsRequest,
+    SetUserPasswordRequest,
     UpdateUserRequest,
     UserResponse,
 )
@@ -44,6 +45,7 @@ from app.modules.identity.service import (
     reactivate_user,
     reset_password,
     revoke_session,
+    set_user_password,
     set_user_permissions,
     update_user,
 )
@@ -340,6 +342,25 @@ def admin_reset_password(
     password = reset_password(db, identity.user, user_id)
     response.headers["Cache-Control"] = "no-store"
     return ResetPasswordResponse(temporary_password=password)
+
+
+@router.put("/users/{user_id}/password")
+def admin_set_password(
+    user_id: UUID,
+    payload: SetUserPasswordRequest,
+    response: Response,
+    identity: ManagedIdentityDep,
+    db: SessionDep,
+) -> dict[str, str]:
+    set_user_password(
+        db,
+        identity.user,
+        user_id,
+        payload.new_password.get_secret_value(),
+        payload.must_change_password,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"status": "password_changed"}
 
 
 @router.post("/users/{user_id}/reactivate", response_model=ManagedUserResponse)
