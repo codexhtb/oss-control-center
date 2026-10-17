@@ -194,6 +194,27 @@ export interface TicketComment {
   created_at: string
 }
 
+export interface FieldWorkHandoff {
+  id: string
+  ticket_id: string
+  reason: string
+  delivery_status: 'DRAFT' | 'SENDING' | 'SENT' | 'FAILED' | 'UNCERTAIN'
+  work_status: 'AWAITING_REPORT'
+  chat_id: string
+  telegram_message_id: number | null
+  message_preview: string | null
+  ready_to_send: boolean
+  missing_fields: string[]
+  created_by: string
+  sent_by: string | null
+  sent_by_name: string | null
+  last_error_code: string | null
+  created_at: string
+  send_started_at: string | null
+  sent_at: string | null
+  updated_at: string
+}
+
 export interface Diagnostic {
   id: string
   ticket_id: string

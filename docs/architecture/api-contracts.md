@@ -146,7 +146,9 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `GET /tickets/{ticket_id}` | Оператор, инженер | — | Заявка; для manual/internal `subscriber` и `selected_connection` равны `null`, `technical_state=UNKNOWN`; комментарии, решения и ручные наблюдения читаются отдельно |
 | `POST /tickets/{ticket_id}/start` | Инженер | `If-Match` с версией заявки | `OPEN → IN_PROGRESS`, история и аудит; повтор или конфликт версии — `409` |
 | `POST /tickets/{ticket_id}/assignment` | Инженер | `{engineer_id}` + `If-Match` | Назначение активного инженера, история и аудит; статус не меняется |
-| `POST /tickets/{ticket_id}/field-work-request` | Инженер | `{reason}` + `If-Match` | Событие с причиной из `IN_PROGRESS`; статус не меняется, Telegram не вызывается |
+| `POST /tickets/{ticket_id}/field-work-request` | `tickets.field_work` | `{reason}` + `If-Match` | Атомарно сохраняет причину, историю, аудит и `FieldWorkHandoff` со статусом `DRAFT`; статус заявки не меняется, Telegram не вызывается |
+| `GET /tickets/{ticket_id}/field-work-handoffs/latest` | `tickets.field_work` | — | Последняя сохранённая передача, точный preview из ticket snapshot, недостающие поля и состояние доставки |
+| `POST /tickets/{ticket_id}/field-work-handoffs/{handoff_id}/send` | `tickets.field_work` + CSRF | `{client_request_id}` | Только LAB: отдельная подтверждённая отправка в фиксированный чат. `SENT` и `message_id` сохраняются лишь после ответа Bot API; `FAILED` допускает явный повтор, `UNCERTAIN` блокирует автоматический повтор |
 | `POST /tickets/{ticket_id}/comments` | Оператор, инженер | `{body}` | `201` комментарий, история и аудит; закрытая заявка в Phase 1 не изменяется |
 | `GET /tickets/{ticket_id}/comments`, `/manual-diagnostics`, `/decisions` | Оператор, инженер | `page`, `size` | Страницы сохранённых записей |
 | `POST /tickets/{ticket_id}/manual-diagnostics` | Инженер | `{finding, observed_at, connection_snapshot_id?}` | `201` snapshot с `source_kind=MANUAL`, история и аудит; требуется `IN_PROGRESS` |

@@ -74,6 +74,7 @@ erDiagram
   tickets ||--o{ ticket_history : has
   tickets o|--o{ audit_events : targets
   tickets ||--o{ field_work_handoffs : may_have
+  field_work_handoffs ||--o{ field_work_delivery_attempts : attempts
   field_work_handoffs ||--o{ field_external_messages : receives
   app_users ||--o{ ticket_comments : writes
   app_users ||--o{ ticket_decisions : records
@@ -201,10 +202,25 @@ erDiagram
   field_work_handoffs {
     uuid id PK
     uuid ticket_id FK
-    text delivery_state
-    text work_state
-    text chat_id_nullable
-    text message_id_nullable
+    int ticket_version
+    text reason
+    text delivery_status
+    text work_status
+    text chat_id
+    bigint telegram_message_id_nullable
+    text message_text_nullable
+    uuid created_by FK
+    uuid sent_by_nullable FK
+    text last_error_code_nullable
+  }
+  field_work_delivery_attempts {
+    uuid id PK
+    uuid handoff_id FK
+    uuid client_request_id
+    uuid actor_id FK
+    text status
+    text error_code_nullable
+    bigint telegram_message_id_nullable
   }
   field_external_messages {
     uuid id PK
@@ -217,7 +233,10 @@ erDiagram
   }
 ```
 
-`field_work_handoffs` и `field_external_messages` вводятся в Phase 3. Автоматические источники в `diagnostic_snapshots` вводятся в Phase 4; Phase 1 может сохранять ручное наблюдение инженера.
+`field_work_handoffs` и `field_work_delivery_attempts` введены в Telegram T1.
+`field_external_messages` остаётся будущим входящим этапом. Автоматические
+источники в `diagnostic_snapshots` вводятся в Phase 4; Phase 1 может сохранять
+ручное наблюдение инженера.
 
 ## Таблицы Phase 1
 
@@ -240,7 +259,15 @@ erDiagram
 
 ## Таблицы Phase 3 и независимость состояний
 
-- `field_work_handoffs`: `id`, `ticket_id`, `created_by`, проверенный payload, `delivery_state`, `work_state`, nullable `chat_id`/`message_id`, timestamps и поля ручного fallback. `delivery_state` и `work_state` — разные колонки; ни одна не заменяет `tickets.status`.
+- `field_work_handoffs`: T1 хранит `ticket_id`, версию заявки, причину и
+  сформированный snapshot сообщения, фиксированный `chat_id`, подтверждённый
+  `telegram_message_id`, автора, отправителя, времена и технический код ошибки.
+  `delivery_status ∈ {DRAFT,SENDING,SENT,FAILED,UNCERTAIN}` и
+  `work_status=AWAITING_REPORT` независимы от `tickets.status`.
+- `field_work_delivery_attempts`: каждая явная попытка имеет уникальный
+  `(handoff_id, client_request_id)`, автора, состояние, технический код ошибки,
+  подтверждённый Telegram message ID и времена. Это защищает от двойного
+  нажатия; при `UNCERTAIN` автоматический повтор запрещён.
 - `field_external_messages`: `id`, `handoff_id`, `chat_id`, `message_id`, `update_id`, отправитель при разрешённом хранении, текст, время. Уникальность `(chat_id, message_id)` и `(bot_identity, update_id)` защищает от повторного импорта. Данные хранятся в PostgreSQL.
 - Закрытие заявки требует отдельного решения инженера в `ticket_decisions` и обновления `tickets.status=CLOSED`. Получение сообщения или изменение `work_state` не вызывает закрытия.
 

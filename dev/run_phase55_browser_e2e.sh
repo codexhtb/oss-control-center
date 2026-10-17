@@ -7,12 +7,14 @@ cd "$project_dir"
 browser_db="oss_test_phase55_browser_$(date -u +%Y%m%d%H%M%S)"
 browser_override="$project_dir/.dev-secrets/phase55-browser.compose.yaml"
 browser_script=${OSS_BROWSER_SCRIPT:-$project_dir/dev/browser_phase55.cjs}
+seed_script=${OSS_SEED_SCRIPT:-$project_dir/dev/seed_phase55_e2e.py}
 test -r "$browser_script"
+test -r "$seed_script"
 created=0
 switched=0
 
 compose() {
-  docker compose --env-file .env.dev -f compose.dev.yaml -f compose.monitoring.dev.yaml -f compose.bdcom.dev.yaml "$@"
+  docker compose --env-file .env.dev -f compose.dev.yaml -f compose.monitoring.dev.yaml -f compose.bdcom.dev.yaml -f compose.telegram.dev.yaml "$@"
 }
 
 cleanup() {
@@ -42,7 +44,7 @@ docker run --rm --network oss-control-dev_backend --env-file .env.dev \
 
 docker run --rm --user 1001:1001 --network oss-control-dev_backend --env-file .env.dev \
   -e POSTGRES_HOST=postgres -e "POSTGRES_DB=$browser_db" \
-  -v "$project_dir/dev/seed_phase55_e2e.py:/app/dev/seed_phase55_e2e.py:ro" \
+  -v "$seed_script:/app/dev/seed_phase55_e2e.py:ro" \
   -v "$project_dir/.dev-secrets/users.json:/run/dev-users.json:ro" \
   oss-control-dev-api:local python dev/seed_phase55_e2e.py
 

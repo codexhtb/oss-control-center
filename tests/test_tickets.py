@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.v1.billing import get_billing_provider
 from app.api.v1.diagnostics import engine_dependency, onu_dependency
+from app.api.v1.tickets import get_field_dispatch_gateway
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.db.session import get_session
@@ -27,6 +28,8 @@ from app.main import create_app
 from app.modules.billing.quality import DataQuality
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.correlation import DiagnosticReport, Observation
+from app.modules.field_dispatch.gateway import DispatchReceipt, DispatchRejected, DispatchUncertain
+from app.modules.field_dispatch.models import FieldWorkDeliveryAttempt, FieldWorkHandoff
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -128,7 +131,14 @@ def seed_legacy_user(engine: Engine, name: str, role: Role) -> UUID:
 
 
 def seed_snapshot(
-    engine: Engine, user: User, count: int = 1, ip_groups: list | None = None
+    engine: Engine,
+    user: User,
+    count: int = 1,
+    ip_groups: list | None = None,
+    *,
+    phone: str | None = None,
+    actual_address: str | None = None,
+    house_number: str | None = None,
 ) -> tuple[SubscriberSnapshot, list[ConnectionSnapshot]]:
     with Session(engine, expire_on_commit=False) as db:
         snapshot = SubscriberSnapshot(
@@ -138,7 +148,9 @@ def seed_snapshot(
             expires_at=datetime.now(UTC) + timedelta(hours=1),
             requested_by=user.id,
             full_name="Synthetic Subscriber",
-            phone=None,
+            phone=phone,
+            actual_address=actual_address,
+            house_number=house_number,
             contracts=[{"id": "contract-test"}],
             services=[{"id": "service-test"}],
         )
@@ -1858,10 +1870,10 @@ def test_0018_upgrade_preserves_historical_decisions(
                 VALUES (:id, :ticket_id, :engineer, 'New verdict', 'CONSULTATION', NULL)"""),
                 {"id": uuid4(), "ticket_id": ticket_id, "engineer": engineer},
             )
-            assert (
-                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-                == "0018_resolution_reasons"
-            )
+            actual_head = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert actual_head == ScriptDirectory.from_config(config).get_current_head()
     finally:
         engine.dispose()
 
@@ -2793,6 +2805,132 @@ def test_concurrent_callback_conflict_has_one_durable_result(
                 select(func.count())
                 .select_from(TicketCallback)
                 .where(TicketCallback.ticket_id == UUID(created.json()["id"]))
+            )
+            == 1
+        )
+
+
+class RecordingFieldGateway:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def send_message(self, chat_id: str, message: str) -> DispatchReceipt:
+        self.calls.append((chat_id, message))
+        return DispatchReceipt(chat_id=chat_id, message_id="701")
+
+
+class RejectingFieldGateway:
+    def __init__(self, uncertain: bool = False) -> None:
+        self.calls = 0
+        self.uncertain = uncertain
+
+    def send_message(self, _chat_id: str, _message: str) -> DispatchReceipt:
+        self.calls += 1
+        if self.uncertain:
+            raise DispatchUncertain
+        raise DispatchRejected("telegram_http_400")
+
+
+def test_field_work_requires_explicit_confirmed_telegram_delivery(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "field_dispatch_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(
+        ticket_engine,
+        engineer,
+        phone="+000000000",
+        actual_address="г. Тест, ул. Безопасная",
+        house_number="20",
+    )
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    claimed = ticket_client.post(
+        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200, claimed.text
+
+    requested = ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Synthetic on-site cable inspection"},
+    )
+    assert requested.status_code == 200, requested.text
+    assert gateway.calls == []
+    latest = ticket_client.get(f"{path}/field-work-handoffs/latest")
+    assert latest.status_code == 200, latest.text
+    handoff = latest.json()["handoff"]
+    assert handoff["delivery_status"] == "DRAFT"
+    assert handoff["ready_to_send"] is True
+    assert "Заявка #" in handoff["message_preview"]
+    assert "Абонент: Synthetic Subscriber" in handoff["message_preview"]
+    assert "Контакт NetUP: +000000000" in handoff["message_preview"]
+    assert "Адрес: г. Тест, ул. Безопасная, д. 20" in handoff["message_preview"]
+    assert "Отправил инженер: Field_Dispatch_Engineer" in handoff["message_preview"]
+
+    send_path = f"{path}/field-work-handoffs/{handoff['id']}/send"
+    request_id = str(uuid4())
+    assert ticket_client.post(send_path, json={"client_request_id": request_id}).status_code == 403
+    sent = ticket_client.post(
+        send_path, headers=csrf(ticket_client), json={"client_request_id": request_id}
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["delivery_status"] == "SENT"
+    assert sent.json()["telegram_message_id"] == 701
+    assert sent.json()["sent_by"] == str(engineer.id)
+    assert len(gateway.calls) == 1
+    for replay_id in (request_id, str(uuid4())):
+        replay = ticket_client.post(
+            send_path, headers=csrf(ticket_client), json={"client_request_id": replay_id}
+        )
+        assert replay.status_code == 200, replay.text
+    assert len(gateway.calls) == 1
+
+    second = ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"3"'},
+        json={"reason": "Synthetic repeat dispatch"},
+    )
+    assert second.status_code == 200, second.text
+    second_handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
+    second_path = f"{path}/field-work-handoffs/{second_handoff['id']}/send"
+    rejected_gateway = RejectingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: rejected_gateway
+    failed = ticket_client.post(
+        second_path, headers=csrf(ticket_client), json={"client_request_id": str(uuid4())}
+    )
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["delivery_status"] == "FAILED"
+    assert failed.json()["last_error_code"] == "telegram_http_400"
+
+    uncertain_gateway = RejectingFieldGateway(uncertain=True)
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: uncertain_gateway
+    uncertain = ticket_client.post(
+        second_path, headers=csrf(ticket_client), json={"client_request_id": str(uuid4())}
+    )
+    assert uncertain.status_code == 200, uncertain.text
+    assert uncertain.json()["delivery_status"] == "UNCERTAIN"
+    blocked = ticket_client.post(
+        second_path, headers=csrf(ticket_client), json={"client_request_id": str(uuid4())}
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["code"] == "field_send_uncertain"
+    assert uncertain_gateway.calls == 1
+
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(FieldWorkHandoff)) == 2
+        assert db.scalar(select(func.count()).select_from(FieldWorkDeliveryAttempt)) == 3
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(
+                    TicketAudit.action == "field_work_sent",
+                    TicketAudit.ticket_id == UUID(created.json()["id"]),
+                )
             )
             == 1
         )

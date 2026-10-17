@@ -1,6 +1,8 @@
 """Versioned Service Desk routes backed solely by PostgreSQL."""
 
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -9,7 +11,24 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
+from app.core.config import get_settings
 from app.core.errors import ApiError
+from app.modules.field_dispatch.gateway import (
+    FieldDispatchGateway,
+    TelegramBotGateway,
+    TelegramGatewayConfig,
+)
+from app.modules.field_dispatch.schemas import (
+    FieldWorkHandoffView,
+    LatestFieldWorkHandoff,
+    SendFieldWork,
+)
+from app.modules.field_dispatch.service import (
+    LAB_CHAT_ID,
+    handoff_view,
+    latest_handoff,
+    send_handoff,
+)
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role
@@ -130,6 +149,22 @@ def can_field_work(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_FIELD_WORK)
 
 
+def can_view_field_work(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext:
+    return _allowed(identity, db, Permission.TICKET_FIELD_WORK)
+
+
+def get_field_dispatch_gateway() -> FieldDispatchGateway:
+    if get_settings().app_env != "dev":
+        raise ApiError(503, "telegram_lab_only", "Telegram field dispatch is lab-only")
+    token_file = os.environ.get("TELEGRAM_BOT_TOKEN_FILE")
+    chat_id = os.environ.get("TELEGRAM_FIELD_CHAT_ID", LAB_CHAT_ID)
+    if not token_file or chat_id != LAB_CHAT_ID:
+        raise ApiError(503, "telegram_not_configured", "Telegram field dispatch is unavailable")
+    return TelegramBotGateway(
+        TelegramGatewayConfig(token_file=Path(token_file), allowed_chat_id=LAB_CHAT_ID)
+    )
+
+
 def can_diagnose(identity: CsrfIdentityDep, db: SessionDep) -> AuthContext:
     return _allowed(identity, db, Permission.TICKET_MANUAL_DIAGNOSTIC)
 
@@ -161,6 +196,8 @@ StartDep = Annotated[AuthContext, Depends(can_start)]
 AssignDep = Annotated[AuthContext, Depends(can_assign)]
 EngineerListDep = Annotated[AuthContext, Depends(can_list_engineers)]
 FieldDep = Annotated[AuthContext, Depends(can_field_work)]
+FieldReadDep = Annotated[AuthContext, Depends(can_view_field_work)]
+FieldGatewayDep = Annotated[FieldDispatchGateway, Depends(get_field_dispatch_gateway)]
 DiagnoseDep = Annotated[AuthContext, Depends(can_diagnose)]
 DecisionDep = Annotated[AuthContext, Depends(can_decide)]
 CloseDep = Annotated[AuthContext, Depends(can_close)]
@@ -650,6 +687,34 @@ def field_work(
     ticket = request_field_work(db, identity.user.id, ticket_id, payload, _version(if_match))
     _etag(response, TicketView.model_validate(ticket))
     return ticket
+
+
+@router.get(
+    "/{ticket_id}/field-work-handoffs/latest", response_model=LatestFieldWorkHandoff
+)
+def latest_field_work(ticket_id: UUID, identity: FieldReadDep, db: SessionDep):
+    _mutation_scope(db, identity, ticket_id)
+    item = latest_handoff(db, ticket_id)
+    return {"handoff": handoff_view(db, item, identity.user) if item is not None else None}
+
+
+@router.post(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/send",
+    response_model=FieldWorkHandoffView,
+)
+def send_field_work(
+    ticket_id: UUID,
+    handoff_id: UUID,
+    payload: SendFieldWork,
+    identity: FieldDep,
+    gateway: FieldGatewayDep,
+    db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = send_handoff(
+        db, gateway, identity.user.id, ticket_id, handoff_id, payload.client_request_id
+    )
+    return handoff_view(db, item, identity.user)
 
 
 @router.post("/{ticket_id}/comments", status_code=201, response_model=CommentView)

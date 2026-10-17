@@ -3,6 +3,7 @@ import type {
   ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
   ResolutionReason,
+  FieldWorkHandoff,
 } from './types'
 
 function withQuery(path: `/api/v1/${string}`, values: Record<string, string | number | boolean | undefined>) {
@@ -95,6 +96,12 @@ export const ticketApi = {
   requestFieldWork: (id: string, reason: string, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/field-work-request`, {
       method: 'POST', json: { reason }, ifMatch: `"${version}"`,
+    }),
+  latestFieldWork: (id: string, signal?: AbortSignal) =>
+    apiRequest<{ handoff: FieldWorkHandoff | null }>(`${ticketPath(id)}/field-work-handoffs/latest`, { signal }),
+  sendFieldWork: (id: string, handoffId: string, requestId: string) =>
+    apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/send`, {
+      method: 'POST', json: { client_request_id: requestId },
     }),
   addComment: (id: string, body: string) =>
     apiRequest<TicketComment>(`${ticketPath(id)}/comments`, { method: 'POST', json: { body } }),

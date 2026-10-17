@@ -513,6 +513,8 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .subscriber-summary > strong { grid-column: 1 / -1; color: #e8f3ed; font-size: 15px; }
 .subscriber-summary span { line-height: 1.5; overflow-wrap: anywhere; }
 .subscriber-summary span strong { color: var(--accent); }
+.field-dispatch-preview { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid #35534c; }
+.field-dispatch-preview pre { margin: 0; padding: 11px 12px; border: 1px solid #35534c; border-radius: 8px; background: #101c1a; color: #dcefe5; font: inherit; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .unlinked-note { padding: 14px 17px; border: 1px solid #34534e; border-radius: 9px; background: #192b2a; color: #a8c9bf; font-size: 12px; }
 .fact-list { display: grid; }
 .fact-item { padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
@@ -689,3 +691,5 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .user-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .temporary-password { display: inline-block; margin: 12px 0; padding: 10px 12px; border: 1px solid #577667; border-radius: 7px; color: #e8f5ed; font-size: 15px; overflow-wrap: anywhere; }
 .fact-item pre { max-height: 180px; overflow: auto; color: #9fb9b1; font-size: 11px; white-space: pre-wrap; }
+.field-dispatch-preview { display: grid; gap: 9px; min-width: 0; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.field-dispatch-preview pre { max-height: 260px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #c8dad5; font: inherit; font-size: 12px; line-height: 1.55; }

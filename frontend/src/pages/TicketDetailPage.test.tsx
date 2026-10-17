@@ -11,7 +11,8 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
   decisions: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
-  assign: vi.fn(), requestFieldWork: vi.fn(), addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
+  assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
+  addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
 
 const ticketId = '00000000-0000-4000-8000-000000000010'
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.decisions).mockResolvedValue(empty)
   vi.mocked(ticketApi.callbacks).mockResolvedValue(empty)
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff: null })
   vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
     source: 'BDCOM', retrieved_at: base.created_at,
     availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
@@ -76,6 +78,60 @@ it('lets only the assigned engineer release an active ticket', async () => {
   renderDetail('engineer')
   fireEvent.click(await screen.findByRole('button', { name: 'Освободить заявку' }))
   await waitFor(() => expect(ticketApi.release).toHaveBeenCalledWith(ticketId, 3))
+})
+
+it('saves a field-work reason before an explicit Telegram send', async () => {
+  const staff = session('engineer')
+  const privileged: MeResponse = {
+    ...staff,
+    permissions: [...staff.permissions, 'tickets.field_work'],
+  }
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base,
+    ticket_type: 'SUBSCRIBER_LINKED',
+    status: 'IN_PROGRESS',
+    assigned_engineer_id: staff.user.id,
+    account_no: 'SYNTHETIC-001',
+    subscriber: {
+      full_name: 'Синтетический абонент', organization_name: null, phone: '+000000',
+      actual_address: 'г. Тест, ул. Безопасная', house_number: '20',
+      fetched_at: base.created_at, source: 'MOCK', services: [], connections: [],
+    },
+  })
+  const handoff = {
+    id: '00000000-0000-4000-8000-000000000040', ticket_id: ticketId,
+    reason: 'Проверить кабель', delivery_status: 'DRAFT' as const,
+    work_status: 'AWAITING_REPORT' as const, chat_id: '-5319791765',
+    telegram_message_id: null, message_preview: 'Заявка #73\nПричина передачи: Проверить кабель',
+    ready_to_send: true, missing_fields: [], created_by: staff.user.id,
+    sent_by: null, sent_by_name: null, last_error_code: null,
+    created_at: base.created_at, send_started_at: null, sent_at: null,
+    updated_at: base.updated_at,
+  }
+  vi.mocked(ticketApi.latestFieldWork)
+    .mockResolvedValueOnce({ handoff: null })
+    .mockResolvedValue({ handoff })
+  vi.mocked(ticketApi.requestFieldWork).mockResolvedValue({ ...base, version: 4 })
+  vi.mocked(ticketApi.sendFieldWork).mockResolvedValue({
+    ...handoff, delivery_status: 'SENT', telegram_message_id: 701,
+    sent_by: staff.user.id, sent_at: base.updated_at, ready_to_send: false,
+  })
+
+  renderDetail('engineer', privileged)
+  fireEvent.click(await screen.findByText('Выездные работы'))
+  fireEvent.change(screen.getByRole('textbox', { name: 'Причина передачи' }), {
+    target: { value: 'Проверить кабель' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Зафиксировать запрос' }))
+  await waitFor(() => expect(ticketApi.requestFieldWork).toHaveBeenCalledWith(
+    ticketId, 'Проверить кабель', 3,
+  ))
+  expect(ticketApi.sendFieldWork).not.toHaveBeenCalled()
+  const send = await screen.findByRole('button', { name: 'Отправить боту' })
+  fireEvent.click(send)
+  await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
+    ticketId, handoff.id, expect.any(String),
+  ))
 })
 
 it('does not offer claim or reassignment of another engineer ticket', async () => {

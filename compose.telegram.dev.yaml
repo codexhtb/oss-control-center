@@ -1,0 +1,47 @@
+services:
+  telegram_secret_init:
+    image: alpine:3.22
+    user: "0:0"
+    restart: "no"
+    command:
+      - /bin/sh
+      - -eu
+      - -c
+      - >-
+        rm -f /run/telegram/telegram-bot-token.tmp
+        /run/telegram/telegram-bot-token &&
+        cp /run/source/token /run/telegram/telegram-bot-token.tmp &&
+        chmod 0400 /run/telegram/telegram-bot-token.tmp &&
+        chown 1001:1001 /run/telegram/telegram-bot-token.tmp &&
+        mv -f /run/telegram/telegram-bot-token.tmp
+        /run/telegram/telegram-bot-token
+    volumes:
+      - type: bind
+        source: /root/oss-secrets/telegram-bot-token
+        target: /run/source/token
+        read_only: true
+        bind:
+          create_host_path: false
+      - telegram_secret_runtime:/run/telegram
+    networks:
+      - backend
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    user: "1001:1001"
+    environment:
+      TELEGRAM_BOT_TOKEN_FILE: /run/telegram/telegram-bot-token
+      TELEGRAM_FIELD_CHAT_ID: "-5319791765"
+    volumes:
+      - telegram_secret_runtime:/run/telegram:ro
+    depends_on:
+      telegram_secret_init:
+        condition: service_completed_successfully
+
+volumes:
+  telegram_secret_runtime:

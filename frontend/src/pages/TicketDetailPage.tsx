@@ -84,6 +84,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const canClose = session.permissions.includes('tickets.close')
   const canCallback = session.permissions.includes('tickets.callback')
   const canComment = session.permissions.includes('tickets.comment')
+  const canFieldWork = session.permissions.includes('tickets.field_work')
 
   const ticketQuery = useQuery({ queryKey: ['ticket', id], queryFn: ({ signal }) => ticketApi.get(id, signal), enabled: !!id })
   const related = !!id && ticketQuery.isSuccess
@@ -95,6 +96,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const decisions = useQuery({ queryKey: ['ticket-decisions', id, decisionPage], queryFn: ({ signal }) => ticketApi.decisions(id, decisionPage, signal), enabled: related && (decisionsOpen || (resolved && linked)) })
   const callbacks = useQuery({ queryKey: ['ticket-callbacks', id, callbackPage], queryFn: ({ signal }) => ticketApi.callbacks(id, callbackPage, signal), enabled: related && linked && (resolved || callbacksOpen) })
   const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
+  const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork })
 
   async function runAction(name: string, action: () => Promise<unknown>, after?: () => void) {
     if (busy) return
@@ -110,6 +112,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         queryClient.invalidateQueries({ queryKey: ['ticket-diagnostics', id] }),
         queryClient.invalidateQueries({ queryKey: ['ticket-decisions', id] }),
         queryClient.invalidateQueries({ queryKey: ['ticket-callbacks', id] }),
+        queryClient.invalidateQueries({ queryKey: ['ticket-field-work', id] }),
         queryClient.invalidateQueries({ queryKey: ['tickets'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       ])
@@ -260,9 +263,21 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               </details>}
               {ticket.status === 'RESOLVED' && ticket.ticket_type === 'SUBSCRIBER_LINKED' && canCallback && <div className="ticket-action-form"><strong>Результат звонка</strong><label className="field"><span>Комментарий (обязателен, если проблема осталась)</span><textarea aria-label="Комментарий обзвона" value={callbackComment} maxLength={2000} rows={2} onChange={(event) => setCallbackComment(event.target.value)} /></label><Button variant="primary" disabled={!!busy} onClick={() => submitCallback('CONFIRMED')}>Проблема устранена</Button><Button disabled={!!busy || !callbackComment.trim()} onClick={() => submitCallback('STILL_BROKEN')}>Проблема осталась</Button><Button variant="quiet" disabled={!!busy} onClick={() => submitCallback('NO_ANSWER')}>Не дозвонилась</Button></div>}
               {ticket.status === 'RESOLVED' && ticket.ticket_type !== 'SUBSCRIBER_LINKED' && canClose && <details className="ticket-action-disclosure"><summary>Закрыть без обзвона</summary><div className="ticket-action-form"><label className="field"><span>Причина закрытия без звонка</span><textarea aria-label="Причина закрытия без звонка" value={closeReason} maxLength={1000} rows={2} onChange={(event) => setCloseReason(event.target.value)} /></label><Button disabled={!!busy || !closeReason.trim()} onClick={() => void runAction('close', () => ticketApi.close(id, ticket.resolved_decision_id!, ticket.version, closeReason.trim()))}>Закрыть заявку</Button></div></details>}
-              {inProgress && session.permissions.includes('tickets.field_work') && <details className="ticket-action-disclosure"><summary>Выездные работы</summary><div className="ticket-action-form">
+              {inProgress && canFieldWork && <details className="ticket-action-disclosure"><summary>Выездные работы</summary><div className="ticket-action-form">
                 <label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={2000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label>
                 <Button disabled={!fieldReason.trim() || !!busy} onClick={() => void runAction('field', () => ticketApi.requestFieldWork(id, fieldReason.trim(), ticket.version), () => setFieldReason(''))}>Зафиксировать запрос</Button>
+                {fieldHandoff.isPending && <p className="rail-note">Проверяем сохранённую передачу…</p>}
+                {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
+                {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
+                  <strong>Передача в Telegram</strong>
+                  <pre>{fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>
+                  {fieldHandoff.data.handoff.missing_fields.length > 0 && <p className="rail-note">Не хватает данных: {fieldHandoff.data.handoff.missing_fields.join(', ')}.</p>}
+                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
+                  {fieldHandoff.data.handoff.delivery_status === 'SENDING' && <p className="rail-note">Отправка выполняется. Повторный запрос заблокирован.</p>}
+                  {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">Telegram отклонил отправку. Можно повторить отдельным действием.</Notice>}
+                  {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <Notice tone="error">Результат отправки неизвестен. Автоматический повтор заблокирован во избежание дубля.</Notice>}
+                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID()))}>Отправить боту</Button>}
+                </div>}
               </div></details>}
             </div>}
             {ticket.status === 'CLOSED' && <p className="rail-note">Закрыта {ticket.closed_at ? formatDate(ticket.closed_at) : ''}. История доступна для просмотра.</p>}

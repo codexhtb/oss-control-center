@@ -8,6 +8,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
+from app.modules.field_dispatch.models import FieldWorkDeliveryAttempt, FieldWorkHandoff
+from app.modules.field_dispatch.service import create_handoff
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role
@@ -232,6 +234,13 @@ def purge_ticket(
         ticket.resolved_by = None
         ticket.resolved_at = None
         db.flush()
+    handoff_ids = select(FieldWorkHandoff.id).where(FieldWorkHandoff.ticket_id == ticket_id)
+    db.execute(
+        delete(FieldWorkDeliveryAttempt).where(
+            FieldWorkDeliveryAttempt.handoff_id.in_(handoff_ids)
+        )
+    )
+    db.execute(delete(FieldWorkHandoff).where(FieldWorkHandoff.ticket_id == ticket_id))
     for model in (
         DiagnosticSnapshot,
         DiagnosticCheck,
@@ -733,7 +742,14 @@ def request_field_work(
     if ticket.status != TicketStatus.IN_PROGRESS:
         raise ApiError(409, "invalid_transition", "Start ticket before requesting field work")
     _changed(ticket)
-    _fact(db, ticket, actor_id, "field_work_requested", {"reason": payload.reason})
+    handoff = create_handoff(db, ticket, actor_id, payload.reason)
+    _fact(
+        db,
+        ticket,
+        actor_id,
+        "field_work_requested",
+        {"reason": payload.reason, "handoff_id": str(handoff.id)},
+    )
     db.commit()
     db.refresh(ticket)
     return ticket
