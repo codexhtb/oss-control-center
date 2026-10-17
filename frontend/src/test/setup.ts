@@ -6,5 +6,6 @@ afterEach(() => {
   if (typeof document !== 'undefined') {
     cleanup()
     document.cookie = 'oss_csrf=; Max-Age=0; Path=/'
+    window.sessionStorage.clear()
   }
 })

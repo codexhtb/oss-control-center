@@ -6,6 +6,7 @@ import { ticketApi } from '../features/tickets/ticket-api'
 import type { MeResponse } from '../shared/api/types'
 import { apiRequest } from '../shared/api/client'
 import { WorkspacePage } from './WorkspacePage'
+import { scheduleWelcome } from '../features/auth/welcome-session'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { list: vi.fn(), recentEvents: vi.fn() } }))
 vi.mock('../shared/api/client', async (importOriginal) => {
@@ -30,6 +31,8 @@ beforeEach(() => {
   vi.mocked(ticketApi.recentEvents).mockReset()
   vi.mocked(apiRequest).mockReset()
   vi.mocked(apiRequest).mockResolvedValue({ status: 'ready', dependencies: { postgres: 'up' } })
+  vi.mocked(ticketApi.list).mockResolvedValue({ items: [], page: 1, size: 1, total: 0 })
+  vi.mocked(ticketApi.recentEvents).mockResolvedValue({ items: [], page: 1, size: 8, total: 0 })
 })
 
 it('takes dashboard totals and recent events from ServiceDesk API', async () => {
@@ -52,4 +55,14 @@ it('does not request ServiceDesk information for technical admin', async () => {
   expect(await screen.findByText(/Для просмотра заявок необходимо разрешение/)).toBeInTheDocument()
   expect(ticketApi.list).not.toHaveBeenCalled()
   expect(ticketApi.recentEvents).not.toHaveBeenCalled()
+})
+
+it('shows the depth welcome once after a new login', async () => {
+  scheduleWelcome(user.user.id)
+  const first = renderWorkspace(user)
+  expect(await screen.findByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
+  first.unmount()
+
+  renderWorkspace(user)
+  expect(await screen.findByRole('heading', { name: /Добрый день, Тестовый оператор/ })).toBeInTheDocument()
 })

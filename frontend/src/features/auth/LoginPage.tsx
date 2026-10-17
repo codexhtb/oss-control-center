@@ -1,11 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { ArrowRight, LockKeyhole } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { ApiError, errorText } from '../../shared/api/client'
 import { Button } from '../../shared/ui/Button'
 import { Notice } from '../../shared/ui/Notice'
 import { authApi } from './auth-api'
+import { LoginBrandHero } from './LoginBrandHero'
+import { scheduleWelcome } from './welcome-session'
 
 export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [login, setLogin] = useState('')
@@ -14,8 +16,9 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
   const navigate = useNavigate()
   const mutation = useMutation({
     mutationFn: ({ login, password }: { login: string; password: string }) => authApi.login(login, password),
-    onSuccess: () => {
+    onSuccess: (session) => {
       setPassword('')
+      scheduleWelcome(session.user.id)
       queryClient.clear()
       onAuthenticated()
       navigate('/', { replace: true })
@@ -37,15 +40,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
     <main className="login-layout">
       <div className="login-backdrop" aria-hidden="true" />
       <div className="login-content">
-        <div className="login-intro">
-          <div className="brand-mark brand-mark--large"><span>O</span><span className="brand-mark__dot" /></div>
-          <p className="eyebrow">Единая рабочая среда OSS</p>
-          <h1>Контроль заявок.<br /><span>Ясность в деталях.</span></h1>
-          <p className="login-intro__description">
-            Рабочее пространство call-центра и инженеров: от первого обращения до проверенного решения.
-          </p>
-          <div className="login-intro__security"><ShieldCheck size={18} /> Защищённая внутренняя система</div>
-        </div>
+        <LoginBrandHero />
         <div className="login-card">
           <div className="login-card__icon"><LockKeyhole size={23} /></div>
           <p className="eyebrow">OSS Control Center</p>
@@ -84,10 +79,8 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
               {!mutation.isPending && <ArrowRight size={17} aria-hidden="true" />}
             </Button>
           </form>
-          <p className="login-card__foot">Доступ определяется назначенными разрешениями. Самостоятельная регистрация недоступна.</p>
         </div>
       </div>
-      <div className="login-footer">OSS CONTROL CENTER <span>•</span> ВНУТРЕННИЙ КОНТУР</div>
     </main>
   )
 }
