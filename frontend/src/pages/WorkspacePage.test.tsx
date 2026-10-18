@@ -52,8 +52,16 @@ it('takes dashboard totals and recent events from ServiceDesk API', async () => 
 it('does not request ServiceDesk information for technical admin', async () => {
   renderWorkspace({ ...user, user: { ...user.user, role: 'admin' }, permissions: ['users.manage'] })
   expect(await screen.findByText(/Для просмотра заявок необходимо разрешение/)).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: /Добрый день, Тестовый оператор/ })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Тестовый оператор' })).not.toBeInTheDocument()
   expect(ticketApi.list).not.toHaveBeenCalled()
   expect(ticketApi.recentEvents).not.toHaveBeenCalled()
+})
+
+it('keeps the ordinary heading for an engineer', () => {
+  renderWorkspace({ ...user, user: { ...user.user, role: 'engineer' } })
+  expect(screen.getByRole('heading', { name: /Добрый день, Тестовый оператор/ })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Тестовый оператор' })).not.toBeInTheDocument()
 })
 
 it('keeps the welcome on every visit to the workspace', async () => {

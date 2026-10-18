@@ -337,9 +337,15 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .workspace-welcome__orbit i { position: absolute; inset: 0; border: 1px solid rgba(125, 224, 195, .22); border-radius: 50%; box-shadow: inset 0 0 18px rgba(93, 216, 179, .05); }
 .workspace-welcome__orbit i:nth-child(2) { inset: 26px; border-color: rgba(125, 224, 195, .15); transform: translateZ(18px); }
 .workspace-welcome__orbit i:nth-child(3) { inset: 58px; border-color: rgba(174, 246, 225, .32); background: rgba(85, 195, 162, .08); transform: translateZ(34px); }
-.workspace-welcome__name { position: relative; display: inline-block; max-width: 100%; padding: 0; border: 0; border-bottom: 1px solid rgba(255, 203, 222, .35); border-radius: 2px; background: none; color: inherit; font: inherit; letter-spacing: inherit; line-height: inherit; text-align: left; text-shadow: inherit; overflow-wrap: anywhere; cursor: pointer; transition: color .2s ease, border-color .2s ease; }
-.workspace-welcome__name:hover { color: #fff5f8; border-color: #ffd1e1; }
+.workspace-welcome__name { position: relative; display: inline-block; max-width: 100%; padding: 0; border: 0; border-radius: 2px; background: none; color: inherit; font: inherit; letter-spacing: inherit; line-height: inherit; text-align: left; text-shadow: inherit; overflow-wrap: anywhere; cursor: pointer; transition: color .2s ease, text-shadow .2s ease; }
+.workspace-welcome__name:hover { color: #fff5f8; text-shadow: 0 0 20px rgba(255, 206, 225, .25); }
 .workspace-welcome__name:focus-visible { outline: 2px solid #ffd1e1; outline-offset: 5px; }
+.workspace-welcome__name-word { display: inline-block; opacity: 0; clip-path: inset(0 100% 0 0); animation: workspace-name-reveal .8s var(--word-delay) cubic-bezier(.2, .75, .2, 1) both; }
+.workspace-welcome__name-word + .workspace-welcome__name-word { margin-left: .2em; }
+@keyframes workspace-name-reveal {
+  from { opacity: 0; filter: blur(5px); transform: translateY(12px); clip-path: inset(0 100% 0 0); }
+  to { opacity: 1; filter: blur(0); transform: translateY(0); clip-path: inset(0 0 0 0); }
+}
 .workspace-welcome__burst { position: absolute; z-index: 3; inset: 0; pointer-events: none; }
 .workspace-welcome__particle { position: absolute; left: 50%; top: 50%; opacity: 0; animation: workspace-petal-burst 1.35s var(--petal-delay) cubic-bezier(.16, .75, .28, 1) both; }
 .workspace-welcome__particle--flower { font-size: .5em; line-height: 1; filter: drop-shadow(0 4px 8px rgba(255, 150, 192, .28)); }
@@ -361,6 +367,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
   .workspace-welcome > .role-chip { width: fit-content; margin-top: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .workspace-welcome__name-word { animation: none !important; opacity: 1; clip-path: none; }
   .workspace-welcome__particle { display: none; }
   .workspace-welcome__burst::after { content: '🌸'; position: absolute; top: -.75em; right: -.5em; font-size: .45em; line-height: 1; }
 }

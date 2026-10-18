@@ -19,6 +19,7 @@ const petals = [
 export function WorkspaceWelcome({ user }: { user: MeResponse['user'] }) {
   const [burst, setBurst] = useState(0)
   const clearBurst = useRef<number | null>(null)
+  const nameWords = user.display_name.trim().split(/\s+/)
 
   useEffect(() => () => {
     if (clearBurst.current !== null) window.clearTimeout(clearBurst.current)
@@ -37,10 +38,15 @@ export function WorkspaceWelcome({ user }: { user: MeResponse['user'] }) {
     <section className="workspace-welcome" aria-labelledby="workspace-welcome-title">
       <div className="workspace-welcome__glow" aria-hidden="true" />
       <div className="workspace-welcome__content">
-        <h1 id="workspace-welcome-title">
+        <h1 id="workspace-welcome-title" aria-label={`Добро пожаловать, ${user.display_name}`}>
           <span>Добро пожаловать,</span>{' '}
-          <button className="workspace-welcome__name" type="button" onClick={bloom} title="Нажмите, чтобы появились цветы">
-            {user.display_name}
+          <button className="workspace-welcome__name" type="button" onClick={bloom} title="Нажмите, чтобы появились цветы" aria-label={user.display_name}>
+            {nameWords.map((word, index) => <span
+              className="workspace-welcome__name-word"
+              key={index}
+              style={{ '--word-delay': `${Math.min(index, 4) * 115 + 120}ms` } as CSSProperties}
+              aria-hidden="true"
+            >{word}</span>)}
             {burst > 0 && <span className="workspace-welcome__burst" key={burst} aria-hidden="true">
               {petals.map((petal, index) => <span
                 className={`workspace-welcome__particle workspace-welcome__particle--${petal.kind}`}

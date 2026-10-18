@@ -20,6 +20,7 @@ it('creates a small flower burst only after clicking the employee name', () => {
   const { container } = render(<WorkspaceWelcome user={user} />)
   const name = screen.getByRole('button', { name: 'Тестовый оператор' })
   expect(screen.getByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
+  expect([...container.querySelectorAll('.workspace-welcome__name-word')].map((part) => part.textContent)).toEqual(['Тестовый', 'оператор'])
   expect(container.querySelectorAll('.workspace-welcome__particle')).toHaveLength(0)
 
   fireEvent.click(name)

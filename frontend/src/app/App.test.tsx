@@ -64,6 +64,8 @@ describe('session shell', () => {
     })
     render(<App />)
     expect(await screen.findByText(/Для просмотра заявок необходимо разрешение/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Добрый день, Тестовый оператор/ })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /Добро пожаловать/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Заявки/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('link', { name: /Мой доступ/ }))
     await waitFor(() => expect(screen.getByText('Управление учётными записями')).toBeInTheDocument())
