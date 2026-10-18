@@ -331,7 +331,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .workspace-welcome__glow { position: absolute; z-index: -1; right: 10%; top: 50%; width: 330px; aspect-ratio: 1; border-radius: 50%; background: rgba(63, 184, 149, .11); filter: blur(50px); transform: translateY(-50%); }
 .workspace-welcome__content { position: relative; z-index: 1; min-width: 0; max-width: 800px; }
 .workspace-welcome__content h1 { margin: 0; color: #eaf5f2; font-size: clamp(32px, 4vw, 52px); font-weight: 640; letter-spacing: -.06em; line-height: 1.06; text-shadow: 0 15px 38px rgba(0, 0, 0, .42); transform-style: preserve-3d; }
-.workspace-welcome__content h1 > span { display: block; color: #a9beb9; font-size: .53em; font-weight: 560; letter-spacing: -.025em; transform: translateZ(10px); }
+.workspace-welcome__content h1 > .workspace-welcome__greeting { display: block; color: #a9beb9; font-size: .53em; font-weight: 560; letter-spacing: -.025em; transform: translateZ(10px); }
 .workspace-welcome > .role-chip { position: relative; z-index: 2; }
 .workspace-welcome__orbit { position: absolute; right: 12%; top: 50%; width: 170px; aspect-ratio: 1; transform: translateY(-50%) rotateX(63deg) rotateZ(-18deg); transform-style: preserve-3d; }
 .workspace-welcome__orbit i { position: absolute; inset: 0; border: 1px solid rgba(125, 224, 195, .22); border-radius: 50%; box-shadow: inset 0 0 18px rgba(93, 216, 179, .05); }

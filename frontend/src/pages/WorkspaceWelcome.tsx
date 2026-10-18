@@ -47,7 +47,7 @@ export function WorkspaceWelcome({ user }: { user: MeResponse['user'] }) {
       <div className="workspace-welcome__glow" aria-hidden="true" />
       <div className="workspace-welcome__content">
         <h1 id="workspace-welcome-title" aria-label={`Добро пожаловать, ${user.display_name}`}>
-          <span>Добро пожаловать,</span>{' '}
+          <span className="workspace-welcome__greeting">Добро пожаловать,</span>{' '}
           {user.role === 'operator'
             ? <button className="workspace-welcome__name workspace-welcome__name--interactive" type="button" onClick={bloom} title="Нажмите, чтобы появились цветы" aria-label={user.display_name}>
                 {nameContent}

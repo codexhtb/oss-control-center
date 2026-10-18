@@ -19,6 +19,8 @@ async function main() {
     await page.getByRole('heading', { name: /Добро пожаловать/ }).waitFor()
 
     const name = page.locator('.workspace-welcome__name')
+    const operatorNameSize = await name.evaluate((element) => getComputedStyle(element).fontSize)
+    assert.ok(parseFloat(operatorNameSize) > parseFloat(await page.locator('.workspace-welcome__greeting').evaluate((element) => getComputedStyle(element).fontSize)))
     assert.equal(await name.evaluate((element) => getComputedStyle(element).borderBottomStyle), 'none')
     assert.equal(await page.locator('.workspace-welcome__name-word').count(), 2)
     assert.ok(await page.locator('.workspace-welcome__name-letter').count() > 10)
@@ -70,8 +72,13 @@ async function main() {
         await otherPage.getByRole('button', { name: 'Войти' }).click()
         await otherPage.getByRole('heading', { name: /Добро пожаловать/ }).waitFor()
         assert.equal(await otherPage.locator('.workspace-welcome').count(), 1)
+        assert.equal(await otherPage.locator('.workspace-welcome__name').evaluate((element) => getComputedStyle(element).fontSize), operatorNameSize)
         assert.equal(await otherPage.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'workspace-letter-assemble')
         assert.equal(await otherPage.locator('.workspace-welcome__name--interactive').count(), 0)
+        if (process.env.OSS_SCREENSHOTS === '1') {
+          await otherPage.waitForTimeout(1600)
+          await otherPage.screenshot({ path: `/run/screenshots/workspace-welcome-${login}.png` })
+        }
         await otherPage.locator('.workspace-welcome__name').click()
         assert.equal(await otherPage.locator('.workspace-welcome__particle').count(), 0)
       } finally {
