@@ -21,7 +21,8 @@ async function main() {
     const name = page.locator('.workspace-welcome__name')
     assert.equal(await name.evaluate((element) => getComputedStyle(element).borderBottomStyle), 'none')
     assert.equal(await page.locator('.workspace-welcome__name-word').count(), 2)
-    assert.equal(await page.locator('.workspace-welcome__name-word').first().evaluate((element) => getComputedStyle(element).animationName), 'workspace-name-reveal')
+    assert.ok(await page.locator('.workspace-welcome__name-letter').count() > 10)
+    assert.equal(await page.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'workspace-letter-assemble')
     assert.equal(await page.locator('.workspace-welcome__particle').count(), 0)
     await name.click()
     assert.equal(await page.locator('.workspace-welcome__particle').count(), 10)
@@ -36,9 +37,14 @@ async function main() {
     assert.equal(await page.getByRole('heading', { name: /Добрый день/ }).count(), 0)
     await page.reload()
     await page.getByRole('heading', { name: /Добро пожаловать/ }).waitFor()
+    if (process.env.OSS_SCREENSHOTS === '1') {
+      await page.screenshot({ path: '/run/screenshots/workspace-name-entrance-early.png' })
+      await page.waitForTimeout(420)
+      await page.screenshot({ path: '/run/screenshots/workspace-name-entrance-middle.png' })
+    }
 
     await page.emulateMedia({ reducedMotion: 'reduce' })
-    assert.equal(await page.locator('.workspace-welcome__name-word').first().evaluate((element) => getComputedStyle(element).animationName), 'none')
+    assert.equal(await page.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'none')
     await page.locator('.workspace-welcome__name').click()
     assert.equal(await page.locator('.workspace-welcome__particle').count(), 10)
     assert.equal(await page.locator('.workspace-welcome__particle').first().evaluate((element) => getComputedStyle(element).display), 'none')
@@ -62,13 +68,17 @@ async function main() {
         await otherPage.locator('#username').fill(login)
         await otherPage.locator('#current-password').fill(users[login])
         await otherPage.getByRole('button', { name: 'Войти' }).click()
-        await otherPage.getByRole('heading', { name: /Добрый день/ }).waitFor()
-        assert.equal(await otherPage.locator('.workspace-welcome').count(), 0)
+        await otherPage.getByRole('heading', { name: /Добро пожаловать/ }).waitFor()
+        assert.equal(await otherPage.locator('.workspace-welcome').count(), 1)
+        assert.equal(await otherPage.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'workspace-letter-assemble')
+        assert.equal(await otherPage.locator('.workspace-welcome__name--interactive').count(), 0)
+        await otherPage.locator('.workspace-welcome__name').click()
+        assert.equal(await otherPage.locator('.workspace-welcome__particle').count(), 0)
       } finally {
         await otherContext.close()
       }
     }
-    console.log('Engineer and admin keep the ordinary heading')
+    console.log('Engineer and admin see the welcome without flower interaction')
   } finally {
     await browser.close()
   }

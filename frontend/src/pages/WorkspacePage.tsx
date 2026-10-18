@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, ArrowUpRight, KeyRound, ShieldCheck } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, KeyRound } from 'lucide-react'
 import { Link } from 'react-router'
-import { roleLabel } from '../layout/AppShell'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { eventLabel, formatDate, statusLabel, ticketTitle } from '../features/tickets/presentation'
 import type { MeResponse } from '../shared/api/types'
@@ -23,9 +22,7 @@ export function WorkspacePage({ session }: { session: MeResponse }) {
 
   return (
     <div className="page page--overview desk-page">
-      {session.user.role === 'operator'
-        ? <WorkspaceWelcome user={session.user} />
-        : <div className="page-heading desk-heading"><div><p className="eyebrow">ОБЗОР</p><h1>Добрый день, {session.user.display_name}</h1><p className="page-heading__description">Очередь заявок и действия команды на основе данных ServiceDesk.</p></div><div className="role-chip"><ShieldCheck size={17} /> {roleLabel(session.user.role)}</div></div>}
+      <WorkspaceWelcome user={session.user} />
       {hasDeskAccess ? <>
         <div className="dashboard-metrics">
           <Link to="/tickets?status=OPEN" className="metric-card"><span>ОТКРЫТЫЕ</span><strong>{open.data?.total ?? '—'}</strong><small>{open.isError ? 'Не удалось загрузить' : 'Ожидают работы'}</small><ArrowUpRight size={17} /></Link>

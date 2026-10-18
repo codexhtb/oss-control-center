@@ -21,6 +21,7 @@ it('creates a small flower burst only after clicking the employee name', () => {
   const name = screen.getByRole('button', { name: 'Тестовый оператор' })
   expect(screen.getByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
   expect([...container.querySelectorAll('.workspace-welcome__name-word')].map((part) => part.textContent)).toEqual(['Тестовый', 'оператор'])
+  expect(container.querySelectorAll('.workspace-welcome__name-letter')).toHaveLength(Array.from('Тестовыйоператор').length)
   expect(container.querySelectorAll('.workspace-welcome__particle')).toHaveLength(0)
 
   fireEvent.click(name)
@@ -29,5 +30,13 @@ it('creates a small flower burst only after clicking the employee name', () => {
   expect(container.querySelectorAll('.workspace-welcome__particle')).toHaveLength(10)
 
   act(() => vi.advanceTimersByTime(1600))
+  expect(container.querySelectorAll('.workspace-welcome__particle')).toHaveLength(0)
+})
+
+it('shows the same animated name without flower interaction for other roles', () => {
+  const { container } = render(<WorkspaceWelcome user={{ ...user, role: 'engineer' }} />)
+  expect(screen.getByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
+  expect(container.querySelectorAll('.workspace-welcome__name-letter')).toHaveLength(Array.from('Тестовыйоператор').length)
+  expect(screen.queryByRole('button', { name: 'Тестовый оператор' })).not.toBeInTheDocument()
   expect(container.querySelectorAll('.workspace-welcome__particle')).toHaveLength(0)
 })
