@@ -7,7 +7,6 @@ import { Button } from '../../shared/ui/Button'
 import { Notice } from '../../shared/ui/Notice'
 import { authApi } from './auth-api'
 import { LoginBrandHero } from './LoginBrandHero'
-import { scheduleWelcome } from './welcome-session'
 
 export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [login, setLogin] = useState('')
@@ -16,9 +15,8 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
   const navigate = useNavigate()
   const mutation = useMutation({
     mutationFn: ({ login, password }: { login: string; password: string }) => authApi.login(login, password),
-    onSuccess: (session) => {
+    onSuccess: () => {
       setPassword('')
-      scheduleWelcome(session.user.id)
       queryClient.clear()
       onAuthenticated()
       navigate('/', { replace: true })

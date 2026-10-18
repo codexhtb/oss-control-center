@@ -1,5 +1,9 @@
 # API contracts — Phase 1
 
+**Главная страница:** постоянное приветствие использует `user.display_name` и
+`user.role` из существующего `GET /api/v1/auth/me`. Нажатие на имя запускает
+локальный визуальный эффект и не делает HTTP-запросов. Контракт API не меняется.
+
 **Phase 5.7:** `GET /api/v1/tickets?callback_queue=true&page=1&size=20`
 возвращает серверную очередь `SUBSCRIBER_LINKED` + `RESOLVED`, отсортированную
 по `resolved_at` от старых к новым. `total` — точное число после RBAC и

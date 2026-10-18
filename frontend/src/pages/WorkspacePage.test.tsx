@@ -6,7 +6,6 @@ import { ticketApi } from '../features/tickets/ticket-api'
 import type { MeResponse } from '../shared/api/types'
 import { apiRequest } from '../shared/api/client'
 import { WorkspacePage } from './WorkspacePage'
-import { scheduleWelcome } from '../features/auth/welcome-session'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { list: vi.fn(), recentEvents: vi.fn() } }))
 vi.mock('../shared/api/client', async (importOriginal) => {
@@ -57,12 +56,12 @@ it('does not request ServiceDesk information for technical admin', async () => {
   expect(ticketApi.recentEvents).not.toHaveBeenCalled()
 })
 
-it('shows the depth welcome once after a new login', async () => {
-  scheduleWelcome(user.user.id)
+it('keeps the welcome on every visit to the workspace', async () => {
   const first = renderWorkspace(user)
   expect(await screen.findByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
   first.unmount()
 
   renderWorkspace(user)
-  expect(await screen.findByRole('heading', { name: /Добрый день, Тестовый оператор/ })).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: /Добрый день/ })).not.toBeInTheDocument()
 })

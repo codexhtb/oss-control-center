@@ -81,10 +81,10 @@ describe('session shell', () => {
       .mockResolvedValueOnce(operator)
       .mockRejectedValue(new ApiError(401, 'unauthorized'))
     render(<App />)
-    expect(await screen.findByRole('heading', { name: /Добрый день/ })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /Добро пожаловать/ })).toBeInTheDocument()
     await queryClient.invalidateQueries({ queryKey: ['session', 0] })
     expect(await screen.findByRole('heading', { name: 'Вход в систему' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: /Добрый день/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /Добро пожаловать/ })).not.toBeInTheDocument()
   })
 
   it('clears private query state after confirmed logout', async () => {
@@ -93,7 +93,7 @@ describe('session shell', () => {
       .mockRejectedValue(new ApiError(401, 'unauthorized'))
     vi.mocked(authApi.logout).mockResolvedValue({ status: 'logged_out' })
     render(<App />)
-    expect(await screen.findByRole('heading', { name: /Добрый день/ })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /Добро пожаловать/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Выйти' }))
     expect(await screen.findByRole('heading', { name: 'Вход в систему' })).toBeInTheDocument()
     expect(queryClient.getQueryData(['session', 0])).toBeUndefined()
