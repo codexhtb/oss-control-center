@@ -48,7 +48,10 @@ it('creates a user with an administrator-supplied one-character password', async
 
 it('changes an employee password with confirmation and optional first-login change', async () => {
   renderPage()
-  fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
+  const employee = await screen.findByRole('button', { name: 'Сотрудник' })
+  expect(employee).toHaveClass('employee-name')
+  expect(screen.getByText('С', { selector: '.employee-name__avatar' })).toBeInTheDocument()
+  fireEvent.click(employee)
   fireEvent.click(screen.getByRole('button', { name: 'Изменить пароль' }))
   fireEvent.change(screen.getByLabelText('Пароль'), { target: { value: '1' } })
   fireEvent.change(screen.getByLabelText('Подтвердите пароль'), { target: { value: '1' } })

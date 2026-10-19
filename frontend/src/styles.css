@@ -315,6 +315,11 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .subscriber-table td { padding: 10px 9px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 .subscriber-table td a { color: var(--accent); font-weight: 700; }
 .subscriber-table .origin-chip { margin: 4px 0 0; }
+.employee-name { display: inline-flex; align-items: center; gap: 10px; max-width: 100%; padding: 3px 7px 3px 3px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #edf2ff; font-size: 12px; font-weight: 720; line-height: 1.2; text-align: left; transition: background .16s ease, border-color .16s ease, color .16s ease; }
+.employee-name:hover { border-color: #46537a; background: rgba(89, 103, 168, .14); color: #fff; }
+.employee-name:focus-visible { outline: 2px solid #9ba8ff; outline-offset: 2px; }
+.employee-name__avatar { display: grid; place-items: center; flex: none; width: 27px; height: 27px; border: 1px solid #59679e; border-radius: 8px; background: linear-gradient(145deg, #3c4979, #252d52); color: #e7ebff; font-size: 10px; font-weight: 850; letter-spacing: .02em; box-shadow: 0 3px 10px rgba(31, 38, 83, .28); }
+.employee-name__label { min-width: 0; overflow-wrap: anywhere; }
 .monitoring-action { margin: 14px 0; }
 .monitoring-report { margin: 12px 0; }
 .monitoring-report .subscriber-table { margin-top: 9px; }

@@ -49,6 +49,10 @@ function generatePassword(): string {
   return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')
 }
 
+function initials(name: string): string {
+  return name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toLocaleUpperCase('ru') || '—'
+}
+
 function PermissionEditor({ selected, change }: { selected: Permission[]; change: (next: Permission[]) => void }) {
   return <div className="permission-editor">{permissionGroups.map((group) => <fieldset key={group.title}>
     <legend>{group.title}</legend>
@@ -148,7 +152,7 @@ export function UsersPage() {
       <section className="detail-panel"><h2>Сотрудники</h2>
         {users.isPending ? <p role="status">Загружаем список…</p> : users.isError ? <Notice tone="error">{errorText(users.error)}</Notice> : <>
           <div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Имя</th><th>Логин</th><th>Профиль</th><th>Статус</th><th>Разрешения</th></tr></thead><tbody>
-            {users.data.items.map((user) => <tr key={user.id}><td><button type="button" className="text-link" onClick={() => beginEdit(user)}>{user.display_name}</button></td><td>{user.login}</td><td>{roleLabel(user.role)}</td><td>{user.is_active ? 'Активен' : 'Отключён'}</td><td>{user.permissions.length}</td></tr>)}
+            {users.data.items.map((user) => <tr key={user.id}><td><button type="button" className="employee-name" onClick={() => beginEdit(user)}><span className="employee-name__avatar" aria-hidden="true">{initials(user.display_name)}</span><span className="employee-name__label">{user.display_name}</span></button></td><td>{user.login}</td><td>{roleLabel(user.role)}</td><td>{user.is_active ? 'Активен' : 'Отключён'}</td><td>{user.permissions.length}</td></tr>)}
           </tbody></table></div>
           <div className="fact-pager"><Button variant="quiet" disabled={page <= 1} onClick={() => setPage(page - 1)}>Назад</Button><span>{page} / {Math.max(1, Math.ceil(users.data.total / users.data.size))}</span><Button variant="quiet" disabled={page * users.data.size >= users.data.total} onClick={() => setPage(page + 1)}>Далее</Button></div>
         </>}
