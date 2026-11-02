@@ -22,6 +22,7 @@ from app.modules.field_dispatch.group_control import process_group_control
 from app.modules.field_dispatch.inbound import process_update
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
+    FieldExternalMessage,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
@@ -152,13 +153,48 @@ def _sync_callback(
 
 def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
     record = db.scalar(
-        select(FieldDispatchUpdate).where(
+        select(FieldDispatchUpdate)
+        .where(
             FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
             FieldDispatchUpdate.update_id == update_id,
         )
+        .with_for_update()
     )
     handoff = db.get(FieldWorkHandoff, record.handoff_id) if record is not None else None
-    if record is None or handoff is None or handoff.telegram_message_id is None:
+    if record is None or handoff is None:
+        return
+
+    if record.confirmation_status == "PENDING":
+        report = db.scalar(
+            select(FieldExternalMessage).where(
+                FieldExternalMessage.update_record_id == record.id,
+                FieldExternalMessage.kind == "COMPLETION_REPORT",
+            )
+        )
+        ticket = db.get(Ticket, handoff.ticket_id)
+        if report is not None and report.telegram_message_id is not None and ticket is not None:
+            # Claim before sending. A crash after this commit leaves the result
+            # uncertain and prevents a duplicate confirmation on redelivery.
+            record.confirmation_status = "SENDING"
+            db.commit()
+            try:
+                gateway.acknowledge_completion_report(
+                    current_chat_id(db, report.chat_id),
+                    report.telegram_message_id,
+                    ticket.number,
+                )
+            except DispatchRejected as exc:
+                record.confirmation_status = "FAILED"
+                record.confirmation_error_code = exc.code
+            except DispatchUncertain:
+                record.confirmation_status = "UNCERTAIN"
+                record.confirmation_error_code = "telegram_transport_uncertain"
+            else:
+                record.confirmation_status = "SENT"
+                record.confirmation_error_code = None
+            db.commit()
+
+    if handoff.telegram_message_id is None:
         return
     try:
         gateway.mark_message_completed(

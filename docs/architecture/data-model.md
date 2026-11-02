@@ -244,6 +244,8 @@ erDiagram
     text outcome
     uuid handoff_id_nullable FK
     text sync_status
+    text confirmation_status
+    text confirmation_error_code_nullable
   }
   field_work_completion_prompts {
     uuid id PK
@@ -282,7 +284,9 @@ erDiagram
 `field_external_messages` и `field_dispatch_updates` введены в Telegram T2.
 `field_dispatch_group_bindings`, `field_dispatch_group_binding_audit` и
 `field_dispatch_chat_migrations` введены в `0023` для динамической привязки,
-аудита и alias при group→supergroup миграции. Автоматические
+аудита и alias при group→supergroup миграции. `0024` добавляет отдельное
+состояние подтверждения принятого отчёта, чтобы не посылать дубли после
+неопределённого ответа Telegram API. Автоматические
 источники в `diagnostic_snapshots` вводятся в Phase 4; Phase 1 может сохранять
 ручное наблюдение инженера.
 

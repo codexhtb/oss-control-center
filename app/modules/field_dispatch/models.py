@@ -164,6 +164,11 @@ class FieldDispatchUpdate(Base):
             "sync_status IN ('NOT_REQUIRED','PENDING','SYNCED','FAILED')",
             name="ck_field_updates_sync",
         ),
+        CheckConstraint(
+            "confirmation_status IN ('NOT_REQUIRED','PENDING','SENDING','SENT',"
+            "'UNCERTAIN','FAILED')",
+            name="ck_field_updates_confirmation",
+        ),
         Index("ix_field_updates_received", "received_at", "id"),
     )
 
@@ -180,6 +185,10 @@ class FieldDispatchUpdate(Base):
         String(16), nullable=False, server_default="NOT_REQUIRED"
     )
     sync_error_code: Mapped[str | None] = mapped_column(String(80))
+    confirmation_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="NOT_REQUIRED"
+    )
+    confirmation_error_code: Mapped[str | None] = mapped_column(String(80))
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

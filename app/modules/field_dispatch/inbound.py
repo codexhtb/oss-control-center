@@ -74,6 +74,7 @@ def _receipt(
     handoff_id: UUID | None = None,
     error_code: str | None = None,
     sync_status: str = "NOT_REQUIRED",
+    confirmation_status: str = "NOT_REQUIRED",
 ) -> tuple[FieldDispatchUpdate, bool]:
     statement = (
         insert(FieldDispatchUpdate)
@@ -86,6 +87,7 @@ def _receipt(
             handoff_id=handoff_id,
             error_code=error_code,
             sync_status=sync_status,
+            confirmation_status=confirmation_status,
         )
         .on_conflict_do_nothing(index_elements=["bot_identity", "update_id"])
         .returning(FieldDispatchUpdate.id)
@@ -259,6 +261,53 @@ def _text_reply(
         )
         .with_for_update()
     )
+    if prompt is None and isinstance(reply, dict):
+        # A sendMessage can reach Telegram while its response is lost. In that
+        # case the ForceReply remains UNCERTAIN and its message_id was never
+        # persisted. Telegram includes that prompt (and its reply to the
+        # original handoff) in the participant's reply Update, which lets us
+        # recover the exact prompt without accepting an arbitrary group reply.
+        prompt_text = reply.get("text")
+        from_value = reply.get("from")
+        quoted_chat = reply.get("chat")
+        original = reply.get("reply_to_message")
+        quoted_chat_id = _integer(quoted_chat.get("id")) if isinstance(quoted_chat, dict) else None
+        bot_sender_id = _integer(from_value.get("id")) if isinstance(from_value, dict) else None
+        original_chat = original.get("chat") if isinstance(original, dict) else None
+        original_chat_id = (
+            _integer(original_chat.get("id")) if isinstance(original_chat, dict) else None
+        )
+        original_id = _integer(original.get("message_id")) if isinstance(original, dict) else None
+        if (
+            prompt_text == "Что было сделано?"
+            and isinstance(from_value, dict)
+            and from_value.get("is_bot") is True
+            and bot_sender_id is not None
+            and bot_sender_id > 0
+            and quoted_chat_id is not None
+            and str(quoted_chat_id) in accepted_chat_ids
+            and original_chat_id is not None
+            and str(original_chat_id) in accepted_chat_ids
+            and original_id is not None
+        ):
+            candidates = db.scalars(
+                select(FieldWorkCompletionPrompt)
+                .join(FieldWorkHandoff, FieldWorkHandoff.id == FieldWorkCompletionPrompt.handoff_id)
+                .where(
+                    FieldWorkCompletionPrompt.chat_id.in_(accepted_chat_ids),
+                    FieldWorkCompletionPrompt.status == "UNCERTAIN",
+                    FieldWorkHandoff.delivery_status == "SENT",
+                    FieldWorkHandoff.work_status == "AWAITING_REPORT",
+                    FieldWorkHandoff.telegram_message_id == original_id,
+                )
+                .with_for_update()
+            ).all()
+            if len(candidates) == 1:
+                prompt = candidates[0]
+                prompt.telegram_message_id = reply_message_id
+                prompt.status = "WAITING"
+                prompt.error_code = None
+                prompt.sent_at = _event_time(reply.get("date"))
     if prompt is not None:
         kind = "COMPLETION_REPORT"
         handoff = db.scalar(
@@ -281,7 +330,13 @@ def _text_reply(
             return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
         event_time = _event_time(message.get("date"))
         receipt, created = _receipt(
-            db, update_id, kind, "PROCESSED", handoff_id=handoff.id, sync_status="PENDING"
+            db,
+            update_id,
+            kind,
+            "PROCESSED",
+            handoff_id=handoff.id,
+            sync_status="PENDING",
+            confirmation_status="PENDING",
         )
         if not created:
             db.rollback()
@@ -300,6 +355,7 @@ def _text_reply(
             )
         )
         prompt.status = "COMPLETED"
+        prompt.error_code = None
         prompt.completed_at = event_time
         handoff.work_status = "REPORTED"
         handoff.reported_at = event_time

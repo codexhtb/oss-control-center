@@ -190,6 +190,34 @@ class TelegramBotGateway:
         if not isinstance(result, dict):
             raise DispatchUncertain from None
 
+    def acknowledge_completion_report(
+        self, chat_id: str, report_message_id: int, ticket_number: int
+    ) -> None:
+        """Confirm durable report acceptance by replying to the participant."""
+        _validate_chat_id(chat_id)
+        result = self._call(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": (
+                    f"✅ Отчёт по заявке #{ticket_number} принят. "
+                    "Инженер OSS проверит его отдельно."
+                ),
+                "reply_parameters": {
+                    "message_id": report_message_id,
+                    "allow_sending_without_reply": False,
+                },
+                "disable_web_page_preview": True,
+            },
+        )
+        if not isinstance(result, dict):
+            raise DispatchUncertain from None
+        response_chat = result.get("chat")
+        message_id = result.get("message_id")
+        response_chat_id = response_chat.get("id") if isinstance(response_chat, dict) else None
+        if str(response_chat_id) != chat_id or not isinstance(message_id, int):
+            raise DispatchUncertain from None
+
 
 def _validate_chat_id(chat_id: str) -> None:
     if not isinstance(chat_id, str) or re.fullmatch(r"-?[1-9][0-9]{0,31}", chat_id) is None:

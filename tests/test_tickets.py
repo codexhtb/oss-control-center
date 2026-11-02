@@ -40,7 +40,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
 )
-from app.modules.field_dispatch.poller import _send_prompt
+from app.modules.field_dispatch.poller import _send_prompt, _sync_completion
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -3054,7 +3054,17 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
                 "last_name": "Группы",
             },
             "chat": {"id": -5319791765, "type": "group"},
-            "reply_to_message": {"message_id": 704},
+            "reply_to_message": {
+                "message_id": 704,
+                "date": 1_800_000_009,
+                "from": {"id": 9999, "is_bot": True},
+                "chat": {"id": -5319791765, "type": "group"},
+                "text": "Что было сделано?",
+                "reply_to_message": {
+                    "message_id": 701,
+                    "chat": {"id": -5319791765, "type": "group"},
+                },
+            },
             "text": "Кабель заменён, связь проверена.",
         },
     }
@@ -3087,7 +3097,17 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
             "date": 1_800_000_015,
             "from": {"id": 502, "is_bot": False, "first_name": "Другой монтажник"},
             "chat": {"id": -5319791765, "type": "group"},
-            "reply_to_message": {"message_id": 704},
+            "reply_to_message": {
+                "message_id": 704,
+                "date": 1_800_000_009,
+                "from": {"id": 9999, "is_bot": True},
+                "chat": {"id": -5319791765, "type": "group"},
+                "text": "Что было сделано?",
+                "reply_to_message": {
+                    "message_id": 701,
+                    "chat": {"id": -5319791765, "type": "group"},
+                },
+            },
             "text": "Работы выполнены участником без заранее сохранённого Telegram ID.",
         },
     }
@@ -3117,6 +3137,29 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
         assert prompt is not None and prompt.status == "WAITING"
         assert prompt.error_code is None and prompt.telegram_message_id == 704
+        # The API accepted sendMessage, but its response was lost before the
+        # returned prompt message_id committed. A participant reply must
+        # recover the matching prompt from Telegram's quoted handoff message.
+        prompt.status = "UNCERTAIN"
+        prompt.error_code = "telegram_transport_uncertain"
+        prompt.telegram_message_id = None
+        prompt.sent_at = None
+        db.commit()
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(FieldWorkCompletionPrompt)
+                .join(FieldWorkHandoff, FieldWorkHandoff.id == FieldWorkCompletionPrompt.handoff_id)
+                .where(
+                    FieldWorkCompletionPrompt.chat_id == "-5319791765",
+                    FieldWorkCompletionPrompt.status == "UNCERTAIN",
+                    FieldWorkHandoff.delivery_status == "SENT",
+                    FieldWorkHandoff.work_status == "AWAITING_REPORT",
+                    FieldWorkHandoff.telegram_message_id == 701,
+                )
+            )
+            == 1
+        )
         assert process_update(db, ordinary_reply).outcome == "IGNORED"
         assert (
             process_update(
@@ -3137,7 +3180,10 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         }
         assert process_update(db, repeated).outcome == "DUPLICATE"
         assert db.scalar(select(func.count()).select_from(FieldWorkCompletionPrompt)) == 1
-        assert process_update(db, wrong_installer).outcome == "PROCESSED"
+        report_result = process_update(db, wrong_installer)
+        assert report_result.outcome == "PROCESSED", db.scalar(
+            select(FieldDispatchUpdate.error_code).where(FieldDispatchUpdate.update_id == 9005)
+        )
         assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "REPORTED"
         assert process_update(db, reply).outcome == "DUPLICATE"
         assert (
@@ -3153,6 +3199,32 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         assert db.scalar(select(func.count()).select_from(FieldExternalMessage)) == 1
         saved_report = db.scalar(select(FieldExternalMessage))
         assert saved_report is not None and saved_report.sender_telegram_id == 502
+        saved_prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
+        assert saved_prompt is not None and saved_prompt.status == "COMPLETED"
+        assert saved_prompt.telegram_message_id == 704
+
+        class ConfirmationGateway:
+            calls = 0
+
+            def acknowledge_completion_report(
+                self, chat_id: str, report_message_id: int, ticket_number: int
+            ) -> None:
+                self.calls += 1
+                assert chat_id == "-5319791765"
+                assert report_message_id == 705
+                assert ticket_number == db.get(Ticket, UUID(ticket_id)).number
+
+            def mark_message_completed(self, chat_id: str, message_id: int) -> None:
+                assert chat_id == "-5319791765" and message_id == 701
+
+        confirmation_gateway = ConfirmationGateway()
+        _sync_completion(db, confirmation_gateway, 9005)
+        _sync_completion(db, confirmation_gateway, 9005)
+        saved_update = db.scalar(
+            select(FieldDispatchUpdate).where(FieldDispatchUpdate.update_id == 9005)
+        )
+        assert saved_update is not None and saved_update.confirmation_status == "SENT"
+        assert confirmation_gateway.calls == 1
         assert db.scalar(select(func.count()).select_from(FieldDispatchUpdate)) == 8
         ticket = db.get(Ticket, UUID(ticket_id))
         assert ticket is not None and ticket.status == TicketStatus.IN_PROGRESS
