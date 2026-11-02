@@ -2,6 +2,7 @@
 
 import http.client
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
@@ -34,7 +35,6 @@ class DispatchUncertain(Exception):
 @dataclass(frozen=True)
 class TelegramGatewayConfig:
     token_file: Path
-    allowed_chat_id: str = "-5319791765"
     timeout_seconds: int = 8
 
     def read_token(self) -> str:
@@ -93,8 +93,7 @@ class TelegramBotGateway:
     def send_message(
         self, chat_id: str, text: str, *, completion_callback_data: str | None = None
     ) -> DispatchReceipt:
-        if chat_id != self.config.allowed_chat_id:
-            raise DispatchRejected("telegram_chat_not_allowed")
+        _validate_chat_id(chat_id)
         parameters: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
@@ -123,10 +122,23 @@ class TelegramBotGateway:
                 "offset": offset,
                 "limit": 50,
                 "timeout": timeout_seconds,
-                "allowed_updates": ["message", "callback_query"],
+                "allowed_updates": ["message", "callback_query", "my_chat_member"],
             },
         )
         if not isinstance(result, list) or any(not isinstance(item, dict) for item in result):
+            raise DispatchUncertain from None
+        return result
+
+    def get_me(self) -> dict[str, Any]:
+        result = self._call("getMe", {})
+        if not isinstance(result, dict) or not isinstance(result.get("id"), int):
+            raise DispatchUncertain from None
+        return result
+
+    def get_chat_member(self, chat_id: str, user_id: int) -> dict[str, Any]:
+        _validate_chat_id(chat_id)
+        result = self._call("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+        if not isinstance(result, dict) or not isinstance(result.get("status"), str):
             raise DispatchUncertain from None
         return result
 
@@ -140,9 +152,7 @@ class TelegramBotGateway:
 
     def send_completion_prompt(self, chat_id: str, handoff_message_id: int) -> DispatchReceipt:
         """Ask for the report and bind the next reply to this exact prompt."""
-
-        if chat_id != self.config.allowed_chat_id:
-            raise DispatchRejected("telegram_chat_not_allowed")
+        _validate_chat_id(chat_id)
         result = self._call(
             "sendMessage",
             {
@@ -168,8 +178,7 @@ class TelegramBotGateway:
         return DispatchReceipt(chat_id=chat_id, message_id=str(message_id))
 
     def mark_message_completed(self, chat_id: str, message_id: int) -> None:
-        if chat_id != self.config.allowed_chat_id:
-            raise DispatchRejected("telegram_chat_not_allowed")
+        _validate_chat_id(chat_id)
         result = self._call(
             "editMessageReplyMarkup",
             {
@@ -180,3 +189,8 @@ class TelegramBotGateway:
         )
         if not isinstance(result, dict):
             raise DispatchUncertain from None
+
+
+def _validate_chat_id(chat_id: str) -> None:
+    if not isinstance(chat_id, str) or re.fullmatch(r"-?[1-9][0-9]{0,31}", chat_id) is None:
+        raise DispatchRejected("telegram_chat_invalid")

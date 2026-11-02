@@ -80,6 +80,8 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
 export function errorText(error: unknown): string {
   if (error instanceof CsrfUnavailableError) return 'Сессия требует обновления. Войдите снова.'
   if (error instanceof ApiError) {
+    if (error.code === 'telegram_group_not_bound') return 'Сначала привяжите Telegram-группу командой /oss_bind.'
+    if (error.code === 'telegram_bot_not_in_bound_group') return 'Бот недоступен в привязанной группе. Добавьте его с правами администратора.'
     switch (error.status) {
       case 401: return 'Сессия завершена. Войдите снова.'
       case 403: return 'Недостаточно прав или запрос отклонён проверкой безопасности.'

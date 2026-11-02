@@ -26,7 +26,6 @@ from app.modules.field_dispatch.schemas import (
     SendFieldWork,
 )
 from app.modules.field_dispatch.service import (
-    LAB_CHAT_ID,
     handoff_messages,
     handoff_view,
     latest_handoff,
@@ -161,11 +160,10 @@ def get_field_dispatch_gateway() -> FieldDispatchGateway:
     if get_settings().app_env != "dev":
         raise ApiError(503, "telegram_lab_only", "Telegram field dispatch is lab-only")
     token_file = os.environ.get("TELEGRAM_BOT_TOKEN_FILE")
-    chat_id = os.environ.get("TELEGRAM_FIELD_CHAT_ID", LAB_CHAT_ID)
-    if not token_file or chat_id != LAB_CHAT_ID:
+    if not token_file:
         raise ApiError(503, "telegram_not_configured", "Telegram field dispatch is unavailable")
     return TelegramBotGateway(
-        TelegramGatewayConfig(token_file=Path(token_file), allowed_chat_id=LAB_CHAT_ID)
+        TelegramGatewayConfig(token_file=Path(token_file))
     )
 
 

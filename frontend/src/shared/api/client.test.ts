@@ -44,6 +44,8 @@ describe('same-origin API client', () => {
       status: 409, code: 'version_conflict', requestId: 'synthetic-id',
     })
     expect(errorText(new ApiError(409, 'version_conflict'))).not.toContain('Sensitive detail')
+    expect(errorText(new ApiError(409, 'telegram_group_not_bound'))).toContain('/oss_bind')
+    expect(errorText(new ApiError(409, 'telegram_bot_not_in_bound_group'))).toContain('администратора')
     expect(errorText(new ApiError(503, 'billing_unavailable'))).toContain('временно недоступен')
   })
 })

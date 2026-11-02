@@ -1,9 +1,7 @@
 """Verified, idempotent import of Telegram replies and completion reports."""
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.modules.field_dispatch.binding import chat_id_aliases, current_binding
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
@@ -22,35 +21,6 @@ from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 BOT_IDENTITY = "oss_field_service_bot"
 COMPLETION_PREFIX = "field_done:"
 ACTIVE_PROMPT_STATUSES = ("REQUESTING", "WAITING", "UNCERTAIN")
-
-
-class SenderRegistryError(RuntimeError):
-    """Protected sender registry cannot be used safely."""
-
-
-@dataclass(frozen=True)
-class TelegramSenderRegistry:
-    path: Path
-
-    def allowed_ids(self) -> frozenset[int]:
-        try:
-            stat = self.path.stat()
-            if not self.path.is_file() or stat.st_mode & 0o077:
-                raise SenderRegistryError("telegram_sender_registry_permissions")
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except SenderRegistryError:
-            raise
-        except (OSError, json.JSONDecodeError):
-            raise SenderRegistryError("telegram_sender_registry_unavailable") from None
-        values = raw.get("allowed_user_ids") if isinstance(raw, dict) else None
-        if not isinstance(values, list) or not values:
-            raise SenderRegistryError("telegram_sender_registry_invalid")
-        result: set[int] = set()
-        for value in values:
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise SenderRegistryError("telegram_sender_registry_invalid")
-            result.add(value)
-        return frozenset(result)
 
 
 @dataclass(frozen=True)
@@ -153,7 +123,7 @@ def _callback(
     source_message_id: int,
     sender_id: int,
     sender_name: str,
-    allowed_chat_id: str,
+    accepted_chat_ids: set[str],
 ) -> InboundResult:
     kind = "COMPLETION_CALLBACK"
     callback_id = callback.get("id")
@@ -170,7 +140,7 @@ def _callback(
     if (
         handoff is None
         or handoff.delivery_status != "SENT"
-        or handoff.chat_id != allowed_chat_id
+        or handoff.chat_id not in accepted_chat_ids
         or handoff.telegram_message_id != source_message_id
     ):
         return _ignored(db, update_id, kind, "DENIED", "telegram_handoff_mismatch")
@@ -224,7 +194,7 @@ def _callback(
     prompt = FieldWorkCompletionPrompt(
         handoff_id=handoff.id,
         callback_update_id=receipt.id,
-        chat_id=allowed_chat_id,
+        chat_id=str(source_message.get("chat", {}).get("id")),
         sender_telegram_id=sender_id,
         sender_name=sender_name,
         status="REQUESTING",
@@ -250,7 +220,7 @@ def _text_reply(
     source_message_id: int,
     sender_id: int,
     sender_name: str,
-    allowed_chat_id: str,
+    accepted_chat_ids: set[str],
 ) -> InboundResult:
     reply = message.get("reply_to_message")
     reply_message_id = _integer(reply.get("message_id")) if isinstance(reply, dict) else None
@@ -263,7 +233,7 @@ def _text_reply(
 
     imported = db.scalar(
         select(FieldExternalMessage).where(
-            FieldExternalMessage.chat_id == allowed_chat_id,
+            FieldExternalMessage.chat_id.in_(accepted_chat_ids),
             FieldExternalMessage.telegram_message_id == source_message_id,
         )
     )
@@ -284,15 +254,13 @@ def _text_reply(
     prompt = db.scalar(
         select(FieldWorkCompletionPrompt)
         .where(
-            FieldWorkCompletionPrompt.chat_id == allowed_chat_id,
+            FieldWorkCompletionPrompt.chat_id.in_(accepted_chat_ids),
             FieldWorkCompletionPrompt.telegram_message_id == reply_message_id,
         )
         .with_for_update()
     )
     if prompt is not None:
         kind = "COMPLETION_REPORT"
-        if sender_id != prompt.sender_telegram_id:
-            return _ignored(db, update_id, kind, "DENIED", "completion_sender_mismatch")
         handoff = db.scalar(
             select(FieldWorkHandoff)
             .where(FieldWorkHandoff.id == prompt.handoff_id)
@@ -322,7 +290,7 @@ def _text_reply(
             FieldExternalMessage(
                 handoff_id=handoff.id,
                 update_record_id=receipt.id,
-                chat_id=allowed_chat_id,
+                chat_id=str(message.get("chat", {}).get("id")),
                 telegram_message_id=source_message_id,
                 sender_telegram_id=sender_id,
                 sender_name=sender_name,
@@ -358,65 +326,12 @@ def _text_reply(
         db.commit()
         return InboundResult(update_id, "PROCESSED", kind, handoff.id, sender_name=sender_name)
 
-    kind = "TEXT_REPLY"
-    handoff = db.scalar(
-        select(FieldWorkHandoff)
-        .where(
-            FieldWorkHandoff.chat_id == allowed_chat_id,
-            FieldWorkHandoff.telegram_message_id == reply_message_id,
-            FieldWorkHandoff.delivery_status == "SENT",
-        )
-        .with_for_update()
-    )
-    if handoff is None:
-        return _ignored(db, update_id, kind, "IGNORED", "telegram_reply_unmatched")
-    receipt, created = _receipt(db, update_id, kind, "PROCESSED", handoff_id=handoff.id)
-    if not created:
-        db.rollback()
-        return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
-    event_time = _event_time(message.get("date"))
-    db.add(
-        FieldExternalMessage(
-            handoff_id=handoff.id,
-            update_record_id=receipt.id,
-            chat_id=allowed_chat_id,
-            telegram_message_id=source_message_id,
-            sender_telegram_id=sender_id,
-            sender_name=sender_name,
-            kind=kind,
-            body=body,
-            telegram_created_at=event_time,
-        )
-    )
-    ticket = db.get(Ticket, handoff.ticket_id)
-    db.add(
-        TicketEvent(
-            ticket_id=handoff.ticket_id,
-            event_type="field_external_message_received",
-            actor_id=None,
-            event_data={"handoff_id": str(handoff.id), "message_kind": kind},
-            ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
-        )
-    )
-    db.add(
-        TicketAudit(
-            ticket_id=handoff.ticket_id,
-            actor_id=None,
-            action="field_external_message_received",
-            outcome="success",
-            origin="SYSTEM",
-        )
-    )
-    db.commit()
-    return InboundResult(update_id, "PROCESSED", kind, handoff.id, sender_name=sender_name)
+    return _ignored(db, update_id, "TEXT_REPLY", "IGNORED", "telegram_reply_unmatched")
 
 
 def process_update(
     db: Session,
     update: dict[str, Any],
-    allowed_sender_ids: frozenset[int],
-    *,
-    allowed_chat_id: str,
 ) -> InboundResult:
     """Import one Telegram Update without retaining raw payload or unauthorized identity."""
 
@@ -457,11 +372,31 @@ def process_update(
     chat = source_message.get("chat")
     chat_id_value = chat.get("id") if isinstance(chat, dict) else None
     chat_type = chat.get("type") if isinstance(chat, dict) else None
-    if str(chat_id_value) != allowed_chat_id or chat_type not in {"group", "supergroup"}:
-        return _ignored(db, update_id, kind, "DENIED", "telegram_chat_not_allowed")
+    incoming_chat_id = str(chat_id_value)
+    if chat_type not in {"group", "supergroup"}:
+        return _ignored(db, update_id, kind, "DENIED", "telegram_chat_not_bound")
+    binding = current_binding(db)
+    current_ids = chat_id_aliases(db, binding.chat_id) if binding.chat_id is not None else set()
+    accepted_chat_ids = chat_id_aliases(db, incoming_chat_id)
+    if not accepted_chat_ids.intersection(current_ids):
+        known_handoff = db.scalar(
+            select(FieldWorkHandoff.id)
+            .where(
+                FieldWorkHandoff.chat_id.in_(accepted_chat_ids),
+                FieldWorkHandoff.delivery_status == "SENT",
+            )
+            .limit(1)
+        )
+        known_prompt = db.scalar(
+            select(FieldWorkCompletionPrompt.id)
+            .where(FieldWorkCompletionPrompt.chat_id.in_(accepted_chat_ids))
+            .limit(1)
+        )
+        if known_handoff is None and known_prompt is None:
+            return _ignored(db, update_id, kind, "DENIED", "telegram_chat_not_bound")
     sender = _sender(sender_value)
-    if sender is None or sender[0] not in allowed_sender_ids:
-        return _ignored(db, update_id, kind, "DENIED", "telegram_sender_not_allowed")
+    if sender is None:
+        return _ignored(db, update_id, kind, "DENIED", "telegram_sender_invalid")
     sender_id, sender_name = sender
     source_message_id = _integer(source_message.get("message_id"))
     if source_message_id is None:
@@ -476,7 +411,7 @@ def process_update(
             source_message_id,
             sender_id,
             sender_name,
-            allowed_chat_id,
+            accepted_chat_ids,
         )
     return _text_reply(
         db,
@@ -485,5 +420,5 @@ def process_update(
         source_message_id,
         sender_id,
         sender_name,
-        allowed_chat_id,
+        accepted_chat_ids,
     )

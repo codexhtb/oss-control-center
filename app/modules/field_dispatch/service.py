@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
+from app.modules.field_dispatch.binding import destination_chat_id, mark_bot_unavailable
 from app.modules.field_dispatch.gateway import (
     DispatchReceipt,
     DispatchRejected,
@@ -27,8 +28,6 @@ from app.modules.identity.models import User
 from app.modules.identity.roles import Permission
 from app.modules.tickets.models import SubscriberSnapshot, Ticket, TicketAudit, TicketEvent
 from app.modules.tickets.status import TicketStatus
-
-LAB_CHAT_ID = "-5319791765"
 
 
 def _actor(db: Session, actor_id: UUID) -> User:
@@ -109,7 +108,7 @@ def create_handoff(db: Session, ticket: Ticket, actor_id: UUID, reason: str) -> 
         ticket_id=ticket.id,
         ticket_version=ticket.version,
         reason=reason,
-        chat_id=LAB_CHAT_ID,
+        chat_id=destination_chat_id(db),
         created_by=actor_id,
     )
     db.add(handoff)
@@ -201,6 +200,7 @@ def prepare_send(
         raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
     if handoff.delivery_status == "UNCERTAIN":
         raise ApiError(409, "field_send_uncertain", "Telegram delivery outcome is uncertain")
+    handoff.chat_id = destination_chat_id(db)
     message = _message(db, handoff, actor)
     if message.missing:
         raise ApiError(409, "field_dispatch_incomplete", "Required dispatch data is missing")
@@ -311,7 +311,10 @@ def send_handoff(
             completion_callback_data=prepared.completion_callback_data,
         )
     except DispatchRejected as exc:
-        return finalize_send(db, prepared, error_code=exc.code)
+        result = finalize_send(db, prepared, error_code=exc.code)
+        if exc.code.endswith("403"):
+            mark_bot_unavailable(db, prepared.chat_id)
+        return result
     except DispatchUncertain:
         return finalize_send(
             db, prepared, error_code="telegram_transport_uncertain", uncertain=True

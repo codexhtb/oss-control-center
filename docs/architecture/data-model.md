@@ -255,10 +255,34 @@ erDiagram
     bigint telegram_message_id_nullable
     text error_code_nullable
   }
+  field_dispatch_group_bindings {
+    int id PK
+    text chat_id_nullable
+    text chat_title_nullable
+    text chat_type_nullable
+    text status
+    bigint bound_by_telegram_id_nullable
+  }
+  field_dispatch_group_binding_audit {
+    uuid id PK
+    uuid update_record_id_nullable FK
+    text action
+    bigint actor_telegram_id_nullable
+    text old_chat_id_nullable
+    text new_chat_id_nullable
+  }
+  field_dispatch_chat_migrations {
+    text old_chat_id PK
+    text new_chat_id
+    uuid update_record_id FK
+  }
 ```
 
 `field_work_handoffs` и `field_work_delivery_attempts` введены в Telegram T1.
-`field_external_messages` и `field_dispatch_updates` введены в Telegram T2. Автоматические
+`field_external_messages` и `field_dispatch_updates` введены в Telegram T2.
+`field_dispatch_group_bindings`, `field_dispatch_group_binding_audit` и
+`field_dispatch_chat_migrations` введены в `0023` для динамической привязки,
+аудита и alias при group→supergroup миграции. Автоматические
 источники в `diagnostic_snapshots` вводятся в Phase 4; Phase 1 может сохранять
 ручное наблюдение инженера.
 

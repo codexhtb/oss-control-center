@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -33,7 +34,6 @@ class FieldWorkHandoff(Base):
             "work_status IN ('AWAITING_REPORT','REPORTED','VERIFIED')",
             name="ck_field_handoffs_work",
         ),
-        CheckConstraint("chat_id = '-5319791765'", name="ck_field_handoffs_lab_chat"),
         CheckConstraint("length(btrim(reason)) > 0", name="ck_field_handoffs_reason"),
         CheckConstraint(
             "(delivery_status = 'SENT' AND telegram_message_id IS NOT NULL "
@@ -152,7 +152,8 @@ class FieldDispatchUpdate(Base):
     __table_args__ = (
         UniqueConstraint("bot_identity", "update_id", name="uq_field_updates_bot_update"),
         CheckConstraint(
-            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT','UNSUPPORTED')",
+            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT',"
+            "'GROUP_BIND','GROUP_STATUS','GROUP_EVENT','UNSUPPORTED')",
             name="ck_field_updates_kind",
         ),
         CheckConstraint(
@@ -301,3 +302,81 @@ class FieldWorkCompletionPrompt(Base):
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FieldDispatchGroupBinding(Base):
+    """The single active Telegram destination, managed by a verified group admin."""
+
+    __tablename__ = "field_dispatch_group_bindings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_field_group_binding_singleton"),
+        CheckConstraint(
+            "status IN ('UNBOUND','ACTIVE','BOT_REMOVED')", name="ck_field_group_binding_status"
+        ),
+        CheckConstraint(
+            "(status = 'UNBOUND' AND chat_id IS NULL AND chat_title IS NULL AND chat_type IS NULL) "
+            "OR (status <> 'UNBOUND' AND chat_id IS NOT NULL AND chat_title IS NOT NULL "
+            "AND chat_type IN ('group','supergroup'))",
+            name="ck_field_group_binding_chat",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    chat_id: Mapped[str | None] = mapped_column(String(32))
+    chat_title: Mapped[str | None] = mapped_column(String(200))
+    chat_type: Mapped[str | None] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="UNBOUND")
+    bound_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldDispatchGroupBindingAudit(Base):
+    """Append-only audit of group binding and bot membership changes."""
+
+    __tablename__ = "field_dispatch_group_binding_audit"
+    __table_args__ = (
+        UniqueConstraint("update_record_id", name="uq_field_group_audit_update"),
+        CheckConstraint(
+            "action IN ('BOUND','MOVED','BOT_REMOVED','BOT_RESTORED','MIGRATED','UNAVAILABLE')",
+            name="ck_field_group_audit_action",
+        ),
+        Index("ix_field_group_audit_created", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    update_record_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("field_dispatch_updates.id", ondelete="RESTRICT")
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    old_chat_id: Mapped[str | None] = mapped_column(String(32))
+    new_chat_id: Mapped[str | None] = mapped_column(String(32))
+    chat_title: Mapped[str | None] = mapped_column(String(200))
+    chat_type: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldDispatchChatMigration(Base):
+    """Alias old group ids to their Telegram supergroup ids without rewriting history."""
+
+    __tablename__ = "field_dispatch_chat_migrations"
+    __table_args__ = (
+        UniqueConstraint("update_record_id", name="uq_field_chat_migrations_update"),
+        CheckConstraint("old_chat_id <> new_chat_id", name="ck_field_chat_migration_distinct"),
+        Index("ix_field_chat_migrations_new", "new_chat_id"),
+    )
+
+    old_chat_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    new_chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    update_record_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_dispatch_updates.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    migrated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

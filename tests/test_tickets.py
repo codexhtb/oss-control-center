@@ -28,9 +28,12 @@ from app.main import create_app
 from app.modules.billing.quality import DataQuality
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.correlation import DiagnosticReport, Observation
+from app.modules.field_dispatch.binding import chat_id_aliases, destination_chat_id
 from app.modules.field_dispatch.gateway import DispatchReceipt, DispatchRejected, DispatchUncertain
+from app.modules.field_dispatch.group_control import process_group_control
 from app.modules.field_dispatch.inbound import process_update
 from app.modules.field_dispatch.models import (
+    FieldDispatchGroupBinding,
     FieldDispatchUpdate,
     FieldExternalMessage,
     FieldWorkCompletionPrompt,
@@ -76,6 +79,14 @@ def ticket_engine(isolated_postgres_url: URL, monkeypatch: pytest.MonkeyPatch) -
     )
     command.upgrade(config, "head")
     engine = create_engine(isolated_postgres_url, connect_args={"connect_timeout": 5})
+    with Session(engine) as db:
+        binding = db.get(FieldDispatchGroupBinding, 1)
+        assert binding is not None
+        binding.chat_id = "-5319791765"
+        binding.chat_title = "Synthetic Group"
+        binding.chat_type = "group"
+        binding.status = "ACTIVE"
+        db.commit()
     try:
         yield engine
     finally:
@@ -2889,6 +2900,14 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     assert "Адрес: г. Тест, ул. Безопасная, д. 20" in handoff["message_preview"]
     assert "Отправил инженер: Field_Dispatch_Engineer" in handoff["message_preview"]
 
+    with Session(ticket_engine) as db:
+        binding = db.get(FieldDispatchGroupBinding, 1)
+        assert binding is not None
+        binding.chat_id = "-2222222"
+        binding.chat_title = "Moved Synthetic Group"
+        binding.chat_type = "supergroup"
+        db.commit()
+
     send_path = f"{path}/field-work-handoffs/{handoff['id']}/send"
     request_id = str(uuid4())
     assert ticket_client.post(send_path, json={"client_request_id": request_id}).status_code == 403
@@ -2900,6 +2919,16 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     assert sent.json()["telegram_message_id"] == 701
     assert sent.json()["sent_by"] == str(engineer.id)
     assert len(gateway.calls) == 1
+    assert gateway.calls[0][0] == "-2222222"
+    with Session(ticket_engine) as db:
+        saved_handoff = db.get(FieldWorkHandoff, UUID(handoff["id"]))
+        assert saved_handoff is not None and saved_handoff.chat_id == "-2222222"
+        binding = db.get(FieldDispatchGroupBinding, 1)
+        assert binding is not None
+        binding.chat_id = "-3333333"
+        binding.chat_title = "Next Synthetic Group"
+        binding.chat_type = "supergroup"
+        db.commit()
     for replay_id in (request_id, str(uuid4())):
         replay = ticket_client.post(
             send_path, headers=csrf(ticket_client), json={"client_request_id": replay_id}
@@ -2999,7 +3028,12 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         "update_id": 9001,
         "callback_query": {
             "id": "synthetic-callback-1",
-            "from": {"id": 501, "is_bot": False, "first_name": "Монтажник", "last_name": "Тест"},
+            "from": {
+                "id": 777,
+                "is_bot": False,
+                "first_name": "Новый участник",
+                "last_name": "Группы",
+            },
             "data": f"field_done:{handoff['id']}",
             "message": {
                 "message_id": 701,
@@ -3013,7 +3047,12 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         "message": {
             "message_id": 702,
             "date": 1_800_000_010,
-            "from": {"id": 501, "is_bot": False, "first_name": "Монтажник", "last_name": "Тест"},
+            "from": {
+                "id": 777,
+                "is_bot": False,
+                "first_name": "Новый участник",
+                "last_name": "Группы",
+            },
             "chat": {"id": -5319791765, "type": "group"},
             "reply_to_message": {"message_id": 704},
             "text": "Кабель заменён, связь проверена.",
@@ -3026,7 +3065,7 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
             "date": 1_800_000_020,
             "from": {"id": 999, "is_bot": False, "first_name": "Посторонний"},
             "chat": {"id": -5319791765, "type": "group"},
-            "reply_to_message": {"message_id": 701},
+            "reply_to_message": {"message_id": 999999},
             "text": "Must not be imported",
         },
     }
@@ -3049,11 +3088,11 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
             "from": {"id": 502, "is_bot": False, "first_name": "Другой монтажник"},
             "chat": {"id": -5319791765, "type": "group"},
             "reply_to_message": {"message_id": 704},
-            "text": "Не должен завершить чужой запрос.",
+            "text": "Работы выполнены участником без заранее сохранённого Telegram ID.",
         },
     }
     with Session(ticket_engine) as db:
-        first = process_update(db, callback, frozenset({501}), allowed_chat_id="-5319791765")
+        first = process_update(db, callback)
         assert first.outcome == "PROCESSED"
         saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert saved is not None and saved.work_status == "AWAITING_REPORT"
@@ -3078,26 +3117,16 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
         assert prompt is not None and prompt.status == "WAITING"
         assert prompt.error_code is None and prompt.telegram_message_id == 704
-        assert (
-            process_update(
-                db, ordinary_reply, frozenset({501}), allowed_chat_id="-5319791765"
-            ).outcome
-            == "PROCESSED"
-        )
+        assert process_update(db, ordinary_reply).outcome == "IGNORED"
         assert (
             process_update(
                 db,
                 {**ordinary_reply, "update_id": 9007},
-                frozenset({501}),
-                allowed_chat_id="-5319791765",
             ).outcome
-            == "DUPLICATE"
+            == "IGNORED"
         )
         assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "AWAITING_REPORT"
-        assert (
-            process_update(db, callback, frozenset({501}), allowed_chat_id="-5319791765").outcome
-            == "DUPLICATE"
-        )
+        assert process_update(db, callback).outcome == "DUPLICATE"
         repeated = {
             **callback,
             "update_id": 9004,
@@ -3106,38 +3135,24 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
                 "id": "synthetic-callback-2",
             },
         }
-        assert (
-            process_update(db, repeated, frozenset({501}), allowed_chat_id="-5319791765").outcome
-            == "DUPLICATE"
-        )
+        assert process_update(db, repeated).outcome == "DUPLICATE"
         assert db.scalar(select(func.count()).select_from(FieldWorkCompletionPrompt)) == 1
-        assert (
-            process_update(
-                db, wrong_installer, frozenset({501, 502}), allowed_chat_id="-5319791765"
-            ).outcome
-            == "DENIED"
-        )
-        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "AWAITING_REPORT"
-        assert (
-            process_update(db, reply, frozenset({501}), allowed_chat_id="-5319791765").outcome
-            == "PROCESSED"
-        )
+        assert process_update(db, wrong_installer).outcome == "PROCESSED"
+        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "REPORTED"
+        assert process_update(db, reply).outcome == "DUPLICATE"
         assert (
             process_update(
                 db,
                 {**reply, "update_id": 9008},
-                frozenset({501}),
-                allowed_chat_id="-5319791765",
             ).outcome
             == "DUPLICATE"
         )
-        assert (
-            process_update(db, denied, frozenset({501}), allowed_chat_id="-5319791765").outcome
-            == "DENIED"
-        )
+        assert process_update(db, denied).outcome == "IGNORED"
         saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert saved is not None and saved.work_status == "REPORTED"
-        assert db.scalar(select(func.count()).select_from(FieldExternalMessage)) == 2
+        assert db.scalar(select(func.count()).select_from(FieldExternalMessage)) == 1
+        saved_report = db.scalar(select(FieldExternalMessage))
+        assert saved_report is not None and saved_report.sender_telegram_id == 502
         assert db.scalar(select(func.count()).select_from(FieldDispatchUpdate)) == 8
         ticket = db.get(Ticket, UUID(ticket_id))
         assert ticket is not None and ticket.status == TicketStatus.IN_PROGRESS
@@ -3145,11 +3160,10 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     messages_path = f"{path}/field-work-handoffs/{handoff['id']}/messages"
     messages = ticket_client.get(messages_path)
     assert messages.status_code == 200
-    assert [item["kind"] for item in messages.json()["items"]] == [
-        "TEXT_REPLY",
-        "COMPLETION_REPORT",
-    ]
-    assert messages.json()["items"][1]["body"] == "Кабель заменён, связь проверена."
+    assert [item["kind"] for item in messages.json()["items"]] == ["COMPLETION_REPORT"]
+    assert messages.json()["items"][0]["body"] == (
+        "Работы выполнены участником без заранее сохранённого Telegram ID."
+    )
     verify_path = f"{path}/field-work-handoffs/{handoff['id']}/verify"
     assert ticket_client.post(verify_path).status_code == 403
     verified = ticket_client.post(verify_path, headers=csrf(ticket_client))
@@ -3157,6 +3171,101 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     assert verified.json()["work_status"] == "VERIFIED"
     assert verified.json()["verified_by"] == str(engineer.id)
     assert ticket_client.get(path).json()["status"] == "IN_PROGRESS"
+
+
+def test_dynamic_group_binding_requires_admin_and_tracks_supergroup_migration(
+    ticket_engine: Engine,
+) -> None:
+    class AdminGateway:
+        sent: list[tuple[str, str]] = []
+        admin_ids = {501, 900}
+
+        def get_me(self) -> dict[str, int]:
+            return {"id": 900}
+
+        def get_chat_member(self, _chat_id: str, user_id: int) -> dict[str, str]:
+            return {"status": "administrator" if user_id in self.admin_ids else "member"}
+
+        def send_message(self, chat_id: str, text: str, **_kwargs: object) -> DispatchReceipt:
+            self.sent.append((chat_id, text))
+            return DispatchReceipt(chat_id, "1")
+
+    gateway = AdminGateway()
+    command_update = {
+        "update_id": 9901,
+        "message": {
+            "message_id": 1,
+            "from": {"id": 501, "is_bot": False, "first_name": "Admin"},
+            "chat": {"id": -7654321, "type": "supergroup", "title": "Synthetic Destination"},
+            "text": "/oss_bind",
+        },
+    }
+    with Session(ticket_engine) as db:
+        binding = db.get(FieldDispatchGroupBinding, 1)
+        assert binding is not None
+        binding.status = "UNBOUND"
+        binding.chat_id = binding.chat_title = binding.chat_type = None
+        db.commit()
+        with pytest.raises(ApiError, match="telegram_group_not_bound"):
+            destination_chat_id(db)
+
+        result = process_group_control(db, gateway, command_update)
+        assert result is not None and result.outcome == "PROCESSED"
+        binding = db.get(FieldDispatchGroupBinding, 1)
+        assert binding is not None
+        assert binding.chat_id == "-7654321" and binding.status == "ACTIVE"
+        assert gateway.sent[-1][0] == "-7654321"
+
+        migration = {
+            "update_id": 9902,
+            "message": {
+                "message_id": 2,
+                "from": {"id": 900, "is_bot": True},
+                "chat": {"id": -1007654321, "type": "supergroup", "title": "Synthetic Destination"},
+                "migrate_from_chat_id": -7654321,
+            },
+        }
+        result = process_group_control(db, gateway, migration)
+        assert result is not None and result.outcome == "PROCESSED"
+        assert binding.chat_id == "-1007654321"
+        assert chat_id_aliases(db, binding.chat_id) == {"-7654321", "-1007654321"}
+
+        denied = {
+            **command_update,
+            "update_id": 9903,
+            "message": {
+                **command_update["message"],
+                "chat": {"id": -1111111, "type": "group", "title": "Untrusted"},
+                "from": {"id": 502, "is_bot": False, "first_name": "Member"},
+            },
+        }
+        result = process_group_control(db, gateway, denied)
+        assert result is not None and result.outcome == "DENIED"
+        assert binding.chat_id == "-1007654321"
+
+        move = {
+            **command_update,
+            "update_id": 9904,
+            "message": {
+                **command_update["message"],
+                "chat": {"id": -8888888, "type": "group", "title": "Next Synthetic Group"},
+            },
+        }
+        result = process_group_control(db, gateway, move)
+        assert result is not None and result.outcome == "PROCESSED"
+        assert binding.chat_id == "-8888888"
+
+        removed = {
+            "update_id": 9905,
+            "my_chat_member": {
+                "chat": {"id": -8888888, "type": "group", "title": "Next Synthetic Group"},
+                "new_chat_member": {"status": "kicked", "user": {"id": 900, "is_bot": True}},
+            },
+        }
+        result = process_group_control(db, gateway, removed)
+        assert result is not None and result.outcome == "PROCESSED"
+        with pytest.raises(ApiError, match="telegram_bot_not_in_bound_group"):
+            destination_chat_id(db)
 
 
 @pytest.mark.parametrize(

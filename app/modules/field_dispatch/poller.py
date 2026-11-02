@@ -11,19 +11,20 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.engine import get_engine
+from app.modules.field_dispatch.binding import current_chat_id, mark_bot_unavailable
 from app.modules.field_dispatch.gateway import (
     DispatchRejected,
     DispatchUncertain,
     TelegramBotGateway,
     TelegramGatewayConfig,
 )
-from app.modules.field_dispatch.inbound import TelegramSenderRegistry, process_update
+from app.modules.field_dispatch.group_control import process_group_control
+from app.modules.field_dispatch.inbound import process_update
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
-from app.modules.field_dispatch.service import LAB_CHAT_ID
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 
 
@@ -82,9 +83,12 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     prompt.error_code = "telegram_transport_uncertain"
     db.commit()
     try:
-        receipt = gateway.send_completion_prompt(handoff.chat_id, handoff.telegram_message_id)
+        destination = current_chat_id(db, prompt.chat_id)
+        receipt = gateway.send_completion_prompt(destination, handoff.telegram_message_id)
     except DispatchRejected as exc:
         _set_prompt_failure(db, prompt_id, exc.code)
+        if exc.code.endswith("403"):
+            mark_bot_unavailable(db, destination)
         return
     except DispatchUncertain:
         _set_prompt_failure(db, prompt_id, "telegram_transport_uncertain", uncertain=True)
@@ -102,6 +106,7 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     handoff = db.get(FieldWorkHandoff, prompt.handoff_id)
     now = datetime.now(UTC)
     prompt.status = "WAITING"
+    prompt.chat_id = receipt.chat_id
     prompt.telegram_message_id = int(receipt.message_id)
     prompt.error_code = None
     prompt.sent_at = now
@@ -156,7 +161,9 @@ def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -
     if record is None or handoff is None or handoff.telegram_message_id is None:
         return
     try:
-        gateway.mark_message_completed(handoff.chat_id, handoff.telegram_message_id)
+        gateway.mark_message_completed(
+            current_chat_id(db, handoff.chat_id), handoff.telegram_message_id
+        )
     except DispatchRejected as exc:
         record.sync_status = "FAILED"
         record.sync_error_code = exc.code
@@ -203,21 +210,17 @@ def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
 
 def poll_once() -> int:
     token_file = os.environ.get("TELEGRAM_BOT_TOKEN_FILE")
-    registry_file = os.environ.get("TELEGRAM_ALLOWED_SENDERS_FILE")
-    chat_id = os.environ.get("TELEGRAM_FIELD_CHAT_ID", LAB_CHAT_ID)
-    if not token_file or not registry_file or chat_id != LAB_CHAT_ID:
+    if not token_file:
         raise RuntimeError("telegram_inbound_not_configured")
-    registry = TelegramSenderRegistry(Path(registry_file))
-    allowed = registry.allowed_ids()
-    gateway = TelegramBotGateway(
-        TelegramGatewayConfig(Path(token_file), allowed_chat_id=LAB_CHAT_ID, timeout_seconds=25)
-    )
+    gateway = TelegramBotGateway(TelegramGatewayConfig(Path(token_file), timeout_seconds=25))
     factory = sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
     with factory() as db:
         _retry_sync(db, gateway)
         updates = gateway.get_updates(_offset(db), timeout_seconds=20)
         for update in updates:
-            result = process_update(db, update, allowed, allowed_chat_id=LAB_CHAT_ID)
+            result = process_group_control(db, gateway, update)
+            if result is None:
+                result = process_update(db, update)
             if (
                 result.kind == "COMPLETION_CALLBACK"
                 and result.outcome == "PROCESSED"

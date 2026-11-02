@@ -339,7 +339,7 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 
 - Исходящее сообщение содержит inline-кнопку «✅ Выполнено»; подтверждение
   `sendMessage` по-прежнему обязательно до `SENT`.
-- Синтетические updates проверяют разрешённый/чужой sender, фиксированный chat,
+- Синтетические updates проверяют участников группы, непривязанные чаты,
   reply на исходный message ID, callback payload и mismatch handoff.
 - Один и тот же `update_id`, повторное нажатие с новым update и повторный
   входящий message ID не создают дубликатов. Raw update и данные отклонённого
@@ -354,4 +354,4 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 - Миграция `0022` сохраняет старые T2 callbacks и применяется сначала в
   `oss_test_*`, затем к dev после
   проверенного backup/restore. Poller profile остаётся выключенным до живой
-  приёмки allowlist и стартового offset.
+  проверки динамической привязки группы и стартового offset.
