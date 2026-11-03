@@ -40,7 +40,7 @@ describe('session shell', () => {
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Вход в систему' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: 'Упрощённые эффекты' })).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Оптические системы связи' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'OSS Control Center' })).toBeInTheDocument()
     expect(screen.queryByText('Контроль заявок.')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Логин')).toHaveAttribute('id', 'username')
     expect(screen.getByLabelText('Логин')).toHaveAttribute('name', 'username')

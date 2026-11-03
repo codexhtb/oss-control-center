@@ -35,8 +35,7 @@ export function LoginBrandHero() {
         </svg>
       </div>
       <div className="login-hero__caption">
-        <p>OSS Control Center</p>
-        <h1 id="login-brand-title">Оптические системы связи</h1>
+        <h1 id="login-brand-title">OSS Control Center</h1>
       </div>
     </section>
   )

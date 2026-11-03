@@ -4,7 +4,8 @@ import { LoginBrandHero } from './LoginBrandHero'
 
 it('renders the original OSS mark and accessible caption', () => {
   const { container } = render(<LoginBrandHero />)
-  expect(screen.getByRole('heading', { name: 'Оптические системы связи' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'OSS Control Center' })).toBeInTheDocument()
+  expect(container.querySelectorAll('.login-hero__caption > *')).toHaveLength(1)
   expect(container.querySelector('.login-hero__mark')).toHaveAttribute('viewBox', '0 0 580 270')
   expect(container.querySelectorAll('.login-hero__module')).toHaveLength(3)
   expect(container.querySelectorAll('.login-hero__node')).toHaveLength(3)

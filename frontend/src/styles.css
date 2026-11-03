@@ -81,8 +81,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-hero__node--two { animation-delay: 1.03s; }
 .login-hero__node--three { animation-delay: 1.16s; }
 .login-hero__caption { position: absolute; bottom: 21px; left: 50%; width: 100%; text-align: center; transform: translateX(-50%); animation: login-caption-in .85s 1s cubic-bezier(.2, .75, .2, 1) both; }
-.login-hero__caption p { margin: 0 0 9px; color: #79bca9; font-size: 10px; font-weight: 800; letter-spacing: .26em; text-transform: uppercase; }
-.login-hero__caption h1 { margin: 0; color: #edf8f5; font-size: clamp(25px, 2.6vw, 37px); font-weight: 580; letter-spacing: -.04em; text-wrap: balance; text-shadow: 0 9px 34px rgba(0, 0, 0, .55); }
+.login-hero__caption h1 { margin: 0; color: #79bca9; font-size: clamp(22px, 2.4vw, 32px); font-weight: 800; letter-spacing: .18em; text-transform: uppercase; text-wrap: balance; text-shadow: 0 9px 34px rgba(0, 0, 0, .55); }
 .login-card { padding: 35px; border: 1px solid #314039; border-radius: 17px; background: linear-gradient(145deg, rgba(31, 40, 45, .96), rgba(22, 29, 35, .98)); box-shadow: 0 30px 95px rgba(0, 0, 0, .31); }
 .login-card__icon { display: grid; place-items: center; width: 43px; height: 43px; margin-bottom: 30px; border: 1px solid #3b6157; border-radius: 11px; background: #173a33; color: var(--accent); }
 .login-card h2 { margin: 8px 0 8px; font-size: 28px; letter-spacing: -.045em; }
@@ -280,7 +279,6 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
   .login-hero__depth { width: 225px; }
   .login-hero__depth--front { width: 170px; }
   .login-hero__caption h1 { font-size: 22px; }
-  .login-hero__caption p { margin-bottom: 5px; font-size: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
