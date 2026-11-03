@@ -65,17 +65,18 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
       <div className="shell-main">
         <header className="topbar">
           <div className="topbar__context"><span className="topbar__product">OSS CONTROL CENTER</span></div>
-          <div className="topbar__right"><NotificationBell session={session} /><NavLink to="/account" className="topbar__user" aria-label={`Мой профиль: ${session.user.display_name}`}><span className="topbar__user-avatar" aria-hidden="true">{session.user.display_name.trim().charAt(0).toLocaleUpperCase('ru')}</span><span className="topbar__user-name">{session.user.display_name}</span></NavLink></div>
+          <div className="topbar__right">
+            <NotificationBell session={session} />
+            <NavLink to="/account" className="topbar__user" aria-label={`Мой профиль: ${session.user.display_name}`}><span className="topbar__user-avatar" aria-hidden="true">{session.user.display_name.trim().charAt(0).toLocaleUpperCase('ru')}</span><span className="topbar__user-name">{session.user.display_name}</span></NavLink>
+            <Button className="topbar__logout" variant="quiet" icon={<LogOut size={16} />} aria-label="Выйти" onClick={() => logout.mutate()} disabled={logout.isPending}>
+              <span className="topbar__logout-label">{logout.isPending ? 'Выход…' : 'Выйти'}</span>
+            </Button>
+          </div>
         </header>
         <main id="main-content" className="main-content">
           {logout.isError && <Notice tone="error">Не удалось завершить сессию. {errorText(logout.error)}</Notice>}
           {children}
         </main>
-        <footer className="shell-footer shell-footer--actions">
-          <Button variant="quiet" icon={<LogOut size={16} />} onClick={() => logout.mutate()} disabled={logout.isPending}>
-            {logout.isPending ? 'Выход…' : 'Выйти'}
-          </Button>
-        </footer>
       </div>
     </div>
   )
