@@ -7,6 +7,7 @@ import { errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { authApi } from '../features/auth/auth-api'
+import { NotificationBell } from '../features/notifications/NotificationBell'
 
 export function roleLabel(role: Role): string {
   return { operator: 'Оператор', engineer: 'Инженер OSS', admin: 'Администратор' }[role]
@@ -64,7 +65,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
       <div className="shell-main">
         <header className="topbar">
           <div className="topbar__context"><span className="topbar__product">OSS CONTROL CENTER</span></div>
-          <div className="topbar__right"><span className="topbar__user">{session.user.display_name}</span></div>
+          <div className="topbar__right"><NotificationBell session={session} /><span className="topbar__user">{session.user.display_name}</span></div>
         </header>
         <main id="main-content" className="main-content">
           {logout.isError && <Notice tone="error">Не удалось завершить сессию. {errorText(logout.error)}</Notice>}

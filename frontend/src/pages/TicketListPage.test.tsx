@@ -42,6 +42,14 @@ beforeEach(() => {
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
 })
 
+it('shows the report attention indicator only while confirmation is pending', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({
+    items: [{ ...ticket, field_report_pending: true }], page: 1, size: 20, total: 1,
+  })
+  renderList()
+  expect(await screen.findByText('Отчёт ждёт подтверждения')).toBeInTheDocument()
+})
+
 it('shows server-counted engineer queues and keeps search in the queue view', async () => {
   vi.mocked(ticketApi.list).mockImplementation(async (filters) => ({
     items: filters.size === 1 ? [] : [ticket], page: filters.page, size: filters.size,

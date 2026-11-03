@@ -11,6 +11,8 @@ from app.core.errors import ApiError
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldReportNotification,
+    FieldReportNotificationRead,
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
@@ -243,6 +245,17 @@ def purge_ticket(
     handoff_ids = select(FieldWorkHandoff.id).where(FieldWorkHandoff.ticket_id == ticket_id)
     update_ids = select(FieldDispatchUpdate.id).where(
         FieldDispatchUpdate.handoff_id.in_(handoff_ids)
+    )
+    notification_ids = select(FieldReportNotification.id).where(
+        FieldReportNotification.handoff_id.in_(handoff_ids)
+    )
+    db.execute(
+        delete(FieldReportNotificationRead).where(
+            FieldReportNotificationRead.notification_id.in_(notification_ids)
+        )
+    )
+    db.execute(
+        delete(FieldReportNotification).where(FieldReportNotification.id.in_(notification_ids))
     )
     db.execute(
         delete(FieldExternalMessage).where(FieldExternalMessage.handoff_id.in_(handoff_ids))

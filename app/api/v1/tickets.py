@@ -319,6 +319,14 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                       TicketCallback.id.desc())
         ).all()
     }
+    pending_report_ids = set(
+        db.scalars(
+            select(FieldWorkHandoff.ticket_id).where(
+                FieldWorkHandoff.ticket_id.in_(ticket_ids),
+                FieldWorkHandoff.work_status == "REPORTED",
+            )
+        )
+    )
     return [
         TicketListView.model_validate(item).model_copy(
             update={
@@ -332,6 +340,7 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                 "last_callback_at": (
                     latest_callbacks[item.id].occurred_at if item.id in latest_callbacks else None
                 ),
+                "field_report_pending": item.id in pending_report_ids,
                 "subscriber_name": subscribers.get(item.subscriber_snapshot_id, (None, None))[0],
                 "account_no": subscribers.get(item.subscriber_snapshot_id, (None, item.account_no))[
                     1

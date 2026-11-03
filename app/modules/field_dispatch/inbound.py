@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -15,6 +15,7 @@ from app.modules.field_dispatch.gateway import completion_prompt_text
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldReportNotification,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
@@ -355,8 +356,10 @@ def _text_reply(
             return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
         receipt.report_delete_status = "PENDING"
         receipt.card_edit_status = "PENDING"
+        report_message_id = uuid4()
         db.add(
             FieldExternalMessage(
+                id=report_message_id,
                 handoff_id=handoff.id,
                 update_record_id=receipt.id,
                 chat_id=str(message.get("chat", {}).get("id")),
@@ -368,6 +371,7 @@ def _text_reply(
                 telegram_created_at=event_time,
             )
         )
+        db.add(FieldReportNotification(handoff_id=handoff.id, message_id=report_message_id))
         prompt.status = "COMPLETED"
         prompt.error_code = None
         prompt.completed_at = event_time

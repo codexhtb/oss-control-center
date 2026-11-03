@@ -1,5 +1,9 @@
 # API contracts — Phase 1
 
+## Уведомления об отчётах выездных работ (`0027`)
+
+`GET /api/v1/notifications?page=1&size=20` возвращает `{items,page,size,total,unread_count}` для инженера с `tickets.field_work` и доступом к заявке через `tickets.read.all` или `tickets.read.own`. Элемент содержит `id`, `ticket_id`, `ticket_number`, `sender_name`, `reported_at`, nullable `read_at` и `awaiting_verification`. `POST /api/v1/notifications/{id}/read` требует сессию, Origin и CSRF; повторное прочтение идемпотентно (`204`). Чужое или недоступное уведомление даёт `404`, отсутствие прав — `403`. `GET /api/v1/tickets` добавляет `field_report_pending`, вычисляемый из текущего `FieldWorkHandoff.work_status = REPORTED` для доступных заявок. Ответы не кешируются. Web UI обновляет оба списка каждые 15 секунд.
+
 **Главная страница:** постоянное приветствие для всех ролей использует
 `user.display_name` и `user.role` из существующего `GET /api/v1/auth/me`.
 Появление имени для всех и цветочный эффект по нажатию только для оператора

@@ -36,6 +36,8 @@ from app.modules.field_dispatch.models import (
     FieldDispatchGroupBinding,
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldReportNotification,
+    FieldReportNotificationRead,
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
@@ -2987,6 +2989,16 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:
     engineer = seed_user(ticket_engine, "telegram_t2_engineer", Role.ENGINEER)
+    second_engineer = seed_user(ticket_engine, "telegram_t2_second_engineer", Role.ENGINEER)
+    own_only_engineer = seed_user(ticket_engine, "telegram_t2_own_only", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "telegram_t2_operator", Role.OPERATOR)
+    with Session(ticket_engine) as db:
+        own_only = db.get(User, own_only_engineer.id)
+        assert own_only is not None
+        own_only.permissions_customized = True
+        db.add(UserPermission(user_id=own_only.id, permission=Permission.TICKET_READ_OWN))
+        db.add(UserPermission(user_id=own_only.id, permission=Permission.TICKET_FIELD_WORK))
+        db.commit()
     snapshot, connections = seed_snapshot(
         ticket_engine,
         engineer,
@@ -3197,6 +3209,7 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert saved is not None and saved.work_status == "REPORTED"
         assert db.scalar(select(func.count()).select_from(FieldExternalMessage)) == 1
+        assert db.scalar(select(func.count()).select_from(FieldReportNotification)) == 1
         saved_report = db.scalar(select(FieldExternalMessage))
         assert saved_report is not None and saved_report.sender_telegram_id == 502
         saved_prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
@@ -3262,6 +3275,31 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     assert messages.json()["items"][0]["body"] == (
         "Работы выполнены участником без заранее сохранённого Telegram ID."
     )
+    inbox_path = "/api/v1/notifications"
+    inbox = ticket_client.get(inbox_path)
+    assert inbox.status_code == 200, inbox.text
+    assert inbox.json()["total"] == inbox.json()["unread_count"] == 1
+    notification = inbox.json()["items"][0]
+    assert notification["ticket_id"] == ticket_id
+    assert notification["sender_name"] == "Другой монтажник"
+    assert notification["awaiting_verification"] is True
+    assert ticket_client.get("/api/v1/tickets").json()["items"][0]["field_report_pending"] is True
+    read_path = f"{inbox_path}/{notification['id']}/read"
+    assert ticket_client.post(read_path).status_code == 403
+    assert ticket_client.post(read_path, headers=csrf(ticket_client)).status_code == 204
+    assert ticket_client.post(read_path, headers=csrf(ticket_client)).status_code == 204
+    assert ticket_client.get(inbox_path).json()["unread_count"] == 0
+    login(ticket_client, second_engineer.login)
+    assert ticket_client.get(inbox_path).json()["unread_count"] == 1
+    login(ticket_client, own_only_engineer.login)
+    assert ticket_client.get(inbox_path).json()["total"] == 0
+    assert ticket_client.post(read_path, headers=csrf(ticket_client)).status_code == 404
+    login(ticket_client, operator.login)
+    assert ticket_client.get(inbox_path).status_code == 403
+    assert ticket_client.post(read_path, headers=csrf(ticket_client)).status_code == 403
+    login(ticket_client, engineer.login)
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(FieldReportNotificationRead)) == 1
     verify_path = f"{path}/field-work-handoffs/{handoff['id']}/verify"
     assert ticket_client.post(verify_path).status_code == 403
     verified = ticket_client.post(verify_path, headers=csrf(ticket_client))
@@ -3269,6 +3307,8 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     assert verified.json()["work_status"] == "VERIFIED"
     assert verified.json()["verified_by"] == str(engineer.id)
     assert ticket_client.get(path).json()["status"] == "IN_PROGRESS"
+    assert ticket_client.get("/api/v1/tickets").json()["items"][0]["field_report_pending"] is False
+    assert ticket_client.get(inbox_path).json()["items"][0]["awaiting_verification"] is False
 
 
 def test_dynamic_group_binding_requires_admin_and_tracks_supergroup_migration(

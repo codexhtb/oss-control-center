@@ -49,6 +49,7 @@ export interface Ticket {
   callback_count?: number
   last_callback_outcome?: 'CONFIRMED' | 'STILL_BROKEN' | 'NO_ANSWER' | null
   last_callback_at?: string | null
+  field_report_pending?: boolean
 }
 
 export interface SubscriberConnection {

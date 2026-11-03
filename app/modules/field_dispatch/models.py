@@ -425,3 +425,47 @@ class FieldDispatchChatMigration(Base):
     migrated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class FieldReportNotification(Base):
+    """One durable notification for a completed handoff, shared by eligible engineers."""
+
+    __tablename__ = "field_report_notifications"
+    __table_args__ = (
+        UniqueConstraint("handoff_id", name="uq_field_report_notifications_handoff"),
+        UniqueConstraint("message_id", name="uq_field_report_notifications_message"),
+        Index("ix_field_report_notifications_created", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    handoff_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    message_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_external_messages.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldReportNotificationRead(Base):
+    """Per-user read receipt; absence of a row means unread."""
+
+    __tablename__ = "field_report_notification_reads"
+
+    notification_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_report_notifications.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), primary_key=True
+    )
+    read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
