@@ -128,7 +128,7 @@ export function ChatPage({ user }: { user: User }) {
 
   let previousDay = ''
   return <section className="staff-chat" aria-label="Общий чат сотрудников">
-    <header className="staff-chat__header"><div><span className="staff-chat__eyebrow">ОБЩИЙ ЧАТ</span><h1>Сотрудники</h1><p>Операторы, инженеры OSS и администраторы</p></div></header>
+    <header className="staff-chat__header"><h1>Общий чат</h1></header>
     <div className="staff-chat__timeline" ref={listRef} onScroll={onScroll} role="log" aria-live="polite" aria-relevant="additions">
       {olderBefore && <button className="staff-chat__older" type="button" onClick={() => void loadOlder()} disabled={loadingOlder}>{loadingOlder ? 'Загружаем…' : 'Показать ранние сообщения'}</button>}
       {loading && <div className="staff-chat__state"><LoaderCircle className="spin" size={22} /> Загружаем переписку…</div>}

@@ -27,6 +27,8 @@ beforeEach(() => {
 
 it('loads history, receives realtime messages and marks the visible end as read', async () => {
   renderPage()
+  expect(screen.getByRole('heading', { name: 'Общий чат' })).toBeInTheDocument()
+  expect(screen.queryByText('Операторы, инженеры OSS и администраторы')).not.toBeInTheDocument()
   expect(await screen.findByText('Привет')).toBeInTheDocument()
   await waitFor(() => expect(chatApi.markRead).toHaveBeenCalledWith(1))
   window.dispatchEvent(new CustomEvent(chatMessageEvent, { detail: { ...incoming, id: 2, body: 'Новый ответ' } }))
