@@ -84,8 +84,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-hero__caption h1 { margin: 0; color: #79bca9; font-size: clamp(22px, 2.4vw, 32px); font-weight: 800; letter-spacing: .18em; text-transform: uppercase; text-wrap: balance; text-shadow: 0 9px 34px rgba(0, 0, 0, .55); }
 .login-card { padding: 35px; border: 1px solid #314039; border-radius: 17px; background: linear-gradient(145deg, rgba(31, 40, 45, .96), rgba(22, 29, 35, .98)); box-shadow: 0 30px 95px rgba(0, 0, 0, .31); }
 .login-card__icon { display: grid; place-items: center; width: 43px; height: 43px; margin-bottom: 30px; border: 1px solid #3b6157; border-radius: 11px; background: #173a33; color: var(--accent); }
-.login-card h2 { margin: 8px 0 8px; font-size: 28px; letter-spacing: -.045em; }
-.login-card .muted { margin: 0 0 30px; font-size: 13px; }
+.login-card h2 { margin: 8px 0 24px; font-size: 28px; letter-spacing: -.045em; }
 .login-card form { display: grid; gap: 18px; }
 .effects-toggle { display: inline-flex; align-items: center; gap: 9px; width: fit-content; color: #aebdc1; font-size: 12px; cursor: pointer; }
 .effects-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
@@ -135,10 +134,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .sidebar__profile-text strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar__profile-text span { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .shell-main { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 81px; padding: 0 clamp(26px, 4vw, 58px); border-bottom: 1px solid var(--line-soft); background: rgba(20, 27, 33, .78); }
-.topbar__context { display: flex; align-items: center; gap: 13px; color: #adbbc0; font-size: 12px; }
-.topbar__product { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; }
-.topbar__divider { color: #53616a; }
+.topbar { display: flex; align-items: center; justify-content: flex-end; gap: 20px; height: 81px; padding: 0 clamp(26px, 4vw, 58px); border-bottom: 1px solid var(--line-soft); background: rgba(20, 27, 33, .78); }
 .topbar__right { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .topbar__user { color: var(--text); font-weight: 600; }
 .topbar__user { display: inline-flex; align-items: center; gap: 9px; max-width: 220px; padding: 4px 8px 4px 4px; border: 1px solid transparent; border-radius: 9px; }
@@ -259,7 +255,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 
 @media (max-width: 560px) {
   .topbar { height: 68px; padding-right: 20px; }
-  .topbar__product, .topbar__divider, .topbar__user-name { display: none; }
+  .topbar__user-name { display: none; }
   .main-content { padding: 30px 20px 45px; }
   .page-heading { display: block; }
   .role-chip { margin-top: 18px; }

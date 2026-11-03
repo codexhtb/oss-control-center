@@ -64,7 +64,6 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
       </aside>
       <div className="shell-main">
         <header className="topbar">
-          <div className="topbar__context"><span className="topbar__product">OSS CONTROL CENTER</span></div>
           <div className="topbar__right">
             <NotificationBell session={session} />
             <NavLink to="/account" className="topbar__user" aria-label={`Мой профиль: ${session.user.display_name}`}><span className="topbar__user-avatar" aria-hidden="true">{session.user.display_name.trim().charAt(0).toLocaleUpperCase('ru')}</span><span className="topbar__user-name">{session.user.display_name}</span></NavLink>

@@ -41,9 +41,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
         <LoginBrandHero />
         <div className="login-card">
           <div className="login-card__icon"><LockKeyhole size={23} /></div>
-          <p className="eyebrow">OSS Control Center</p>
           <h2>Вход в систему</h2>
-          <p className="muted">Используйте свою учётную запись OSS.</p>
           <form action="/api/v1/auth/login" method="post" onSubmit={submit} noValidate>
             <label className="field">
               <span>Логин</span>
