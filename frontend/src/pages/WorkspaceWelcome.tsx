@@ -2,6 +2,7 @@ import { ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { roleLabel } from '../layout/AppShell'
 import type { MeResponse } from '../shared/api/types'
+import { useReducedMotion, useSimplifiedEffects } from '../shared/ui/effects-preference'
 
 const petals = [
   { kind: 'flower', x: -82, y: -45, turn: -30, delay: 0 },
@@ -18,16 +19,22 @@ const petals = [
 
 export function WorkspaceWelcome({ user }: { user: MeResponse['user'] }) {
   const [burst, setBurst] = useState(0)
+  const simplified = useSimplifiedEffects()
+  const reduceMotion = useReducedMotion()
   const clearBurst = useRef<number | null>(null)
   const nameWords = user.display_name.trim().split(/\s+/)
   let letterOffset = 0
-  const nameContent = nameWords.map((word, wordIndex) => <span className="workspace-welcome__name-word" key={wordIndex} aria-hidden="true">
-    {Array.from(word).map((letter, letterIndex) => <span
+  const nameContent = nameWords.map((word, wordIndex) => {
+    const letters = Array.from(word)
+    const animatedCount = Math.min(letters.length, Math.max(0, 24 - letterOffset))
+    const animated = letters.slice(0, animatedCount).map((letter, letterIndex) => <span
       className="workspace-welcome__name-letter"
       key={letterIndex}
-      style={{ '--letter-delay': `${Math.min(letterOffset++, 32) * 36 + 120}ms` } as CSSProperties}
-    >{letter}</span>)}
-  </span>)
+      style={{ '--letter-delay': `${(letterOffset + letterIndex) * 24 + 90}ms` } as CSSProperties}
+    >{letter}</span>)
+    letterOffset += animatedCount
+    return <span className="workspace-welcome__name-word" key={wordIndex} aria-hidden="true">{animated}{letters.slice(animatedCount).join('')}</span>
+  })
 
   useEffect(() => () => {
     if (clearBurst.current !== null) window.clearTimeout(clearBurst.current)
@@ -39,7 +46,7 @@ export function WorkspaceWelcome({ user }: { user: MeResponse['user'] }) {
     clearBurst.current = window.setTimeout(() => {
       setBurst(0)
       clearBurst.current = null
-    }, 1600)
+    }, simplified || reduceMotion ? 650 : 1500)
   }
 
   return (
@@ -51,8 +58,8 @@ export function WorkspaceWelcome({ user }: { user: MeResponse['user'] }) {
           {user.role === 'operator'
             ? <button className="workspace-welcome__name workspace-welcome__name--interactive" type="button" onClick={bloom} title="Нажмите, чтобы появились цветы" aria-label={user.display_name}>
                 {nameContent}
-                {burst > 0 && <span className="workspace-welcome__burst" key={burst} aria-hidden="true">
-                  {petals.map((petal, index) => <span
+                {burst > 0 && <span className={`workspace-welcome__burst ${simplified || reduceMotion ? 'workspace-welcome__burst--simple' : ''}`} key={burst} aria-hidden="true">
+                  {!simplified && !reduceMotion && petals.map((petal, index) => <span
                     className={`workspace-welcome__particle workspace-welcome__particle--${petal.kind}`}
                     key={index}
                     style={{

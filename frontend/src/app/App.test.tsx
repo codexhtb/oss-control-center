@@ -39,6 +39,7 @@ describe('session shell', () => {
     vi.mocked(authApi.login).mockResolvedValue({ ...operator, expires_at: '2026-01-01T08:00:00Z' })
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Вход в систему' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Упрощённые эффекты' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Оптические системы связи' })).toBeInTheDocument()
     expect(screen.queryByText('Контроль заявок.')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Логин')).toHaveAttribute('id', 'username')

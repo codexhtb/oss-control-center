@@ -20,6 +20,7 @@ it('lets an employee replace their password after confirming the current one', a
   vi.mocked(authApi.changePassword).mockResolvedValue({ status: 'password_changed' })
   render(<AccountPage session={session} onPasswordChanged={changed} />)
   expect(screen.getByRole('heading', { name: 'Мой профиль' })).toBeInTheDocument()
+  expect(screen.getByRole('checkbox', { name: 'Упрощённые эффекты' })).toBeInTheDocument()
   expect(screen.getByText('employee')).toBeInTheDocument()
   expect(screen.queryByText('tickets.read.own')).not.toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Текущий пароль'), { target: { value: 'old' } })

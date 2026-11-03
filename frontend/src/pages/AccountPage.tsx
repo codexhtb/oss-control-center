@@ -8,6 +8,7 @@ import { errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { PasswordInput } from '../shared/ui/PasswordInput'
+import { EffectsToggle } from '../shared/ui/EffectsToggle'
 
 export function AccountPage({ session, onPasswordChanged }: { session: MeResponse; onPasswordChanged: () => void }) {
   const [current, setCurrent] = useState('')
@@ -51,6 +52,7 @@ export function AccountPage({ session, onPasswordChanged }: { session: MeRespons
         </form>
       </Panel>
       </div>
+      <Panel className="account-effects"><h2>Отображение</h2><EffectsToggle /></Panel>
     </div>
   )
 }
