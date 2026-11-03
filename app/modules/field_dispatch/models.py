@@ -169,6 +169,18 @@ class FieldDispatchUpdate(Base):
             "'UNCERTAIN','FAILED')",
             name="ck_field_updates_confirmation",
         ),
+        CheckConstraint(
+            "report_delete_status IN ('NOT_REQUIRED','PENDING','SENDING','DONE','FAILED')",
+            name="ck_field_updates_report_delete_status",
+        ),
+        CheckConstraint(
+            "card_edit_status IN ('NOT_REQUIRED','PENDING','SENDING','DONE','FAILED')",
+            name="ck_field_updates_card_edit_status",
+        ),
+        CheckConstraint(
+            "report_delete_attempts >= 0 AND card_edit_attempts >= 0",
+            name="ck_field_updates_cleanup_attempts",
+        ),
         Index("ix_field_updates_received", "received_at", "id"),
     )
 
@@ -189,6 +201,18 @@ class FieldDispatchUpdate(Base):
         String(16), nullable=False, server_default="NOT_REQUIRED"
     )
     confirmation_error_code: Mapped[str | None] = mapped_column(String(80))
+    report_delete_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="NOT_REQUIRED"
+    )
+    report_delete_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    report_delete_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    report_delete_error_code: Mapped[str | None] = mapped_column(String(80))
+    card_edit_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="NOT_REQUIRED"
+    )
+    card_edit_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    card_edit_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    card_edit_error_code: Mapped[str | None] = mapped_column(String(80))
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

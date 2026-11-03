@@ -124,7 +124,7 @@ def test_gateway_rejects_overbroad_secret_permissions(tmp_path: Path) -> None:
         )
 
 
-def test_gateway_acknowledges_callback_and_disables_completion_button(
+def test_gateway_acknowledges_callback_and_edits_card_without_button(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = token_file(tmp_path)
@@ -135,13 +135,32 @@ def test_gateway_acknowledges_callback_and_disables_completion_button(
     args, _ = FakeConnection.request_args or ((), {})
     assert args[1].endswith("/answerCallbackQuery")
 
-    FakeConnection.response = FakeResponse(200, {"ok": True, "result": {"message_id": 71}})
-    gateway.mark_message_completed("-5319791765", 71)
+    completed_text = "Заявка #1\n\n✅ Выполнено\nМонтажник: Тест"
+    FakeConnection.response = FakeResponse(
+        200,
+        {
+            "ok": True,
+            "result": {"message_id": 71, "chat": {"id": -5319791765}, "text": completed_text},
+        },
+    )
+    gateway.edit_handoff_card("-5319791765", 71, completed_text)
     args, kwargs = FakeConnection.request_args or ((), {})
-    assert args[1].endswith("/editMessageReplyMarkup")
-    assert json.loads(kwargs["body"])["reply_markup"] == {
-        "inline_keyboard": [[{"text": "✅ Выполнено", "disabled": True}]]
-    }
+    assert args[1].endswith("/editMessageText")
+    assert json.loads(kwargs["body"])["reply_markup"] == {"inline_keyboard": []}
+    FakeConnection.response = FakeResponse(
+        200,
+        {
+            "ok": True,
+            "result": {
+                "message_id": 71,
+                "chat": {"id": -5319791765},
+                "text": completed_text,
+                "reply_markup": {"inline_keyboard": [[{"text": "✅ Выполнено"}]]},
+            },
+        },
+    )
+    with pytest.raises(DispatchUncertain):
+        gateway.edit_handoff_card("-5319791765", 71, completed_text)
 
 
 def test_gateway_asks_for_completion_description_with_force_reply(
@@ -187,6 +206,21 @@ def test_gateway_deletes_only_requested_message(
     args, kwargs = FakeConnection.request_args or ((), {})
     assert args[1].endswith("/deleteMessage")
     assert json.loads(kwargs["body"]) == {"chat_id": "-5319791765", "message_id": 704}
+
+    FakeConnection.response = FakeResponse(
+        400,
+        {"ok": False, "error_code": 400, "description": "Bad Request: message to delete not found"},
+    )
+    with pytest.raises(DispatchRejected, match="telegram_message_not_found"):
+        TelegramBotGateway(TelegramGatewayConfig(path)).delete_message("-5319791765", 704)
+
+    FakeConnection.response = FakeResponse(
+        400, {"ok": False, "error_code": 400, "description": "Bad Request: message is not modified"}
+    )
+    with pytest.raises(DispatchRejected, match="telegram_message_not_modified"):
+        TelegramBotGateway(TelegramGatewayConfig(path)).edit_handoff_card(
+            "-5319791765", 701, "✅ Выполнено"
+        )
 
 
 @pytest.mark.integration

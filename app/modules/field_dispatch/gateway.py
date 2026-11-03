@@ -89,6 +89,15 @@ class TelegramBotGateway:
             raise DispatchUncertain
         if response.status != 200 or decoded.get("ok") is not True:
             error_code = decoded.get("error_code")
+            description = decoded.get("description")
+            if error_code == 400 and isinstance(description, str):
+                if method == "editMessageText" and "message is not modified" in description.lower():
+                    raise DispatchRejected("telegram_message_not_modified")
+                if (
+                    method == "deleteMessage"
+                    and "message to delete not found" in description.lower()
+                ):
+                    raise DispatchRejected("telegram_message_not_found")
             raise DispatchRejected(
                 f"telegram_http_{error_code if isinstance(error_code, int) else response.status}"
             )
@@ -191,45 +200,33 @@ class TelegramBotGateway:
         if self._call("deleteMessage", {"chat_id": chat_id, "message_id": message_id}) is not True:
             raise DispatchUncertain from None
 
-    def mark_message_completed(self, chat_id: str, message_id: int) -> None:
+    def edit_handoff_card(self, chat_id: str, message_id: int, text: str) -> None:
+        """Replace the original handoff card with its completed state and no button."""
         _validate_chat_id(chat_id)
+        if message_id <= 0 or not text or len(text) > 4096:
+            raise ValueError("telegram_card_invalid")
         result = self._call(
-            "editMessageReplyMarkup",
+            "editMessageText",
             {
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "reply_markup": {"inline_keyboard": [[{"text": "✅ Выполнено", "disabled": True}]]},
-            },
-        )
-        if not isinstance(result, dict):
-            raise DispatchUncertain from None
-
-    def acknowledge_completion_report(
-        self, chat_id: str, report_message_id: int, ticket_number: int
-    ) -> None:
-        """Confirm durable report acceptance by replying to the participant."""
-        _validate_chat_id(chat_id)
-        result = self._call(
-            "sendMessage",
-            {
-                "chat_id": chat_id,
-                "text": (
-                    f"✅ Отчёт по заявке #{ticket_number} принят. "
-                    "Инженер OSS проверит его отдельно."
-                ),
-                "reply_parameters": {
-                    "message_id": report_message_id,
-                    "allow_sending_without_reply": False,
-                },
-                "disable_web_page_preview": True,
+                "text": text,
+                "reply_markup": {"inline_keyboard": []},
+                "link_preview_options": {"is_disabled": True},
             },
         )
         if not isinstance(result, dict):
             raise DispatchUncertain from None
         response_chat = result.get("chat")
-        message_id = result.get("message_id")
+        response_message_id = result.get("message_id")
         response_chat_id = response_chat.get("id") if isinstance(response_chat, dict) else None
-        if str(response_chat_id) != chat_id or not isinstance(message_id, int):
+        reply_markup = result.get("reply_markup")
+        if (
+            str(response_chat_id) != chat_id
+            or response_message_id != message_id
+            or result.get("text") != text
+            or reply_markup not in (None, {"inline_keyboard": []})
+        ):
             raise DispatchUncertain from None
 
 

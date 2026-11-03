@@ -347,12 +347,14 @@ def _text_reply(
             kind,
             "PROCESSED",
             handoff_id=handoff.id,
-            sync_status="PENDING",
-            confirmation_status="PENDING",
+            sync_status="NOT_REQUIRED",
+            confirmation_status="NOT_REQUIRED",
         )
         if not created:
             db.rollback()
             return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+        receipt.report_delete_status = "PENDING"
+        receipt.card_edit_status = "PENDING"
         db.add(
             FieldExternalMessage(
                 handoff_id=handoff.id,

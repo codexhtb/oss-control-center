@@ -8,7 +8,7 @@ from pathlib import Path
 from time import sleep
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.engine import get_engine
@@ -203,22 +203,108 @@ def _delete_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) ->
     db.commit()
 
 
-def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
+def _card_text(handoff: FieldWorkHandoff, report: FieldExternalMessage) -> str:
+    suffix = f"\n\n✅ Выполнено\nМонтажник: {report.sender_name}"
+    original = handoff.message_text or ""
+    if len(original) + len(suffix) > 4096:
+        original = original[: 4095 - len(suffix)].rstrip() + "…"
+    return original + suffix
+
+
+def _sync_report_action(
+    db: Session, gateway: TelegramBotGateway, update_id: int, action: str
+) -> None:
+    if action not in {"report_delete", "card_edit"}:
+        raise ValueError("telegram_report_action_invalid")
     record = db.scalar(
         select(FieldDispatchUpdate)
         .where(
             FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
             FieldDispatchUpdate.update_id == update_id,
+            FieldDispatchUpdate.kind == "COMPLETION_REPORT",
+            FieldDispatchUpdate.outcome == "PROCESSED",
         )
         .with_for_update()
     )
-    handoff = db.get(FieldWorkHandoff, record.handoff_id) if record is not None else None
-    if record is None or handoff is None:
+    if record is None:
+        db.rollback()
         return
+    status = getattr(record, f"{action}_status")
+    attempts = getattr(record, f"{action}_attempts")
+    attempted_at = getattr(record, f"{action}_attempted_at")
+    if status not in {"PENDING", "SENDING", "FAILED"} or attempts >= 5:
+        db.rollback()
+        return
+    now = datetime.now(UTC)
+    if attempted_at is not None and status != "PENDING":
+        if now - attempted_at < timedelta(seconds=30 * 2 ** min(attempts, 5)):
+            db.rollback()
+            return
+    report = db.scalar(
+        select(FieldExternalMessage).where(
+            FieldExternalMessage.update_record_id == record.id,
+            FieldExternalMessage.kind == "COMPLETION_REPORT",
+        )
+    )
+    handoff = db.get(FieldWorkHandoff, record.handoff_id) if record.handoff_id else None
+    if (
+        report is None
+        or report.telegram_message_id is None
+        or handoff is None
+        or (
+            action == "card_edit"
+            and (handoff.telegram_message_id is None or not handoff.message_text)
+        )
+    ):
+        setattr(record, f"{action}_status", "FAILED")
+        setattr(record, f"{action}_attempts", 5)
+        setattr(record, f"{action}_error_code", "telegram_cleanup_target_missing")
+        db.commit()
+        return
+    setattr(record, f"{action}_status", "SENDING")
+    setattr(record, f"{action}_attempts", attempts + 1)
+    setattr(record, f"{action}_attempted_at", now)
+    db.commit()
+    try:
+        if action == "report_delete":
+            gateway.delete_message(current_chat_id(db, report.chat_id), report.telegram_message_id)
+        else:
+            gateway.edit_handoff_card(
+                current_chat_id(db, handoff.chat_id),
+                handoff.telegram_message_id,
+                _card_text(handoff, report),
+            )
+    except DispatchRejected as exc:
+        already_done = (action == "report_delete" and exc.code == "telegram_message_not_found") or (
+            action == "card_edit" and exc.code == "telegram_message_not_modified"
+        )
+        status = "DONE" if already_done else "FAILED"
+        error_code = None if already_done else exc.code
+    except DispatchUncertain:
+        status = "FAILED"
+        error_code = "telegram_transport_uncertain"
+    else:
+        status = "DONE"
+        error_code = None
+    setattr(record, f"{action}_status", status)
+    setattr(record, f"{action}_error_code", error_code)
+    db.commit()
 
+
+def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
+    record = db.scalar(
+        select(FieldDispatchUpdate).where(
+            FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
+            FieldDispatchUpdate.update_id == update_id,
+            FieldDispatchUpdate.kind == "COMPLETION_REPORT",
+            FieldDispatchUpdate.outcome == "PROCESSED",
+        )
+    )
+    if record is None or record.handoff_id is None:
+        return
     prompt_id = db.scalar(
         select(FieldWorkCompletionPrompt.id).where(
-            FieldWorkCompletionPrompt.handoff_id == handoff.id,
+            FieldWorkCompletionPrompt.handoff_id == record.handoff_id,
             FieldWorkCompletionPrompt.status == "COMPLETED",
             FieldWorkCompletionPrompt.deletion_status != "NOT_REQUIRED",
         )
@@ -229,53 +315,14 @@ def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -
         except Exception as exc:
             db.rollback()
             logger.error("telegram_prompt_deletion_failed error_type=%s", type(exc).__name__)
-
-    if record.confirmation_status == "PENDING":
-        report = db.scalar(
-            select(FieldExternalMessage).where(
-                FieldExternalMessage.update_record_id == record.id,
-                FieldExternalMessage.kind == "COMPLETION_REPORT",
+    for action in ("report_delete", "card_edit"):
+        try:
+            _sync_report_action(db, gateway, update_id, action)
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                "telegram_report_cleanup_failed action=%s error_type=%s", action, type(exc).__name__
             )
-        )
-        ticket = db.get(Ticket, handoff.ticket_id)
-        if report is not None and report.telegram_message_id is not None and ticket is not None:
-            # Claim before sending. A crash after this commit leaves the result
-            # uncertain and prevents a duplicate confirmation on redelivery.
-            record.confirmation_status = "SENDING"
-            db.commit()
-            try:
-                gateway.acknowledge_completion_report(
-                    current_chat_id(db, report.chat_id),
-                    report.telegram_message_id,
-                    ticket.number,
-                )
-            except DispatchRejected as exc:
-                record.confirmation_status = "FAILED"
-                record.confirmation_error_code = exc.code
-            except DispatchUncertain:
-                record.confirmation_status = "UNCERTAIN"
-                record.confirmation_error_code = "telegram_transport_uncertain"
-            else:
-                record.confirmation_status = "SENT"
-                record.confirmation_error_code = None
-            db.commit()
-
-    if handoff.telegram_message_id is None:
-        return
-    try:
-        gateway.mark_message_completed(
-            current_chat_id(db, handoff.chat_id), handoff.telegram_message_id
-        )
-    except DispatchRejected as exc:
-        record.sync_status = "FAILED"
-        record.sync_error_code = exc.code
-    except DispatchUncertain:
-        record.sync_status = "FAILED"
-        record.sync_error_code = "telegram_transport_uncertain"
-    else:
-        record.sync_status = "SYNCED"
-        record.sync_error_code = None
-    db.commit()
 
 
 def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
@@ -320,11 +367,20 @@ def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
         .where(
             FieldDispatchUpdate.kind == "COMPLETION_REPORT",
             FieldDispatchUpdate.outcome == "PROCESSED",
-            FieldDispatchUpdate.sync_status.in_(("PENDING", "FAILED")),
+            or_(
+                and_(
+                    FieldDispatchUpdate.report_delete_status.in_(("PENDING", "SENDING", "FAILED")),
+                    FieldDispatchUpdate.report_delete_attempts < 5,
+                ),
+                and_(
+                    FieldDispatchUpdate.card_edit_status.in_(("PENDING", "SENDING", "FAILED")),
+                    FieldDispatchUpdate.card_edit_attempts < 5,
+                ),
+            ),
             FieldDispatchUpdate.handoff_id.is_not(None),
         )
-        .order_by(FieldDispatchUpdate.received_at.asc())
-        .limit(20)
+        .order_by(FieldDispatchUpdate.received_at.desc())
+        .limit(100)
     ).all()
     for record in records:
         _sync_completion(db, gateway, record.update_id)

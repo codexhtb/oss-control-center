@@ -170,6 +170,12 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `GET /tickets/{ticket_id}/history` | Оператор, инженер | Пагинация | Хронология фактов с источником и временем; внешних Telegram сообщений в Phase 1 нет |
 | `GET /tickets/{ticket_id}/audit` | Инженер | Пагинация | Аудит действий по заявке без секретов и копирования полного содержания PII |
 
+**Telegram completion, `0026`:** контракт HTTP чтения отчёта не меняется:
+`COMPLETION_REPORT` сохраняется до вызовов Telegram. После commit poller
+вызывает `deleteMessage` для точного сообщения ответа и `editMessageText` для
+исходной карточки без inline-кнопки; отдельный `sendMessage` с подтверждением
+не вызывается. Сбои этих вызовов не меняют HTTP-результат и `REPORTED`.
+
 **Phase 5.1, linked-заявки:** `duplicate_reason?: string` (непустая, до 500
 символов) требуется, если для точного абонентского ключа уже есть `OPEN` или
 `IN_PROGRESS` заявка. Иначе `409 active_ticket_exists` без сведений о чужих
