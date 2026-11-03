@@ -2,15 +2,26 @@
 
 from datetime import datetime
 from typing import Literal
+from unicodedata import category
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SendFieldWork(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_request_id: UUID
+    visit_address: str | None = Field(default=None, max_length=500)
+
+    @field_validator("visit_address")
+    @classmethod
+    def valid_visit_address(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value)
+        ):
+            raise ValueError("visit_address must be trimmed and contain no control characters")
+        return value
 
 
 class FieldWorkHandoffView(BaseModel):
@@ -24,6 +35,7 @@ class FieldWorkHandoffView(BaseModel):
     chat_id: str
     telegram_message_id: int | None
     message_preview: str | None = None
+    visit_address: str | None = None
     ready_to_send: bool = False
     missing_fields: list[str] = Field(default_factory=list)
     created_by: UUID

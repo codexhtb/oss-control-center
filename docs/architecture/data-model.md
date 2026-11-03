@@ -313,6 +313,8 @@ receipt отчёта независимые статусы, счётчики и 
 
 ## Таблицы Phase 3 и независимость состояний
 
+`field_work_handoffs.visit_address` (`0028`) — nullable адрес, введённый инженером только для данной Telegram-передачи. Он не изменяет `subscriber_snapshots` или NetUP. Финальный текст остаётся в `message_text` handoff и фиксируется при начале отправки; при наличии адреса в subscriber snapshot он имеет приоритет.
+
 `field_report_notifications` (`0027`) хранит одну запись на передачу с сохранённым `COMPLETION_REPORT` (`handoff_id` и `message_id` уникальны). Запись создаётся в транзакции с переводом передачи в `REPORTED`; повтор Update не создаёт новую. `field_report_notification_reads` хранит `(notification_id, user_id, read_at)` с уникальной парой. Прочтение не меняет `FieldWorkHandoff.work_status`; индикатор проверки вычисляется из текущего `REPORTED` и исчезает при `VERIFIED`. При окончательном удалении заявки записи прочтения и уведомления удаляются до связанных Telegram-сообщений и передачи.
 
 - `field_work_handoffs`: T1 хранит `ticket_id`, версию заявки, причину и

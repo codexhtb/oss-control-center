@@ -79,6 +79,7 @@ class FieldWorkHandoff(Base):
     chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     message_text: Mapped[str | None] = mapped_column(Text)
+    visit_address: Mapped[str | None] = mapped_column(String(500))
     created_by: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False
     )

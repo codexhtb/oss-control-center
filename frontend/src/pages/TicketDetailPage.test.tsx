@@ -131,9 +131,46 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
   ))
   expect(ticketApi.sendFieldWork).not.toHaveBeenCalled()
   const send = await screen.findByRole('button', { name: 'Отправить боту' })
+  expect(screen.queryByRole('textbox', { name: 'Адрес для выезда' })).not.toBeInTheDocument()
   fireEvent.click(send)
   await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
-    ticketId, handoff.id, expect.any(String),
+    ticketId, handoff.id, expect.any(String), undefined,
+  ))
+})
+
+it.each([
+  ['г. Тест, ул. Ручная, д. 7', 'г. Тест, ул. Ручная, д. 7'],
+  ['', 'не указан'],
+])('previews and sends an optional visit address (%s)', async (input, address) => {
+  const staff = session('engineer')
+  const privileged: MeResponse = { ...staff, permissions: [...staff.permissions, 'tickets.field_work'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'IN_PROGRESS',
+    assigned_engineer_id: staff.user.id, account_no: 'SYNTHETIC-001',
+    subscriber: { full_name: 'Синтетический абонент', organization_name: null,
+      phone: '+000000', actual_address: null, house_number: null,
+      fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
+  })
+  const handoff = {
+    id: '00000000-0000-4000-8000-000000000040', ticket_id: ticketId,
+    reason: 'Проверить кабель', delivery_status: 'DRAFT' as const,
+    work_status: 'AWAITING_REPORT' as const, chat_id: '-5319791765',
+    telegram_message_id: null, message_preview: 'Заявка #73\nАдрес: не указан\nПричина передачи: Проверить кабель',
+    visit_address: null, ready_to_send: true, missing_fields: [], created_by: staff.user.id,
+    sent_by: null, sent_by_name: null, last_error_code: null,
+    created_at: base.created_at, send_started_at: null, sent_at: null,
+    reported_at: null, verified_by: null, verified_by_name: null, verified_at: null,
+    updated_at: base.updated_at,
+  }
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff })
+  vi.mocked(ticketApi.sendFieldWork).mockResolvedValue({ ...handoff, delivery_status: 'SENT' })
+  renderDetail('engineer', privileged)
+  const field = await screen.findByRole('textbox', { name: 'Адрес для выезда' })
+  fireEvent.change(field, { target: { value: input } })
+  expect(document.querySelector('.field-dispatch-preview pre')?.textContent).toContain(`Адрес: ${address}`)
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить боту' }))
+  await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
+    ticketId, handoff.id, expect.any(String), input || null,
   ))
 })
 

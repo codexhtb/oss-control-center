@@ -65,6 +65,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [decisionText, setDecisionText] = useState('')
   const [decisionReason, setDecisionReason] = useState<ResolutionReason>('NOT_ESTABLISHED')
   const [fieldReason, setFieldReason] = useState('')
+  const [visitAddress, setVisitAddress] = useState('')
   const [engineerId, setEngineerId] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<unknown>(null)
@@ -103,6 +104,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
   const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork })
   const handoffId = fieldHandoff.data?.handoff?.id
+  useEffect(() => {
+    setVisitAddress(fieldHandoff.data?.handoff?.visit_address ?? '')
+  }, [handoffId, fieldHandoff.data?.handoff?.visit_address])
   const fieldMessages = useQuery({
     queryKey: ['ticket-field-work-messages', id, handoffId],
     queryFn: ({ signal }) => ticketApi.fieldWorkMessages(id, handoffId!, signal),
@@ -284,7 +288,10 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                 {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
                 {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
                   <strong>Передача в Telegram</strong>
-                  <pre>{fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>
+                  <pre>{fieldHandoff.data.handoff.message_preview && !ticket.subscriber?.actual_address?.trim() && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status)
+                    ? fieldHandoff.data.handoff.message_preview.replace(/^Адрес: .*$/m, () => `Адрес: ${visitAddress.trim() || 'не указан'}`)
+                    : fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>
+                  {!ticket.subscriber?.actual_address?.trim() && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status) && <label className="field"><span>Адрес для выезда (необязательно)</span><input aria-label="Адрес для выезда" maxLength={500} value={visitAddress} onChange={(event) => setVisitAddress(event.target.value)} placeholder="Можно отправить без адреса" /><small>Используется только в этой Telegram-передаче; данные NetUP не изменятся.</small></label>}
                   {fieldHandoff.data.handoff.missing_fields.length > 0 && <p className="rail-note">Не хватает данных: {fieldHandoff.data.handoff.missing_fields.join(', ')}.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-live="polite">
@@ -306,7 +313,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   {fieldHandoff.data.handoff.delivery_status === 'SENDING' && <p className="rail-note">Отправка выполняется. Повторный запрос заблокирован.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">Telegram отклонил отправку. Можно повторить отдельным действием.</Notice>}
                   {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <Notice tone="error">Результат отправки неизвестен. Автоматический повтор заблокирован во избежание дубля.</Notice>}
-                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID()))}>Отправить боту</Button>}
+                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !ticket.subscriber?.actual_address?.trim() ? visitAddress.trim() || null : undefined))}>Отправить боту</Button>}
                 </div>}
               </div></section>}
         </div>

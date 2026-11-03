@@ -50,7 +50,7 @@ def _address(address: str | None, house: str | None) -> str | None:
     base = address.strip() if address else ""
     number = house.strip() if house else ""
     if not base:
-        return f"д. {number}" if number else None
+        return None
     if not number:
         return base
     escaped = re.escape(number)
@@ -82,8 +82,11 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     contact = ticket.caller_phone or (snapshot.phone if snapshot is not None else None)
     contact_label = "Телефон звонящего" if ticket.caller_phone else "Контакт NetUP"
     account = ticket.account_no
-    address = None if snapshot is None else _address(snapshot.actual_address, snapshot.house_number)
-    values = {"subscriber": name, "contact": contact, "account": account, "address": address}
+    source_address = (
+        None if snapshot is None else _address(snapshot.actual_address, snapshot.house_number)
+    )
+    address = source_address or handoff.visit_address or "не указан"
+    values = {"subscriber": name, "contact": contact, "account": account}
     missing = tuple(key for key, value in values.items() if not value)
     if missing:
         return MessageData(None, missing)
@@ -166,7 +169,13 @@ class PreparedSend:
 
 
 def prepare_send(
-    db: Session, actor_id: UUID, ticket_id: UUID, handoff_id: UUID, request_id: UUID
+    db: Session,
+    actor_id: UUID,
+    ticket_id: UUID,
+    handoff_id: UUID,
+    request_id: UUID,
+    visit_address: str | None = None,
+    update_visit_address: bool = False,
 ) -> PreparedSend | FieldWorkHandoff:
     actor = _actor(db, actor_id)
     handoff = db.execute(
@@ -200,6 +209,17 @@ def prepare_send(
         raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
     if handoff.delivery_status == "UNCERTAIN":
         raise ApiError(409, "field_send_uncertain", "Telegram delivery outcome is uncertain")
+    snapshot = (
+        db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
+        if ticket.subscriber_snapshot_id is not None
+        else None
+    )
+    if update_visit_address:
+        if visit_address is not None and snapshot is not None and _address(
+            snapshot.actual_address, snapshot.house_number
+        ):
+            raise ApiError(422, "field_address_from_snapshot", "Address is already in snapshot")
+        handoff.visit_address = visit_address
     handoff.chat_id = destination_chat_id(db)
     message = _message(db, handoff, actor)
     if message.missing:
@@ -300,8 +320,12 @@ def send_handoff(
     ticket_id: UUID,
     handoff_id: UUID,
     request_id: UUID,
+    visit_address: str | None = None,
+    update_visit_address: bool = False,
 ) -> FieldWorkHandoff:
-    prepared = prepare_send(db, actor_id, ticket_id, handoff_id, request_id)
+    prepared = prepare_send(
+        db, actor_id, ticket_id, handoff_id, request_id, visit_address, update_visit_address
+    )
     if isinstance(prepared, FieldWorkHandoff):
         return prepared
     try:

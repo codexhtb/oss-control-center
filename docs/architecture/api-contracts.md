@@ -1,5 +1,7 @@
 # API contracts — Phase 1
 
+**Адрес для Telegram-передачи (`0028`):** `GET /api/v1/tickets/{id}/field-work-handoffs/latest` включает nullable `visit_address`. `message_preview` содержит адрес из subscriber snapshot либо сохранённый ручной адрес; если оба отсутствуют, строку `Адрес: не указан`. Отсутствие адреса не входит в `missing_fields` и не блокирует `ready_to_send`. `POST /api/v1/tickets/{id}/field-work-handoffs/{handoff_id}/send` принимает необязательный `visit_address` (до 500 символов, одна строка без управляющих символов); явно переданный `null` очищает ранее сохранённый ручной адрес при новой попытке. При адресе NetUP ручной адрес отклоняется (`422`). Повтор с тем же `client_request_id` не меняет сохранённый текст или адрес.
+
 ## Уведомления об отчётах выездных работ (`0027`)
 
 `GET /api/v1/notifications?page=1&size=20` возвращает `{items,page,size,total,unread_count}` для инженера с `tickets.field_work` и доступом к заявке через `tickets.read.all` или `tickets.read.own`. Элемент содержит `id`, `ticket_id`, `ticket_number`, `sender_name`, `reported_at`, nullable `read_at` и `awaiting_verification`. `POST /api/v1/notifications/{id}/read` требует сессию, Origin и CSRF; повторное прочтение идемпотентно (`204`). Чужое или недоступное уведомление даёт `404`, отсутствие прав — `403`. `GET /api/v1/tickets` добавляет `field_report_pending`, вычисляемый из текущего `FieldWorkHandoff.work_status = REPORTED` для доступных заявок. Ответы не кешируются. Web UI обновляет оба списка каждые 15 секунд.

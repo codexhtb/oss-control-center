@@ -723,7 +723,9 @@ def send_field_work(
 ):
     _mutation_scope(db, identity, ticket_id)
     item = send_handoff(
-        db, gateway, identity.user.id, ticket_id, handoff_id, payload.client_request_id
+        db, gateway, identity.user.id, ticket_id, handoff_id, payload.client_request_id,
+        payload.visit_address,
+        "visit_address" in payload.model_fields_set,
     )
     return handoff_view(db, item, identity.user)
 

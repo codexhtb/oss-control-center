@@ -2900,6 +2900,7 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     assert "Абонент: Synthetic Subscriber" in handoff["message_preview"]
     assert "Контакт NetUP: +000000000" in handoff["message_preview"]
     assert "Адрес: г. Тест, ул. Безопасная, д. 20" in handoff["message_preview"]
+    assert handoff["visit_address"] is None
     assert "Отправил инженер: Field_Dispatch_Engineer" in handoff["message_preview"]
 
     with Session(ticket_engine) as db:
@@ -2911,6 +2912,11 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
         db.commit()
 
     send_path = f"{path}/field-work-handoffs/{handoff['id']}/send"
+    assert ticket_client.post(
+        send_path,
+        headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "visit_address": "Чужой адрес"},
+    ).status_code == 422
     request_id = str(uuid4())
     assert ticket_client.post(send_path, json={"client_request_id": request_id}).status_code == 403
     sent = ticket_client.post(
@@ -2922,6 +2928,7 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     assert sent.json()["sent_by"] == str(engineer.id)
     assert len(gateway.calls) == 1
     assert gateway.calls[0][0] == "-2222222"
+    assert "Адрес: г. Тест, ул. Безопасная, д. 20" in gateway.calls[0][1]
     with Session(ticket_engine) as db:
         saved_handoff = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert saved_handoff is not None and saved_handoff.chat_id == "-2222222"
@@ -2983,6 +2990,92 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
             )
             == 1
         )
+
+
+@pytest.mark.parametrize(
+    ("visit_address", "expected_address"),
+    [
+        ("г. Тест, ул. Ручная, д. 7", "г. Тест, ул. Ручная, д. 7"),
+        (None, "не указан"),
+    ],
+)
+def test_field_work_allows_optional_visit_address_without_changing_subscriber_snapshot(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+    visit_address: str | None,
+    expected_address: str,
+) -> None:
+    engineer = seed_user(ticket_engine, "field_optional_address_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(
+        ticket_engine, engineer, phone="+000000000", house_number="7"
+    )
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    assert ticket_client.post(
+        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    ).status_code == 200
+    assert ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Synthetic field visit"},
+    ).status_code == 200
+    handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
+    assert handoff["ready_to_send"] is True
+    assert handoff["missing_fields"] == []
+    assert "Адрес: не указан" in handoff["message_preview"]
+    send_path = f"{path}/field-work-handoffs/{handoff['id']}/send"
+    payload = {"client_request_id": str(uuid4()), "visit_address": visit_address}
+    sent = ticket_client.post(send_path, headers=csrf(ticket_client), json=payload)
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["delivery_status"] == "SENT"
+    assert sent.json()["visit_address"] == visit_address
+    assert f"Адрес: {expected_address}" in sent.json()["message_preview"]
+    assert len(gateway.calls) == 1
+    assert f"Адрес: {expected_address}" in gateway.calls[0][1]
+    repeated = ticket_client.post(send_path, headers=csrf(ticket_client), json=payload)
+    assert repeated.status_code == 200
+    assert len(gateway.calls) == 1
+    with Session(ticket_engine) as db:
+        unchanged = db.get(SubscriberSnapshot, snapshot.id)
+        saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
+        assert unchanged is not None and unchanged.actual_address is None
+        assert saved is not None and saved.visit_address == visit_address
+
+
+def test_optional_visit_address_does_not_relax_required_contact(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "field_missing_contact_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(ticket_engine, engineer)
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    assert ticket_client.post(
+        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    ).status_code == 200
+    assert ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Synthetic field visit"},
+    ).status_code == 200
+    handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
+    assert handoff["missing_fields"] == ["contact"]
+    assert handoff["ready_to_send"] is False
+    sent = ticket_client.post(
+        f"{path}/field-work-handoffs/{handoff['id']}/send",
+        headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "visit_address": "г. Тест, ул. Ручная"},
+    )
+    assert sent.status_code == 409
+    assert sent.json()["code"] == "field_dispatch_incomplete"
+    assert gateway.calls == []
 
 
 def test_telegram_replies_completion_and_engineer_verification_are_independent(
