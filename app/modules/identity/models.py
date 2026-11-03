@@ -17,6 +17,11 @@ class User(Base):
         CheckConstraint("login ~ '^[a-z0-9][a-z0-9._-]{2,63}$'", name="ck_app_users_login"),
         CheckConstraint("role IN ('operator', 'engineer', 'admin')", name="ck_app_users_role"),
         CheckConstraint("password_hash LIKE '$argon2id$%'", name="ck_app_users_argon2id"),
+        CheckConstraint(
+            "(deleted_at IS NULL AND deleted_by IS NULL) OR "
+            "(deleted_at IS NOT NULL AND deleted_by IS NOT NULL AND is_active = false)",
+            name="ck_app_users_deleted",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -25,6 +30,10 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )

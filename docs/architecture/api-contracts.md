@@ -85,6 +85,7 @@
 | `POST /users/{id}/reset-password` | `users.manage` + CSRF | Однократный `temporary_password`, отзыв сессий цели, обязательная смена |
 | `PUT /users/{id}/password` | `users.manage` + CSRF | `{new_password,must_change_password=false}`; Argon2id, отзыв всех сессий цели, аудит без значения пароля |
 | `POST /users/{id}/deactivate`, `/reactivate` | `users.manage` + CSRF | Состояние, отзыв сессий при отключении, last-admin guard |
+| `DELETE /users/{id}` | Роль `admin`, `users.manage` + CSRF | `204`; без физического удаления исторических FK: аккаунт отключается, сессии отзываются, сотрудник исчезает из списка. Самоудаление `409`, повтор `204`, чужая роль `403` |
 | `GET /users/audit` | `users.manage` + `audit.read` | Страница событий с актором, целью, временем и несекретными деталями |
 | `PATCH /tickets/{id}` | `tickets.edit.own` или `.all` + право чтения + CSRF | `{subject?,description?}`; `If-Match: "<version>"`; только незакрытая заявка; `200` с новым ETag, `428` без версии, `409` при конфликте; событие с before/after и аудит атомарны |
 

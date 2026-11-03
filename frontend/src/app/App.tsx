@@ -63,7 +63,7 @@ function AppRoutes() {
         <Route path="/tickets" element={canReadTickets ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/new" element={session.data.permissions.includes('tickets.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/:id" element={canReadTickets ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />
-        <Route path="/users" element={session.data.permissions.includes('users.manage') ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/users" element={session.data.permissions.includes('users.manage') ? <UsersPage currentUser={session.data.user} /> : <Navigate to="/" replace />} />
         <Route path="/trash" element={session.data.permissions.includes('tickets.read.all') && (session.data.permissions.includes('tickets.restore') || session.data.permissions.includes('tickets.purge')) ? <TrashPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/subscribers" element={session.data.permissions.includes('subscribers.read') ? <SubscriberPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/subscribers/:lookupId" element={session.data.permissions.includes('subscribers.read') ? <SubscriberPage session={session.data} /> : <Navigate to="/" replace />} />

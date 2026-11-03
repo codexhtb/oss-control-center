@@ -228,7 +228,7 @@ def _ensure_actor_can_manage(db: Session, actor: User) -> None:
 
 def _get_target_for_update(db: Session, user_id: UUID) -> User:
     user = db.execute(select(User).where(User.id == user_id).with_for_update()).scalar_one_or_none()
-    if user is None:
+    if user is None or user.deleted_at is not None:
         raise ApiError(404, "user_not_found", "User not found")
     return user
 
@@ -446,6 +446,35 @@ def deactivate_user(db: Session, actor: User, user_id: UUID) -> User:
         db.rollback()
         raise ApiError(409, "last_admin", "Last active administrator cannot be changed") from exc
     return target
+
+
+def delete_user(db: Session, actor: User, user_id: UUID) -> None:
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    if actor.role != Role.ADMIN:
+        raise ApiError(403, "forbidden", "Permission denied")
+    target = db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    ).scalar_one_or_none()
+    if target is None:
+        raise ApiError(404, "user_not_found", "User not found")
+    if target.deleted_at is not None:
+        db.rollback()
+        return
+    if target.id == actor.id:
+        raise ApiError(409, "cannot_delete_self", "Administrator cannot delete their own account")
+    _ensure_admin_remains(db, target)
+    target.is_active = False
+    target.deleted_at = utc_now()
+    target.deleted_by = actor.id
+    target.updated_at = utc_now()
+    _revoke_user_sessions(db, target, actor)
+    audit(db, "user_deleted", "success", actor=actor.id, target=target.id)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(409, "last_admin", "Last active administrator cannot be changed") from exc
 
 
 def change_user_role(db: Session, actor: User, user_id: UUID, new_role: Role) -> User:

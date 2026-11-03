@@ -64,7 +64,7 @@ function PermissionEditor({ selected, change }: { selected: Permission[]; change
   </fieldset>)}</div>
 }
 
-export function UsersPage() {
+export function UsersPage({ currentUser }: { currentUser: User }) {
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -78,6 +78,7 @@ export function UsersPage() {
   const [passwordRepeat, setPasswordRepeat] = useState('')
   const [mustChangePassword, setMustChangePassword] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [passwordWasGenerated, setPasswordWasGenerated] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -128,7 +129,7 @@ export function UsersPage() {
     setSection('employees'); setEditorTab('main')
     setSelectedId(null); setCreating(true); setLogin(''); setName(''); setRole('operator'); setPermissions(presets.operator)
     setTemporaryPassword(null); setPassword(''); setPasswordRepeat(''); setMustChangePassword(false)
-    setChangingPassword(false); setPasswordWasGenerated(false); setError(null)
+    setChangingPassword(false); setPasswordWasGenerated(false); setConfirmDelete(false); setError(null)
   }
 
   function beginEdit(user: ManagedUser) {
@@ -136,7 +137,7 @@ export function UsersPage() {
     setCreating(false); setSelectedId(user.id); setLogin(user.login); setName(user.display_name)
     setRole(user.role); setPermissions(user.permissions); setTemporaryPassword(null); setPassword('')
     setPasswordRepeat(''); setMustChangePassword(false); setChangingPassword(false)
-    setPasswordWasGenerated(false); setError(null)
+    setPasswordWasGenerated(false); setConfirmDelete(false); setError(null)
   }
 
   function fillGeneratedPassword() {
@@ -201,6 +202,10 @@ export function UsersPage() {
           {!changingPassword && <Button variant="secondary" disabled={busy} onClick={() => { setChangingPassword(true); setPassword(''); setPasswordRepeat(''); setMustChangePassword(false); setPasswordWasGenerated(false) }}>Изменить пароль</Button>}
           {changingPassword && <form className="inline-form password-editor employee-editor__password" onSubmit={submitPassword}><h3>Новый пароль</h3><PasswordInput label="Пароль" name="new-password" value={password} onChange={(value) => { setPassword(value); setPasswordWasGenerated(false) }} /><PasswordInput label="Подтвердите пароль" name="repeat-password" value={passwordRepeat} onChange={setPasswordRepeat} />{password && passwordRepeat && password !== passwordRepeat && <Notice tone="error">Пароли не совпадают.</Notice>}<Button type="button" variant="quiet" onClick={fillGeneratedPassword}>Сгенерировать пароль</Button><label className="desk-check"><input type="checkbox" checked={mustChangePassword} onChange={(event) => setMustChangePassword(event.target.checked)} /> Потребовать смену при первом входе</label><div className="user-actions"><Button type="submit" disabled={busy || !password || password !== passwordRepeat}>Сохранить пароль</Button><Button type="button" variant="quiet" disabled={busy} onClick={() => { setChangingPassword(false); setPassword(''); setPasswordRepeat('') }}>Отмена</Button></div></form>}
           <div className="employee-editor__access"><div><strong>Доступ к системе</strong><span>{selected.is_active ? 'Учётная запись активна' : 'Учётная запись отключена'}</span></div><Button variant="quiet" disabled={busy} onClick={() => void save(() => apiRequest(`/api/v1/users/${selected.id}/${selected.is_active ? 'deactivate' : 'reactivate'}`, { method: 'POST' }), selected.is_active ? 'Доступ отключён.' : 'Доступ восстановлен.')}>{selected.is_active ? 'Отключить' : 'Включить'}</Button></div>
+          {currentUser.role === 'admin' && currentUser.id !== selected.id && <div className="employee-editor__danger">
+            <div><strong>Удалить сотрудника</strong><span>Доступ будет отозван, сотрудник исчезнет из списка. Заявки и история сохранятся.</span></div>
+            {confirmDelete ? <div className="user-actions"><Button type="button" variant="quiet" disabled={busy} onClick={() => setConfirmDelete(false)}>Отмена</Button><Button type="button" className="button--danger" disabled={busy} onClick={() => void save(async () => { await apiRequest(`/api/v1/users/${selected.id}`, { method: 'DELETE' }); setSelectedId(null); setConfirmDelete(false) }, 'Сотрудник удалён. История сохранена.')}>Подтвердить удаление</Button></div> : <Button type="button" variant="quiet" disabled={busy} onClick={() => setConfirmDelete(true)}>Удалить сотрудника</Button>}
+          </div>}
         </>}
       </div>}
     </section> : <section className="detail-panel"><div className="detail-panel__heading"><h2>Сотрудники</h2><span className="muted">Всего: {users.data?.length ?? '—'}</span></div>

@@ -762,7 +762,12 @@ html[data-effects="simple"] .workspace-welcome__particle { display: none; }
 .employee-editor__access { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: min(760px, 100%); padding-top: 18px; border-top: 1px solid var(--line-soft); }
 .employee-editor__access > div { display: grid; gap: 4px; }
 .employee-editor__access span { color: var(--muted); font-size: 12px; }
-@media (max-width: 650px) { .employee-editor { padding: 17px; } .employee-editor__heading { align-items: start; flex-direction: column; } .employee-editor__fields { grid-template-columns: 1fr; } .users-filters .field { flex: 1 1 100%; } .employee-editor__access { align-items: start; flex-direction: column; } .category-editor__head { display: none; } .category-editor-row .field > span { display: block; } .category-editor-row--new > .button { grid-column: 1 / -1; } }
+.employee-editor__danger { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: min(760px, 100%); padding-top: 18px; border-top: 1px solid var(--line-soft); }
+.employee-editor__danger > div:first-child { display: grid; gap: 4px; }
+.employee-editor__danger span { color: var(--muted); font-size: 12px; }
+.button--danger { border-color: #96534f; background: #532c2e; color: #ffddda; }
+.button--danger:hover:not(:disabled) { background: #6b3638; }
+@media (max-width: 650px) { .employee-editor { padding: 17px; } .employee-editor__heading { align-items: start; flex-direction: column; } .employee-editor__fields { grid-template-columns: 1fr; } .users-filters .field { flex: 1 1 100%; } .employee-editor__access, .employee-editor__danger { align-items: start; flex-direction: column; } .category-editor__head { display: none; } .category-editor-row .field > span { display: block; } .category-editor-row--new > .button { grid-column: 1 / -1; } }
 @media (max-width: 720px) { .category-editor-row { grid-template-columns: minmax(0, 1fr) 90px; } .category-editor-row .button { justify-self: start; } }
 .permission-editor { display: grid; gap: 12px; width: 100%; }
 .permission-editor fieldset { min-width: 0; margin: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; }

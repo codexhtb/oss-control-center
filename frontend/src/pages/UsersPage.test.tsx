@@ -3,20 +3,23 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { apiRequest } from '../shared/api/client'
+import type { User } from '../shared/api/types'
 import { UsersPage } from './UsersPage'
 
 vi.mock('../shared/api/client', () => ({ apiRequest: vi.fn(), errorText: () => 'Ошибка запроса' }))
 
 const worker = {
   id: '00000000-0000-4000-8000-000000000002', login: 'worker', display_name: 'Сотрудник',
-  role: 'operator', is_active: true, must_change_password: false,
+  role: 'operator' as const, is_active: true, must_change_password: false,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   permissions: ['tickets.read.own'],
 }
 
-function renderPage() {
+const admin = { ...worker, id: '00000000-0000-4000-8000-000000000001', role: 'admin' as const }
+
+function renderPage(currentUser: User = admin) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter><UsersPage /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter><UsersPage currentUser={currentUser} /></MemoryRouter></QueryClientProvider>)
 }
 
 beforeEach(() => {
@@ -68,6 +71,23 @@ it('changes an employee password with confirmation and optional first-login chan
     (options.json as { new_password: string }).new_password === '1' &&
     (options.json as { must_change_password: boolean }).must_change_password === true,
   )).toBe(true))
+})
+
+it('requires confirmation before an administrator deletes another employee', async () => {
+  renderPage()
+  fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Безопасность' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить сотрудника' }))
+  expect(apiRequest).not.toHaveBeenCalledWith(`/api/v1/users/${worker.id}`, expect.objectContaining({ method: 'DELETE' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить удаление' }))
+  await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(`/api/v1/users/${worker.id}`, { method: 'DELETE' }))
+})
+
+it('hides deletion from a non-administrator', async () => {
+  renderPage(worker)
+  fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Безопасность' }))
+  expect(screen.queryByRole('button', { name: 'Удалить сотрудника' })).not.toBeInTheDocument()
 })
 
 it('offers a generated password without forcing first-login replacement', async () => {

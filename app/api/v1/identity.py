@@ -41,6 +41,7 @@ from app.modules.identity.service import (
     create_user,
     current_identity,
     deactivate_user,
+    delete_user,
     login_user,
     reactivate_user,
     reset_password,
@@ -244,9 +245,13 @@ def users_list(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
-    total = db.scalar(select(func.count()).select_from(User)) or 0
+    total = db.scalar(select(func.count()).select_from(User).where(User.deleted_at.is_(None))) or 0
     users = db.scalars(
-        select(User).order_by(User.display_name, User.id).offset((page - 1) * size).limit(size)
+        select(User)
+        .where(User.deleted_at.is_(None))
+        .order_by(User.display_name, User.id)
+        .offset((page - 1) * size)
+        .limit(size)
     ).all()
     return {
         "items": [managed_user(db, user) for user in users],
@@ -300,7 +305,7 @@ def users_audit(
 @router.get("/users/{user_id}", response_model=ManagedUserResponse)
 def users_get(user_id: UUID, identity: ReadUsersDep, db: SessionDep):
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or user.deleted_at is not None:
         raise ApiError(404, "user_not_found", "User not found")
     return managed_user(db, user)
 
@@ -375,6 +380,12 @@ def admin_deactivate_user(
     db: SessionDep,
 ) -> UserResponse:
     return public_user(deactivate_user(db, identity.user, user_id))
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def admin_delete_user(user_id: UUID, identity: ManagedIdentityDep, db: SessionDep) -> Response:
+    delete_user(db, identity.user, user_id)
+    return Response(status_code=204)
 
 
 @router.patch("/users/{user_id}/role", response_model=UserResponse)
