@@ -355,6 +355,8 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
   повторная доставка Update не дублирует отчёт и подтверждение. Инженер с
   `tickets.field_work` отдельно ставит `VERIFIED`; `Ticket.status` и решение
   остаются прежними.
+- Отдельный чистый процесс импорта poller разрешает ORM FK на `app_users` и
+  может сохранить подтверждённый `message_id` prompt вместе с audit event.
 - Миграция `0022` сохраняет старые T2 callbacks и применяется сначала в
   `oss_test_*`, затем к dev после
   проверенного backup/restore. Poller profile остаётся выключенным до живой

@@ -16,6 +16,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
+from app.modules.identity import models as identity_models  # noqa: F401 - register audit FK metadata
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 
 BOT_IDENTITY = "oss_field_service_bot"

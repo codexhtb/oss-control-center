@@ -2,6 +2,8 @@
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,25 @@ from app.modules.field_dispatch.gateway import (
     TelegramBotGateway,
     TelegramGatewayConfig,
 )
+
+
+def test_poller_registers_identity_metadata_in_fresh_process() -> None:
+    """A standalone poller must be able to flush its ticket audit event."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app.modules.field_dispatch.poller import _send_prompt; "
+            "from app.modules.tickets.models import TicketAudit; "
+            "assert 'app_users' in TicketAudit.metadata.tables; "
+            "assert TicketAudit.__mapper__._sorted_tables",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 class FakeResponse:

@@ -1,5 +1,6 @@
 """Opt-in one-shot Telegram update poller. It is intentionally not started by the API."""
 
+import logging
 import os
 import sys
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
 )
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
+
+logger = logging.getLogger(__name__)
 
 
 def _offset(db: Session) -> int:
@@ -134,7 +137,12 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
                 origin="SYSTEM",
             )
         )
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error("telegram_prompt_receipt_persist_failed error_type=%s", type(exc).__name__)
+        raise
 
 
 def _sync_callback(
