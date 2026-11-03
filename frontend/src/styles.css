@@ -57,27 +57,21 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-backdrop { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 18% 46%, rgba(52, 128, 111, .18), transparent 30%), radial-gradient(circle at 80% 20%, rgba(35, 83, 86, .13), transparent 29%), repeating-linear-gradient(90deg, transparent, transparent 79px, rgba(129, 164, 161, .025) 80px), repeating-linear-gradient(0deg, transparent, transparent 79px, rgba(129, 164, 161, .025) 80px); animation: login-backdrop-in 1s ease-out both; }
 .login-content { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 430px; align-items: center; gap: clamp(60px, 10vw, 190px); width: min(1120px, calc(100% - 80px)); margin: auto; padding: 60px 0 82px; }
 .login-hero { position: relative; display: flex; min-width: 0; min-height: 500px; align-items: center; justify-content: center; isolation: isolate; }
-.login-hero__aura { position: absolute; z-index: -3; width: min(580px, 95%); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(72, 194, 159, .2) 0, rgba(39, 111, 96, .08) 35%, transparent 69%); animation: login-aura-in .7s ease-out both; }
-.login-hero__depth { position: absolute; z-index: -2; width: 390px; aspect-ratio: 1; border: 1px solid rgba(125, 224, 195, .09); border-radius: 50%; }
-.login-hero__depth::before, .login-hero__depth::after { content: ''; position: absolute; border: 1px solid rgba(125, 224, 195, .08); border-radius: 50%; }
-.login-hero__depth::before { inset: 42px; }
-.login-hero__depth::after { inset: 91px; }
-.login-hero__depth--back { transform: scaleY(.42) rotate(-14deg); animation: login-depth-in .7s .1s both; }
-.login-hero__depth--front { width: 300px; border-color: rgba(125, 224, 195, .06); transform: scaleX(.48) rotate(16deg); animation: login-depth-in .7s .2s both; }
-.login-hero__mark-stage { width: min(570px, 100%); aspect-ratio: 580 / 270; animation: login-mark-stage-in .7s .12s cubic-bezier(.2, .75, .25, 1) both; }
+.login-hero__ambient { position: absolute; z-index: -1; width: min(540px, 100%); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(54, 145, 112, .17), rgba(31, 80, 68, .06) 45%, transparent 72%); }
+.login-hero__mark-stage { width: min(560px, 100%); aspect-ratio: 2; transform: perspective(900px) rotateX(8deg) rotateY(-3deg); }
+.login-hero[data-performance="lite"] .login-hero__mark-stage { transform: none; }
 .login-hero__mark { display: block; width: 100%; height: 100%; overflow: visible; }
-.login-hero__module { transform-box: fill-box; transform-origin: center; animation: login-module-in .55s cubic-bezier(.2, .8, .25, 1) both; }
-.login-hero__module--o { animation-delay: .2s; }
-.login-hero__module--c1 { animation-delay: .32s; }
-.login-hero__module--c2 { animation-delay: .44s; }
-.login-hero__edge, .login-hero__face { fill: none; stroke-linecap: round; }
-.login-hero__edge { stroke: url(#oss-mark-edge); stroke-width: 38; transform: translateY(9px); }
-.login-hero__face { stroke: url(#oss-mark-face); stroke-width: 27; }
-.login-hero__node { fill: #d2ffef; animation: login-node-in .4s cubic-bezier(.2, .8, .2, 1) both; }
-.login-hero__node--one { animation-delay: .5s; }
-.login-hero__node--two { animation-delay: .58s; }
-.login-hero__node--three { animation-delay: .66s; }
-.login-hero__caption { position: absolute; bottom: 21px; left: 50%; width: 100%; text-align: center; transform: translateX(-50%); animation: login-caption-in .6s .35s ease-out both; }
+.login-hero__piece { transform-box: fill-box; transform-origin: center; animation: login-piece-in .72s cubic-bezier(.2, .7, .18, 1) both; }
+.login-hero__piece--first { --assemble-x: -22px; animation-delay: .05s; }
+.login-hero__piece--second { --assemble-x: 0px; animation-delay: .17s; }
+.login-hero__piece--third { --assemble-x: 22px; animation-delay: .29s; }
+.login-hero__extrusion, .login-hero__bevel, .login-hero__face, .login-hero__glint { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.login-hero__extrusion { stroke: #0b2c29; stroke-width: 39; }
+.login-hero__bevel { stroke: url(#oss-brand-bevel); stroke-width: 37; }
+.login-hero__face { stroke: url(#oss-brand-face); stroke-width: 26; }
+.login-hero__glint { stroke: #d5ffed; stroke-opacity: .7; stroke-width: 2; animation: login-glint-in .45s .72s ease-out both; }
+.login-hero__floor { opacity: .5; }
+.login-hero__caption { position: absolute; bottom: 14px; left: 50%; width: 100%; text-align: center; transform: translateX(-50%); animation: login-caption-in .6s .2s ease-out both; }
 .login-hero__caption p { margin: 0 0 9px; color: #79bca9; font-size: 10px; font-weight: 800; letter-spacing: .26em; text-transform: uppercase; }
 .login-hero__caption h1 { margin: 0; color: #edf8f5; font-size: clamp(25px, 2.6vw, 37px); font-weight: 580; letter-spacing: -.04em; text-wrap: balance; text-shadow: 0 9px 34px rgba(0, 0, 0, .55); }
 .login-card { padding: 35px; border: 1px solid #314039; border-radius: 17px; background: linear-gradient(145deg, rgba(31, 40, 45, .96), rgba(22, 29, 35, .98)); box-shadow: 0 30px 95px rgba(0, 0, 0, .31); }
@@ -103,17 +97,14 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-card .button--primary { width: 100%; justify-content: space-between; height: 47px; margin-top: 7px; padding: 0 16px; }
 
 @keyframes login-backdrop-in { from { opacity: 0; } }
-@keyframes login-aura-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes login-depth-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes login-mark-stage-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes login-module-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes login-node-in { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+@keyframes login-piece-in { from { opacity: 0; transform: translate(var(--assemble-x), 12px) scale(.96); } to { opacity: 1; transform: translate(0, 0) scale(1); } }
+@keyframes login-glint-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes login-caption-in { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
-html[data-effects="simple"] .login-hero__aura, html[data-effects="simple"] .login-hero__depth,
-html[data-effects="simple"] .login-hero__module, html[data-effects="simple"] .login-hero__node { animation: none; }
-html[data-effects="simple"] .login-hero__mark-stage { animation: login-mark-stage-in .35s ease-out both; }
-html[data-effects="simple"] .login-hero__caption { animation: login-caption-in .35s ease-out both; }
+.login-hero[data-performance="lite"] .login-hero__piece, .login-hero[data-performance="lite"] .login-hero__glint,
+.login-hero[data-performance="lite"] .login-hero__caption { animation: none; }
+.login-hero[data-performance="lite"] .login-hero__ambient { display: none; }
+.login-layout:has(.login-hero[data-performance="lite"]) .login-backdrop { animation: none; }
 
 .app-shell { display: flex; min-height: 100vh; background: var(--bg); }
 .sidebar { position: sticky; top: 0; display: flex; flex-direction: column; width: 248px; height: 100vh; flex: none; border-right: 1px solid var(--line-soft); background: #131a20; }
@@ -250,8 +241,6 @@ html[data-effects="simple"] .login-hero__caption { animation: login-caption-in .
   .login-content { grid-template-columns: 1fr; gap: 20px; width: min(500px, calc(100% - 42px)); padding: 25px 0 35px; }
   .login-hero { min-height: 300px; }
   .login-hero__mark-stage { width: min(440px, 100%); }
-  .login-hero__depth { width: 280px; }
-  .login-hero__depth--front { width: 220px; }
   .login-hero__caption { bottom: 0; }
   .login-hero__caption h1 { font-size: 28px; }
 }
@@ -274,18 +263,14 @@ html[data-effects="simple"] .login-hero__caption { animation: login-caption-in .
   .login-content { gap: 15px; width: min(100% - 30px, 430px); padding-top: 18px; }
   .login-hero { min-height: 230px; }
   .login-hero__mark-stage { width: 335px; max-width: 100%; }
-  .login-hero__aura { width: 330px; }
-  .login-hero__depth { width: 225px; }
-  .login-hero__depth--front { width: 170px; }
   .login-hero__caption h1 { font-size: 22px; }
   .login-hero__caption p { margin-bottom: 5px; font-size: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-  .login-hero__mark-stage { opacity: 1; transform: none; }
+  .login-hero__piece, .login-hero__glint { opacity: 1; transform: none; }
   .login-hero__caption { opacity: 1; transform: translateX(-50%); }
-  .login-hero__module, .login-hero__node, .login-hero__aura, .login-hero__depth { opacity: 1; }
 }
 
 /* ServiceDesk: dense working surfaces with a clear action hierarchy. */
