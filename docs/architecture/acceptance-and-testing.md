@@ -382,3 +382,4 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
   `oss_test_*`, затем к dev после
   проверенного backup/restore. Poller profile остаётся выключенным до живой
   проверки динамической привязки группы и стартового offset.
+- Проверки общего чата сотрудников: [staff-chat.md](staff-chat.md).

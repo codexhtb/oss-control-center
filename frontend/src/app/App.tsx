@@ -17,6 +17,7 @@ import { TicketDetailPage } from '../pages/TicketDetailPage'
 import { SubscriberPage } from '../pages/SubscriberPage'
 import { UsersPage } from '../pages/UsersPage'
 import { TrashPage } from '../pages/TrashPage'
+import { ChatPage } from '../pages/ChatPage'
 import { queryClient } from './query-client'
 
 function AppRoutes() {
@@ -58,6 +59,7 @@ function AppRoutes() {
       <Routes>
         <Route path="/" element={<WorkspacePage session={session.data} />} />
         <Route path="/account" element={<AccountPage session={session.data} onPasswordChanged={sessionChanged} />} />
+        <Route path="/chat" element={<ChatPage user={session.data.user} />} />
         <Route path="/tickets" element={canReadTickets ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/new" element={session.data.permissions.includes('tickets.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/:id" element={canReadTickets ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />
