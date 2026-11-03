@@ -40,7 +40,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
 )
-from app.modules.field_dispatch.poller import _send_prompt, _sync_completion
+from app.modules.field_dispatch.poller import _delete_prompt, _send_prompt, _sync_completion
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -3202,9 +3202,17 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
         saved_prompt = db.get(FieldWorkCompletionPrompt, first.prompt_id)
         assert saved_prompt is not None and saved_prompt.status == "COMPLETED"
         assert saved_prompt.telegram_message_id == 704
+        assert saved_prompt.deletion_status == "PENDING"
 
         class ConfirmationGateway:
             calls = 0
+            delete_calls = 0
+
+            def delete_message(self, chat_id: str, message_id: int) -> None:
+                self.delete_calls += 1
+                assert chat_id == "-5319791765" and message_id == 704
+                if self.delete_calls == 1:
+                    raise DispatchUncertain
 
             def acknowledge_completion_report(
                 self, chat_id: str, report_message_id: int, ticket_number: int
@@ -3219,12 +3227,21 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
 
         confirmation_gateway = ConfirmationGateway()
         _sync_completion(db, confirmation_gateway, 9005)
+        assert saved_prompt.deletion_status == "FAILED"
+        assert saved_prompt.deletion_attempts == 1
+        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "REPORTED"
+        saved_prompt.deletion_attempted_at = datetime.now(UTC) - timedelta(minutes=2)
+        db.commit()
+        _delete_prompt(db, confirmation_gateway, saved_prompt.id)
+        assert saved_prompt.deletion_status == "DELETED"
+        assert saved_prompt.deletion_attempts == 2
         _sync_completion(db, confirmation_gateway, 9005)
         saved_update = db.scalar(
             select(FieldDispatchUpdate).where(FieldDispatchUpdate.update_id == 9005)
         )
         assert saved_update is not None and saved_update.confirmation_status == "SENT"
         assert confirmation_gateway.calls == 1
+        assert confirmation_gateway.delete_calls == 2
         assert db.scalar(select(func.count()).select_from(FieldDispatchUpdate)) == 8
         ticket = db.get(Ticket, UUID(ticket_id))
         assert ticket is not None and ticket.status == TicketStatus.IN_PROGRESS

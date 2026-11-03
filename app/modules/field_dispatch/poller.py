@@ -3,7 +3,7 @@
 import logging
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import sleep
 from uuid import UUID
@@ -88,7 +88,12 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     db.commit()
     try:
         destination = current_chat_id(db, prompt.chat_id)
-        receipt = gateway.send_completion_prompt(destination, handoff.telegram_message_id)
+        if prompt.recipient_username:
+            receipt = gateway.send_completion_prompt(
+                destination, handoff.telegram_message_id, username=prompt.recipient_username
+            )
+        else:
+            receipt = gateway.send_completion_prompt(destination, handoff.telegram_message_id)
     except DispatchRejected as exc:
         _set_prompt_failure(db, prompt_id, exc.code)
         if exc.code.endswith("403"):
@@ -159,6 +164,45 @@ def _sync_callback(
     _send_prompt(db, gateway, prompt_id)
 
 
+def _delete_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> None:
+    prompt = db.scalar(
+        select(FieldWorkCompletionPrompt)
+        .where(FieldWorkCompletionPrompt.id == prompt_id)
+        .with_for_update()
+    )
+    if (
+        prompt is None
+        or prompt.status != "COMPLETED"
+        or prompt.telegram_message_id is None
+        or prompt.deletion_status not in {"PENDING", "SENDING", "FAILED"}
+        or prompt.deletion_attempts >= 5
+    ):
+        db.rollback()
+        return
+    now = datetime.now(UTC)
+    if prompt.deletion_attempted_at is not None and prompt.deletion_status != "PENDING":
+        retry_after = timedelta(seconds=30 * 2 ** min(prompt.deletion_attempts, 5))
+        if now - prompt.deletion_attempted_at < retry_after:
+            db.rollback()
+            return
+    prompt.deletion_status = "SENDING"
+    prompt.deletion_attempts += 1
+    prompt.deletion_attempted_at = now
+    db.commit()
+    try:
+        gateway.delete_message(current_chat_id(db, prompt.chat_id), prompt.telegram_message_id)
+    except DispatchRejected as exc:
+        prompt.deletion_status = "FAILED"
+        prompt.deletion_error_code = exc.code
+    except DispatchUncertain:
+        prompt.deletion_status = "FAILED"
+        prompt.deletion_error_code = "telegram_transport_uncertain"
+    else:
+        prompt.deletion_status = "DELETED"
+        prompt.deletion_error_code = None
+    db.commit()
+
+
 def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
     record = db.scalar(
         select(FieldDispatchUpdate)
@@ -171,6 +215,20 @@ def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -
     handoff = db.get(FieldWorkHandoff, record.handoff_id) if record is not None else None
     if record is None or handoff is None:
         return
+
+    prompt_id = db.scalar(
+        select(FieldWorkCompletionPrompt.id).where(
+            FieldWorkCompletionPrompt.handoff_id == handoff.id,
+            FieldWorkCompletionPrompt.status == "COMPLETED",
+            FieldWorkCompletionPrompt.deletion_status != "NOT_REQUIRED",
+        )
+    )
+    if prompt_id is not None:
+        try:
+            _delete_prompt(db, gateway, prompt_id)
+        except Exception as exc:
+            db.rollback()
+            logger.error("telegram_prompt_deletion_failed error_type=%s", type(exc).__name__)
 
     if record.confirmation_status == "PENDING":
         report = db.scalar(
@@ -221,6 +279,26 @@ def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -
 
 
 def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
+    cleanup_ids = db.scalars(
+        select(FieldWorkCompletionPrompt.id)
+        .where(
+            FieldWorkCompletionPrompt.status == "COMPLETED",
+            FieldWorkCompletionPrompt.deletion_status.in_(("PENDING", "SENDING", "FAILED")),
+            FieldWorkCompletionPrompt.deletion_attempts < 5,
+        )
+        .order_by(
+            FieldWorkCompletionPrompt.deletion_attempted_at.asc().nullsfirst(),
+            FieldWorkCompletionPrompt.completed_at.asc(),
+        )
+        .limit(100)
+    ).all()
+    for prompt_id in cleanup_ids:
+        try:
+            _delete_prompt(db, gateway, prompt_id)
+        except Exception as exc:
+            db.rollback()
+            logger.error("telegram_prompt_deletion_failed error_type=%s", type(exc).__name__)
+
     prompt_ids = db.scalars(
         select(FieldWorkCompletionPrompt.id)
         .join(

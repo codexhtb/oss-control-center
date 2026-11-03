@@ -168,6 +168,26 @@ def test_gateway_asks_for_completion_description_with_force_reply(
         "input_field_placeholder": "Опишите выполненные работы",
     }
 
+    gateway = TelegramBotGateway(TelegramGatewayConfig(path))
+    gateway.send_completion_prompt("-5319791765", 702, username="installer_1")
+    args, kwargs = FakeConnection.request_args or ((), {})
+    addressed = json.loads(kwargs["body"])
+    assert addressed["text"] == "Что было сделано?\n@installer_1"
+    assert addressed["reply_parameters"]["message_id"] == 702
+    assert addressed["reply_markup"]["selective"] is True
+
+
+def test_gateway_deletes_only_requested_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = token_file(tmp_path)
+    monkeypatch.setattr("http.client.HTTPSConnection", FakeConnection)
+    FakeConnection.response = FakeResponse(200, {"ok": True, "result": True})
+    TelegramBotGateway(TelegramGatewayConfig(path)).delete_message("-5319791765", 704)
+    args, kwargs = FakeConnection.request_args or ((), {})
+    assert args[1].endswith("/deleteMessage")
+    assert json.loads(kwargs["body"]) == {"chat_id": "-5319791765", "message_id": 704}
+
 
 @pytest.mark.integration
 def test_real_lab_gateway_confirms_synthetic_message() -> None:

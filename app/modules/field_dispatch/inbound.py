@@ -1,5 +1,6 @@
 """Verified, idempotent import of Telegram replies and completion reports."""
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.modules.field_dispatch.binding import chat_id_aliases, current_binding
+from app.modules.field_dispatch.gateway import completion_prompt_text
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
@@ -201,6 +203,13 @@ def _callback(
         sender_telegram_id=sender_id,
         sender_name=sender_name,
         status="REQUESTING",
+        recipient_username=(
+            callback["from"]["username"]
+            if isinstance(callback.get("from"), dict)
+            and isinstance(callback["from"].get("username"), str)
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", callback["from"]["username"])
+            else None
+        ),
     )
     db.add(prompt)
     db.commit()
@@ -280,7 +289,7 @@ def _text_reply(
         )
         original_id = _integer(original.get("message_id")) if isinstance(original, dict) else None
         if (
-            prompt_text == "Что было сделано?"
+            isinstance(prompt_text, str)
             and isinstance(from_value, dict)
             and from_value.get("is_bot") is True
             and bot_sender_id is not None
@@ -303,7 +312,9 @@ def _text_reply(
                 )
                 .with_for_update()
             ).all()
-            if len(candidates) == 1:
+            if len(candidates) == 1 and prompt_text == completion_prompt_text(
+                candidates[0].recipient_username
+            ):
                 prompt = candidates[0]
                 prompt.telegram_message_id = reply_message_id
                 prompt.status = "WAITING"
@@ -358,6 +369,7 @@ def _text_reply(
         prompt.status = "COMPLETED"
         prompt.error_code = None
         prompt.completed_at = event_time
+        prompt.deletion_status = "PENDING"
         handoff.work_status = "REPORTED"
         handoff.reported_at = event_time
         handoff.updated_at = datetime.now(UTC)

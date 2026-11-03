@@ -273,6 +273,11 @@ class FieldWorkCompletionPrompt(Base):
             "AND completed_at IS NOT NULL AND error_code IS NULL)",
             name="ck_field_prompts_receipt",
         ),
+        CheckConstraint(
+            "deletion_status IN ('NOT_REQUIRED','PENDING','SENDING','DELETED','FAILED')",
+            name="ck_field_prompts_deletion_status",
+        ),
+        CheckConstraint("deletion_attempts >= 0", name="ck_field_prompts_deletion_attempts"),
         Index("ix_field_prompts_handoff_created", "handoff_id", "created_at", "id"),
         Index(
             "uq_field_prompts_active_handoff",
@@ -306,6 +311,13 @@ class FieldWorkCompletionPrompt(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     error_code: Mapped[str | None] = mapped_column(String(80))
+    recipient_username: Mapped[str | None] = mapped_column(String(32))
+    deletion_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="NOT_REQUIRED"
+    )
+    deletion_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    deletion_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_error_code: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -32,6 +32,10 @@ class DispatchUncertain(Exception):
     """Transport outcome is unknown; automatic retry could duplicate a message."""
 
 
+def completion_prompt_text(username: str | None) -> str:
+    return f"Что было сделано?\n@{username}" if username else "Что было сделано?"
+
+
 @dataclass(frozen=True)
 class TelegramGatewayConfig:
     token_file: Path
@@ -150,24 +154,26 @@ class TelegramBotGateway:
         if result is not True:
             raise DispatchUncertain from None
 
-    def send_completion_prompt(self, chat_id: str, handoff_message_id: int) -> DispatchReceipt:
+    def send_completion_prompt(
+        self, chat_id: str, handoff_message_id: int, *, username: str | None = None
+    ) -> DispatchReceipt:
         """Ask for the report and bind the next reply to this exact prompt."""
         _validate_chat_id(chat_id)
-        result = self._call(
-            "sendMessage",
-            {
-                "chat_id": chat_id,
-                "text": "Что было сделано?",
-                "reply_parameters": {
-                    "message_id": handoff_message_id,
-                    "allow_sending_without_reply": False,
-                },
-                "reply_markup": {
-                    "force_reply": True,
-                    "input_field_placeholder": "Опишите выполненные работы",
-                },
+        parameters = {
+            "chat_id": chat_id,
+            "text": completion_prompt_text(username),
+            "reply_parameters": {
+                "message_id": handoff_message_id,
+                "allow_sending_without_reply": False,
             },
-        )
+            "reply_markup": {
+                "force_reply": True,
+                "input_field_placeholder": "Опишите выполненные работы",
+            },
+        }
+        if username:
+            parameters["reply_markup"]["selective"] = True
+        result = self._call("sendMessage", parameters)
         if not isinstance(result, dict):
             raise DispatchUncertain from None
         result_chat = result.get("chat")
@@ -176,6 +182,14 @@ class TelegramBotGateway:
         if str(confirmed_chat) != chat_id or not isinstance(message_id, int):
             raise DispatchUncertain from None
         return DispatchReceipt(chat_id=chat_id, message_id=str(message_id))
+
+    def delete_message(self, chat_id: str, message_id: int) -> None:
+        """Delete one confirmed bot prompt; caller owns exact message identity."""
+        _validate_chat_id(chat_id)
+        if message_id <= 0:
+            raise ValueError("telegram_message_id_invalid")
+        if self._call("deleteMessage", {"chat_id": chat_id, "message_id": message_id}) is not True:
+            raise DispatchUncertain from None
 
     def mark_message_completed(self, chat_id: str, message_id: int) -> None:
         _validate_chat_id(chat_id)
