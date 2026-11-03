@@ -58,3 +58,19 @@ it('loads older pages without replacing the latest messages', async () => {
   expect(await screen.findByText('Ранее')).toBeInTheDocument()
   expect(screen.getByText('Привет')).toBeInTheDocument()
 })
+
+it('groups nearby messages from one author and expands the composer for multiple lines', async () => {
+  vi.mocked(chatApi.history).mockResolvedValueOnce({ items: [
+    incoming,
+    { ...incoming, id: 2, body: 'Продолжение', created_at: '2026-11-03T10:02:00Z' },
+    { ...incoming, id: 3, body: 'Позже', created_at: '2026-11-03T11:00:00Z' },
+  ], next_before: null })
+  const { container } = renderPage()
+  expect(await screen.findByText('Продолжение')).toBeInTheDocument()
+  expect(container.querySelectorAll('.staff-chat__message--grouped')).toHaveLength(1)
+  expect(container.querySelectorAll('.staff-chat__avatar')).toHaveLength(2)
+  const input = screen.getByLabelText('Сообщение') as HTMLTextAreaElement
+  Object.defineProperty(input, 'scrollHeight', { configurable: true, get: () => input.value.includes('\n') ? 72 : 36 })
+  fireEvent.change(input, { target: { value: 'Первая\nВторая' } })
+  expect(input.style.height).toBe('72px')
+})

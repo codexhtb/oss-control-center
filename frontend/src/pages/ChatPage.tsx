@@ -25,6 +25,7 @@ export function ChatPage({ user }: { user: User }) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [nearBottom, setNearBottom] = useState(true)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef(true)
   const pendingScroll = useRef<{ height: number; top: number } | null>(null)
   const lastRead = useRef(0)
@@ -66,6 +67,12 @@ export function ChatPage({ user }: { user: User }) {
   }, [refresh])
 
   const newestId = messages.at(-1)?.id ?? 0
+  useLayoutEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.style.height = 'auto'
+    input.style.height = `${Math.min(input.scrollHeight, 120)}px`
+  }, [body])
   useLayoutEffect(() => {
     const list = listRef.current
     if (!list) return
@@ -127,8 +134,10 @@ export function ChatPage({ user }: { user: User }) {
   }
 
   let previousDay = ''
+  let previousMessage: ChatMessage | null = null
   return <section className="staff-chat" aria-label="Общий чат сотрудников">
     <header className="staff-chat__header"><h1>Общий чат</h1></header>
+    <div className="staff-chat__history">
     <div className="staff-chat__timeline" ref={listRef} onScroll={onScroll} role="log" aria-live="polite" aria-relevant="additions">
       {olderBefore && <button className="staff-chat__older" type="button" onClick={() => void loadOlder()} disabled={loadingOlder}>{loadingOlder ? 'Загружаем…' : 'Показать ранние сообщения'}</button>}
       {loading && <div className="staff-chat__state"><LoaderCircle className="spin" size={22} /> Загружаем переписку…</div>}
@@ -138,20 +147,28 @@ export function ChatPage({ user }: { user: User }) {
         const own = message.sender_id === user.id
         const day = dayFormat.format(new Date(message.created_at))
         const showDay = day !== previousDay
+        const grouped = !showDay && previousMessage !== null &&
+          previousMessage.sender_id === message.sender_id &&
+          new Date(message.created_at).getTime() - new Date(previousMessage.created_at).getTime() < 300_000
         previousDay = day
+        previousMessage = message
         return <div key={message.id}>
           {showDay && <div className="staff-chat__date"><span>{day}</span></div>}
-          <article className={`staff-chat__message ${own ? 'staff-chat__message--own' : ''}`}>
-            {!own && <div className="staff-chat__avatar" aria-hidden="true">{message.sender_name.trim().slice(0, 1).toLocaleUpperCase('ru')}</div>}
-            <div className="staff-chat__bubble"><div className="staff-chat__meta"><strong>{own ? 'Вы' : message.sender_name}</strong><time dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time></div><p>{message.body}</p></div>
+          <article className={`staff-chat__message ${own ? 'staff-chat__message--own' : ''} ${grouped ? 'staff-chat__message--grouped' : ''}`}>
+            {!own && !grouped && <div className="staff-chat__avatar" aria-hidden="true">{message.sender_name.trim().slice(0, 1).toLocaleUpperCase('ru')}</div>}
+            <div className="staff-chat__bubble">
+              {!grouped && <div className="staff-chat__meta"><strong>{own ? 'Вы' : message.sender_name}</strong><time dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time></div>}
+              <p>{message.body}{grouped && <time className="staff-chat__inline-time" dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time>}</p>
+            </div>
           </article>
         </div>
       })}
     </div>
     {!nearBottom && <button type="button" className="staff-chat__jump" onClick={() => { const list = listRef.current; if (list) list.scrollTop = list.scrollHeight; onScroll() }} aria-label="К последним сообщениям"><ArrowDown size={18} /></button>}
+    </div>
     <form className="staff-chat__composer" onSubmit={(event) => { event.preventDefault(); submit() }}>
       <label className="sr-only" htmlFor="staff-chat-input">Сообщение</label>
-      <textarea id="staff-chat-input" value={body} onChange={(event) => setBody(event.target.value)} onKeyDown={onKeyDown} maxLength={2000} rows={2} placeholder="Сообщение команде…" />
+      <textarea ref={inputRef} id="staff-chat-input" value={body} onChange={(event) => setBody(event.target.value)} onKeyDown={onKeyDown} maxLength={2000} rows={1} placeholder="Сообщение команде…" />
       <button type="submit" disabled={!body.trim() || send.isPending} aria-label="Отправить сообщение"><Send size={19} /></button>
       <span className="staff-chat__hint">Enter — отправить · Shift+Enter — новая строка</span>
       {send.isError && <div className="staff-chat__send-error" role="alert">Не удалось отправить: {errorText(send.error)}. Текст сохранён для повтора.</div>}
