@@ -65,10 +65,11 @@ describe('session shell', () => {
     render(<App />)
     expect(await screen.findByText(/Для просмотра заявок необходимо разрешение/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Тестовый оператор' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Мой доступ/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Заявки/ })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('link', { name: /Мой доступ/ }))
-    await waitFor(() => expect(screen.getByText('Управление учётными записями')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('link', { name: /Мой профиль: Тестовый оператор/ }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Мой профиль' })).toBeInTheDocument())
+    expect(screen.queryByText('Управление учётными записями')).not.toBeInTheDocument()
   })
 
   it('does not replace a failed session lookup with a login form', async () => {

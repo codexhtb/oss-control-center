@@ -138,6 +138,11 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .topbar__divider { color: #53616a; }
 .topbar__right { display: flex; align-items: center; gap: 22px; color: var(--muted); font-size: 12px; }
 .topbar__user { color: var(--text); font-weight: 600; }
+.topbar__user { display: inline-flex; align-items: center; gap: 9px; max-width: 220px; padding: 4px 8px 4px 4px; border: 1px solid transparent; border-radius: 9px; }
+.topbar__user:hover, .topbar__user[aria-current="page"] { border-color: #526472; background: #243039; color: #fff; }
+.topbar__user:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.topbar__user-avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 7px; color: #d7e9e2; background: #334b48; font-size: 12px; }
+.topbar__user-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notification-bell { position: relative; }
 .notification-bell__trigger { position: relative; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 9px; color: #c2d1d3; background: #1b252c; cursor: pointer; }
 .notification-bell__trigger:hover, .notification-bell__trigger[aria-expanded="true"] { border-color: #5c786f; color: #f1f7f4; }
@@ -199,6 +204,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .stage-tag { flex: none; padding: 7px 9px; border: 1px solid #3b4b4a; border-radius: 5px; color: #a9c5bb; font-size: 10px; font-weight: 800; letter-spacing: .1em; }
 
 .account-grid { display: grid; grid-template-columns: minmax(290px, .82fr) minmax(0, 1.18fr); gap: 20px; }
+.account-grid .account-password-panel { margin-top: 0; }
 .account-grid > .panel { padding: 27px; }
 .account-password-panel { margin-top: 20px; padding: 27px; }
 .account-password-panel h2 { margin: 0 0 7px; font-size: 20px; }
@@ -250,7 +256,7 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 
 @media (max-width: 560px) {
   .topbar { height: 68px; padding-right: 20px; }
-  .topbar__product, .topbar__divider, .topbar__user { display: none; }
+  .topbar__product, .topbar__divider, .topbar__user-name { display: none; }
   .main-content { padding: 30px 20px 45px; }
   .page-heading { display: block; }
   .role-chip { margin-top: 18px; }
@@ -561,6 +567,8 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .ticket-tabs__tab:hover { color: #e8f1f0; }
 .ticket-tabs__tab[aria-selected="true"] { color: #f2f8f6; }
 .ticket-tabs__tab[aria-selected="true"]::after { content: ''; position: absolute; right: 14px; bottom: -1px; left: 14px; height: 2px; border-radius: 2px; background: var(--accent); }
+.ticket-tabs__tab[aria-current="page"] { color: #f2f8f6; }
+.ticket-tabs__tab[aria-current="page"]::after { content: ''; position: absolute; right: 14px; bottom: -1px; left: 14px; height: 2px; border-radius: 2px; background: var(--accent); }
 .ticket-tabs__tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .ticket-detail-main { display: grid; align-content: start; gap: 16px; min-width: 0; }
 .ticket-work-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
@@ -735,6 +743,30 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .category-editor-row .field { min-width: 0; }
 .category-editor-row__active { display: inline-flex; align-items: center; gap: .4rem; padding-bottom: .7rem; white-space: nowrap; }
 .category-editor-row .notice { grid-column: 1 / -1; }
+.category-editor__head { display: grid; grid-template-columns: minmax(180px, 1fr) 90px auto auto; gap: .7rem; padding: .45rem 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 700; }
+.category-editor-row .field > span { display: none; }
+.category-editor-row input { min-height: 36px; }
+.category-editor-row > [role="cell"]:last-of-type { display: flex; justify-content: flex-end; }
+.category-editor-row--new > .button { grid-column: 4; justify-self: end; }
+.users-page > .ticket-tabs { margin-top: 8px; }
+.users-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0 20px; }
+.users-filters .field { min-width: 150px; }
+.users-filters .field:first-child { flex: 1 1 240px; }
+.users-filters input, .users-filters select { width: 100%; }
+.users-table td { vertical-align: middle; }
+.employee-editor { padding: 23px 26px; }
+.employee-editor__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.employee-editor__heading h2 { margin: 3px 0 0; color: #f0f4f5; font-size: 20px; }
+.employee-editor__heading .eyebrow { margin: 0; }
+.employee-editor__form { display: grid; justify-items: start; gap: 20px; padding: 8px 0 4px; }
+.employee-editor__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: min(760px, 100%); }
+.employee-editor__fields .field { min-width: 0; }
+.employee-editor__password { display: grid; justify-items: start; gap: 14px; width: min(480px, 100%); }
+.employee-editor__password .field { width: 100%; }
+.employee-editor__access { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: min(760px, 100%); padding-top: 18px; border-top: 1px solid var(--line-soft); }
+.employee-editor__access > div { display: grid; gap: 4px; }
+.employee-editor__access span { color: var(--muted); font-size: 12px; }
+@media (max-width: 650px) { .employee-editor { padding: 17px; } .employee-editor__heading { align-items: start; flex-direction: column; } .employee-editor__fields { grid-template-columns: 1fr; } .users-filters .field { flex: 1 1 100%; } .employee-editor__access { align-items: start; flex-direction: column; } .category-editor__head { display: none; } .category-editor-row .field > span { display: block; } .category-editor-row--new > .button { grid-column: 1 / -1; } }
 @media (max-width: 720px) { .category-editor-row { grid-template-columns: minmax(0, 1fr) 90px; } .category-editor-row .button { justify-self: start; } }
 .permission-editor { display: grid; gap: 12px; width: 100%; }
 .permission-editor fieldset { min-width: 0; margin: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; }

@@ -24,11 +24,11 @@ function CategoryRow({ item, reload }: { item: TicketCategory; reload: () => Pro
     } catch (reason) { setError(reason) }
     finally { setBusy(false) }
   }
-  return <form className="category-editor-row" onSubmit={(event) => void save(event)}>
-    <label className="field"><span>Название</span><input aria-label={`Название категории ${item.name}`} value={name} maxLength={160} required onChange={(event) => setName(event.target.value)} /></label>
-    <label className="field"><span>Порядок</span><input aria-label={`Порядок категории ${item.name}`} type="number" min={0} max={100000} value={order} onChange={(event) => setOrder(Number(event.target.value))} /></label>
-    <label className="category-editor-row__active"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /> Активна</label>
-    <Button type="submit" disabled={busy || !name.trim() || (name === item.name && order === item.sort_order && active === item.is_active)}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button>
+  return <form className="category-editor-row" role="row" onSubmit={(event) => void save(event)}>
+    <label className="field" role="cell"><span>Название</span><input aria-label={`Название категории ${item.name}`} value={name} maxLength={160} required onChange={(event) => setName(event.target.value)} /></label>
+    <label className="field" role="cell"><span>Порядок</span><input aria-label={`Порядок категории ${item.name}`} type="number" min={0} max={100000} value={order} onChange={(event) => setOrder(Number(event.target.value))} /></label>
+    <label className="category-editor-row__active" role="cell"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /> Активна</label>
+    <div role="cell"><Button type="submit" disabled={busy || !name.trim() || (name === item.name && order === item.sort_order && active === item.is_active)}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button></div>
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
   </form>
 }
@@ -53,8 +53,8 @@ export function CategoryManager() {
     finally { setBusy(false) }
   }
   return <section className="detail-panel"><div className="detail-panel__heading"><h2>Темы обращений</h2></div>
-    {categories.isPending ? <p role="status">Загружаем темы…</p> : categories.isError ? <Notice tone="error">{errorText(categories.error)}</Notice> : <div className="category-editor">{categories.data.map((item) => <CategoryRow key={item.id} item={item} reload={reload} />)}</div>}
-    <form className="category-editor-row" onSubmit={(event) => void add(event)}>
+    {categories.isPending ? <p role="status">Загружаем темы…</p> : categories.isError ? <Notice tone="error">{errorText(categories.error)}</Notice> : <div className="category-editor" role="table" aria-label="Темы обращений"><div className="category-editor__head" role="row"><span role="columnheader">Название</span><span role="columnheader">Порядок</span><span role="columnheader">Статус</span><span role="columnheader">Действие</span></div>{categories.data.map((item) => <CategoryRow key={item.id} item={item} reload={reload} />)}</div>}
+    <form className="category-editor-row category-editor-row--new" onSubmit={(event) => void add(event)}>
       <label className="field"><span>Новая тема</span><input aria-label="Новая тема" value={name} maxLength={160} required onChange={(event) => setName(event.target.value)} /></label>
       <label className="field"><span>Порядок</span><input aria-label="Порядок новой темы" type="number" min={0} max={100000} value={order} onChange={(event) => setOrder(Number(event.target.value))} /></label>
       <Button type="submit" disabled={busy || !name.trim()}>{busy ? 'Добавляем…' : 'Добавить тему'}</Button>

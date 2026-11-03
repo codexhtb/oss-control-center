@@ -36,8 +36,10 @@ it('creates a user with an administrator-supplied one-character password', async
   fireEvent.click(screen.getByRole('button', { name: 'Создать пользователя' }))
   fireEvent.change(screen.getByLabelText('Логин'), { target: { value: 'new.worker' } })
   fireEvent.change(screen.getByLabelText('Имя сотрудника'), { target: { value: 'Новый сотрудник' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Безопасность' }))
   fireEvent.change(screen.getByLabelText('Пароль'), { target: { value: '1' } })
   fireEvent.change(screen.getByLabelText('Подтвердите пароль'), { target: { value: '1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Основное' }))
   fireEvent.click(screen.getByRole('button', { name: 'Создать' }))
   expect(await screen.findByText('Пользователь создан.')).toBeInTheDocument()
   const call = vi.mocked(apiRequest).mock.calls.find(([path]) => path === '/api/v1/users')
@@ -52,6 +54,7 @@ it('changes an employee password with confirmation and optional first-login chan
   expect(employee).toHaveClass('employee-name')
   expect(screen.getByText('С', { selector: '.employee-name__avatar' })).toBeInTheDocument()
   fireEvent.click(employee)
+  fireEvent.click(screen.getByRole('button', { name: 'Безопасность' }))
   fireEvent.click(screen.getByRole('button', { name: 'Изменить пароль' }))
   fireEvent.change(screen.getByLabelText('Пароль'), { target: { value: '1' } })
   fireEvent.change(screen.getByLabelText('Подтвердите пароль'), { target: { value: '1' } })
@@ -70,6 +73,7 @@ it('changes an employee password with confirmation and optional first-login chan
 it('offers a generated password without forcing first-login replacement', async () => {
   renderPage()
   fireEvent.click(await screen.findByRole('button', { name: 'Создать пользователя' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Безопасность' }))
   fireEvent.click(screen.getByRole('button', { name: 'Сгенерировать пароль' }))
   const generated = screen.getByLabelText('Пароль') as HTMLInputElement
   const confirmation = screen.getByLabelText('Подтвердите пароль') as HTMLInputElement
@@ -81,6 +85,7 @@ it('offers a generated password without forcing first-login replacement', async 
 it('sends a replacement grant set for the selected employee', async () => {
   renderPage()
   fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Разрешения' }))
   fireEvent.click(screen.getByRole('checkbox', { name: 'Создание' }))
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить разрешения' }))
   await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.some(([path, options]) =>
@@ -99,6 +104,7 @@ it('manages the category catalog through the existing admin page', async () => {
     return item
   })
   renderPage()
+  fireEvent.click(screen.getByRole('button', { name: 'Темы обращений' }))
   expect(await screen.findByDisplayValue('Нет интернета')).toBeInTheDocument()
   fireEvent.change(screen.getByRole('textbox', { name: 'Название категории Нет интернета' }), { target: { value: 'Нет связи' } })
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
@@ -106,4 +112,39 @@ it('manages the category catalog through the existing admin page', async () => {
     path === `/api/v1/ticket-categories/${item.id}` && options?.method === 'PATCH' &&
     options.ifMatch === '"1"' && (options.json as { name: string }).name === 'Нет связи',
   )).toBe(true))
+})
+
+it('filters employees by name, role, and activity across the loaded catalog', async () => {
+  const engineer = { ...worker, id: '00000000-0000-4000-8000-000000000003', login: 'engineer', display_name: 'Инженер', role: 'engineer', is_active: false }
+  vi.mocked(apiRequest).mockImplementation(async (path) => {
+    if (path.startsWith('/api/v1/users?page=')) return { items: [worker, engineer], page: 1, size: 100, total: 2 }
+    return []
+  })
+  renderPage()
+  expect(await screen.findByRole('button', { name: 'Инженер' })).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Поиск'), { target: { value: 'worker' } })
+  expect(screen.queryByRole('button', { name: 'Инженер' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Поиск'), { target: { value: '' } })
+  fireEvent.change(screen.getByLabelText('Роль'), { target: { value: 'engineer' } })
+  expect(screen.queryByRole('button', { name: 'Сотрудник' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Активность'), { target: { value: 'active' } })
+  expect(screen.getByText('Сотрудники не найдены.')).toBeInTheDocument()
+})
+
+it('keeps the category editor and action history in separate sections', async () => {
+  vi.mocked(apiRequest).mockImplementation(async (path) => {
+    if (path.startsWith('/api/v1/users?page=')) return { items: [worker], page: 1, size: 100, total: 1 }
+    if (path.startsWith('/api/v1/users/audit?')) return { items: [{ id: 'event-1', actor_name: 'Сотрудник', target_name: null, action: 'user_updated', outcome: 'success', details: null, occurred_at: '2026-01-01T00:00:00Z' }], page: 1, size: 20, total: 1 }
+    return []
+  })
+  renderPage()
+  expect(await screen.findByRole('button', { name: 'Сотрудник' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'История административных действий' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'История действий' }))
+  expect(await screen.findByText('user_updated')).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Результат на странице'), { target: { value: 'denied' } })
+  expect(screen.getByText('Записи не найдены на этой странице.')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Темы обращений' }))
+  expect(screen.getByRole('heading', { name: 'Темы обращений' })).toBeInTheDocument()
+  expect(screen.queryByText('user_updated')).not.toBeInTheDocument()
 })
