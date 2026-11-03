@@ -140,7 +140,9 @@ def login_user(
 
     user = (
         db.execute(
-            select(User).where(User.login == canonical_login).with_for_update()
+            select(User)
+            .where(User.login == canonical_login, User.deleted_at.is_(None))
+            .with_for_update()
         ).scalar_one_or_none()
         if valid_login
         else None

@@ -79,8 +79,8 @@
 | `POST /auth/password` | Сессия + Origin + CSRF | `{current_password,new_password}`; новый пароль непустой, до 1024 символов; отзыв всех сессий и cookies; повторный вход |
 | `GET /users` | `users.read` | `page` 1+, `size` 1–100, список `id, login, display_name, role, is_active, must_change_password, permissions` |
 | `GET /users/{id}` | `users.read` | Те же публичные поля одного сотрудника |
-| `POST /users` | `users.manage` + CSRF | `{login,display_name,role,permissions?,password?,must_change_password?}`; явный непустой пароль сохраняется через Argon2id, флаг смены по умолчанию `false`; старый запрос без `password` возвращает однократный `temporary_password` с обязательной сменой |
-| `PATCH /users/{id}` | `users.manage` + CSRF | `{login?,display_name?}`; до/после в identity audit, конфликт логина `409` |
+| `POST /users` | `users.manage` + CSRF | `{login,display_name,role,permissions?,password?,must_change_password?}`; явный непустой пароль сохраняется через Argon2id, флаг смены по умолчанию `false`; старый запрос без `password` возвращает однократный `temporary_password` с обязательной сменой. Логин удалённого сотрудника можно использовать снова; занятый действующим сотрудником логин даёт `409 user_conflict` |
+| `PATCH /users/{id}` | `users.manage` + CSRF | `{login?,display_name?}`; до/после в identity audit; занятый действующим сотрудником логин даёт `409 user_conflict`, отсутствие изменений — `409 no_change` |
 | `PUT /users/{id}/permissions` | `users.manage` + CSRF | `{permissions:[...]}`; полная замена, действие в текущей сессии, аудит до/после; нельзя отозвать последний `users.manage` активного admin |
 | `POST /users/{id}/reset-password` | `users.manage` + CSRF | Однократный `temporary_password`, отзыв сессий цели, обязательная смена |
 | `PUT /users/{id}/password` | `users.manage` + CSRF | `{new_password,must_change_password=false}`; Argon2id, отзыв всех сессий цели, аудит без значения пароля |

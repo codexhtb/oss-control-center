@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from alembic import command
@@ -161,3 +162,69 @@ def test_admin_cannot_delete_self_or_last_administrator(deletion_env):
     assert admin.delete(f"/api/v1/users/{own_id}", headers=csrf(admin)).status_code == 409
     with Session(engine) as db:
         assert db.get(User, own_id).deleted_at is None
+
+
+def test_deleted_login_can_be_reused_for_a_new_employee(deletion_env):
+    engine, admin, worker, _ = deletion_env
+    with Session(engine) as db:
+        previous_id = db.scalar(select(User.id).where(User.login == "worker"))
+    assert previous_id is not None
+    assert admin.delete(f"/api/v1/users/{previous_id}", headers=csrf(admin)).status_code == 204
+
+    replacement_password = "Replacement-test-password-43!"
+    created = admin.post(
+        "/api/v1/users",
+        headers=csrf(admin),
+        json={
+            "login": "worker",
+            "display_name": "Replacement Worker",
+            "role": "operator",
+            "password": replacement_password,
+        },
+    )
+    assert created.status_code == 201
+    replacement_id = created.json()["id"]
+    assert replacement_id != str(previous_id)
+    assert (
+        worker.post(
+            "/api/v1/auth/login", json={"login": "worker", "password": PASSWORD}
+        ).status_code
+        == 401
+    )
+    assert (
+        worker.post(
+            "/api/v1/auth/login",
+            json={"login": "worker", "password": replacement_password},
+        ).status_code
+        == 200
+    )
+    assert worker.get("/api/v1/auth/me").json()["user"]["id"] == replacement_id
+    with Session(engine) as db:
+        assert db.get(User, previous_id).deleted_at is not None
+        assert db.scalar(
+            select(User.id).where(User.login == "worker", User.deleted_at.is_(None))
+        ) == UUID(replacement_id)
+
+
+def test_deleted_login_can_be_assigned_to_another_employee(deletion_env):
+    engine, admin, _, manager = deletion_env
+    with Session(engine) as db:
+        deleted_id = db.scalar(select(User.id).where(User.login == "worker"))
+        manager_id = db.scalar(select(User.id).where(User.login == "manager"))
+    assert deleted_id is not None and manager_id is not None
+    assert admin.delete(f"/api/v1/users/{deleted_id}", headers=csrf(admin)).status_code == 204
+    path = f"/api/v1/users/{manager_id}"
+    updated = admin.patch(path, headers=csrf(admin), json={"login": "worker"})
+    assert updated.status_code == 200
+    assert updated.json()["login"] == "worker"
+    unchanged = admin.patch(path, headers=csrf(admin), json={"login": "worker"})
+    assert unchanged.status_code == 409 and unchanged.json()["code"] == "no_change"
+    occupied = admin.patch(path, headers=csrf(admin), json={"login": "admin"})
+    assert occupied.status_code == 409 and occupied.json()["code"] == "user_conflict"
+    assert (
+        manager.post(
+            "/api/v1/auth/login", json={"login": "worker", "password": PASSWORD}
+        ).status_code
+        == 200
+    )
+    assert manager.get("/api/v1/auth/me").json()["user"]["id"] == str(manager_id)

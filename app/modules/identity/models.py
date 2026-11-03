@@ -3,7 +3,17 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -22,10 +32,16 @@ class User(Base):
             "(deleted_at IS NOT NULL AND deleted_by IS NOT NULL AND is_active = false)",
             name="ck_app_users_deleted",
         ),
+        Index(
+            "uq_app_users_login_live",
+            "login",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    login: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    login: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(150), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)

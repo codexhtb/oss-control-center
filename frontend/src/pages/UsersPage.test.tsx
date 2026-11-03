@@ -73,6 +73,19 @@ it('changes an employee password with confirmation and optional first-login chan
   )).toBe(true))
 })
 
+it('saves a changed login and avoids an unchanged update', async () => {
+  renderPage()
+  fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
+  const save = screen.getByRole('button', { name: 'Сохранить имя и логин' })
+  expect(save).toBeDisabled()
+  fireEvent.change(screen.getByLabelText('Логин'), { target: { value: 'worker.new' } })
+  expect(save).toBeEnabled()
+  fireEvent.click(save)
+  await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(`/api/v1/users/${worker.id}`, {
+    method: 'PATCH', json: { login: 'worker.new', display_name: 'Сотрудник' },
+  }))
+})
+
 it('requires confirmation before an administrator deletes another employee', async () => {
   renderPage()
   fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))

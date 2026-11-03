@@ -86,7 +86,16 @@ export function errorText(error: unknown): string {
       case 401: return 'Сессия завершена. Войдите снова.'
       case 403: return 'Недостаточно прав или запрос отклонён проверкой безопасности.'
       case 404: return 'Запрашиваемые данные не найдены.'
-      case 409: return 'Данные изменились. Обновите страницу и повторите действие.'
+      case 409:
+        switch (error.code) {
+          case 'user_conflict': return 'Логин уже занят другим сотрудником.'
+          case 'no_change': return 'Изменений нет.'
+          case 'last_admin': return 'Нельзя отключить последнего активного администратора.'
+          case 'cannot_delete_self': return 'Нельзя удалить свою учётную запись.'
+          case 'already_active': return 'Учётная запись уже активна.'
+          case 'already_inactive': return 'Учётная запись уже отключена.'
+          default: return 'Данные изменились. Обновите страницу и повторите действие.'
+        }
       case 422: return 'Проверьте введённые данные.'
       case 429: return 'Слишком много попыток. Повторите позже.'
       case 503: return 'Сервис временно недоступен. Повторите позже.'
