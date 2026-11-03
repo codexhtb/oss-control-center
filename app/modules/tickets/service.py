@@ -344,6 +344,7 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         category_id=payload.category_id,
         category_name=category_name,
         caller_phone=payload.caller_phone,
+        city=payload.city,
         status=TicketStatus.OPEN,
         priority=payload.priority,
         created_by=actor_id,
@@ -446,6 +447,7 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         or ticket.subject != expected_subject
         or ticket.category_id != payload.category_id
         or ticket.caller_phone != payload.caller_phone
+        or ticket.city != payload.city
         or ticket.priority != payload.priority
     ):
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")

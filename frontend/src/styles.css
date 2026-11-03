@@ -565,7 +565,7 @@ html[data-effects="simple"] .workspace-welcome__particle { display: none; }
 .ticket-detail-heading h1 { max-width: 950px; margin: 5px 0 9px; color: #f3f7f7; font-size: clamp(24px, 2.6vw, 32px); font-weight: 670; letter-spacing: -.04em; line-height: 1.2; overflow-wrap: anywhere; }
 .ticket-detail-heading > .button { align-self: start; }
 .ticket-detail-tags { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.ticket-detail-facts { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px 18px; margin: 0; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.ticket-detail-facts { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px 18px; margin: 0; padding-top: 14px; border-top: 1px solid var(--line-soft); }
 .ticket-detail-facts > div { display: grid; align-content: start; gap: 4px; min-width: 0; }
 .ticket-detail-facts dt { color: #90a5ad; font-size: 11px; }
 .ticket-detail-facts dd { margin: 0; color: #e8f0f0; font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }

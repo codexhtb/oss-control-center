@@ -173,6 +173,11 @@ class Ticket(Base):
             name="ck_tickets_caller_phone",
         ),
         CheckConstraint(
+            "city IS NULL OR (length(btrim(city)) > 0 AND city = btrim(city) "
+            "AND city !~ '[[:cntrl:]]')",
+            name="ck_tickets_city",
+        ),
+        CheckConstraint(
             "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
             "AND account_no IS NOT NULL AND length(account_no) > 0) OR "
             "(ticket_type IN ('MANUAL', 'INTERNAL') AND subscriber_snapshot_id IS NULL "
@@ -234,6 +239,7 @@ class Ticket(Base):
     )
     category_name: Mapped[str | None] = mapped_column(String(160))
     caller_phone: Mapped[str | None] = mapped_column(String(50))
+    city: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     created_by: Mapped[UUID] = mapped_column(

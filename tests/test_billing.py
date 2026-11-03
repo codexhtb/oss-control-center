@@ -134,6 +134,9 @@ def ticket_payload(card: dict, *, request_id: UUID | None = None) -> dict:
         "connection_snapshot_id": card["connections"][0]["connection_snapshot_id"],
         "selected_service_id": card["services"][0]["service_id"],
         "description": "Synthetic access issue",
+        "subject": "Synthetic access issue",
+        "caller_phone": "+7 900 111 22 33",
+        "city": "Тестовый город",
         "client_request_id": str(request_id or uuid4()),
     }
 
@@ -528,6 +531,9 @@ def test_no_connection_remains_unknown_and_is_not_invented(
             "lookup_id": card["lookup_id"],
             "selected_service_id": card["services"][0]["service_id"],
             "description": "No known connection",
+            "subject": "No known connection",
+            "caller_phone": "+7 900 111 22 33",
+            "city": "Тестовый город",
             "client_request_id": str(uuid4()),
         },
     )
@@ -983,7 +989,10 @@ def test_parallel_linked_creates_are_serialized_by_subscriber(
         with Session(billing_engine) as db:
             payload = CreateTicket(
                 lookup_id=snapshots[index],
+                subject="Concurrent synthetic issue",
                 description="Concurrent synthetic issue",
+                caller_phone="+7 900 111 22 33",
+                city="Тестовый город",
                 client_request_id=uuid4(),
             )
             gate.wait(timeout=10)

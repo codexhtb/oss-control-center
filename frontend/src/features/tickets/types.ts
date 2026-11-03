@@ -20,6 +20,7 @@ export interface Ticket {
   category_id?: string | null
   category_name?: string | null
   caller_phone?: string | null
+  city?: string | null
   description: string
   status: TicketStatus
   priority: TicketPriority
@@ -321,6 +322,7 @@ export type CreateTicketInput = {
   description?: string
   category_id?: string
   caller_phone?: string
+  city?: string
   priority: TicketPriority
   client_request_id: string
 } & (

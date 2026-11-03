@@ -11,6 +11,10 @@ export function formatSubscriberAddress(address?: string | null, house?: string 
   return explicitHouse.test(base) || trailingNumber.test(base) ? base : `${base.replace(/[,.\\s]+$/u, '')}, д. ${number}`
 }
 
+export function cityFromSubscriberAddress(address?: string | null): string {
+  return address?.trim().match(/^(?:г\.?|город)\s+([^,;]+)(?:[,;]|$)/iu)?.[1]?.trim() ?? ''
+}
+
 export function configuredIpv4(rows: SubscriberIpRow[]): string[] {
   return [...new Set(rows.flatMap((row) => row.configured_ipv4 && row.configured_prefix_length !== null && row.configured_prefix_length !== undefined
     ? [`${row.configured_ipv4}/${row.configured_prefix_length}`]

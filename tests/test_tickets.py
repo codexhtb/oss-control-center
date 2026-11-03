@@ -71,6 +71,7 @@ from app.modules.tickets.status import TicketStatus, TicketType
 
 ORIGIN = "https://oss.example.test"
 PASSWORD = "Test-password-with-sufficient-length-42!"
+CONTACT = {"caller_phone": "+7 900 111 22 33", "city": "Тестовый город"}
 
 
 @pytest.fixture
@@ -229,6 +230,7 @@ def make_manual_ticket(client: TestClient, *, subject: str = "Synthetic deletion
             "ticket_type": "MANUAL",
             "subject": subject,
             "description": "Disposable test ticket",
+            **CONTACT,
             "client_request_id": str(uuid4()),
         },
     )
@@ -682,6 +684,8 @@ def create(
             "lookup_id": str(snapshot.id),
             "connection_snapshot_id": str(connection.id) if connection else None,
             "description": "Synthetic connectivity issue",
+            "subject": "Synthetic connectivity issue",
+            **CONTACT,
             "client_request_id": str(request_id or uuid4()),
             **({"duplicate_reason": duplicate_reason} if duplicate_reason else {}),
         },
@@ -741,6 +745,8 @@ def test_create_snapshot_idempotency_and_pagination(
             "lookup_id": str(snapshot.id),
             "connection_snapshot_id": str(connections[0].id),
             "description": "Other",
+            "subject": "Other",
+            **CONTACT,
             "client_request_id": str(request_id),
         },
     )
@@ -1049,6 +1055,10 @@ def test_three_types_http_creation_rbac_and_filters(
             payload = {
                 "ticket_type": kind.value,
                 "description": f"Synthetic {kind.value} request",
+                **(
+                    {"subject": f"Synthetic {kind.value} request", **CONTACT}
+                    if kind != TicketType.INTERNAL else {}
+                ),
                 "client_request_id": str(uuid4()),
             }
             if kind == TicketType.SUBSCRIBER_LINKED:
@@ -1093,6 +1103,7 @@ def test_three_types_http_creation_rbac_and_filters(
             json={
                 "ticket_type": kind.value,
                 "description": "Denied",
+                **({"subject": "Denied", **CONTACT} if kind != TicketType.INTERNAL else {}),
                 "client_request_id": str(uuid4()),
             },
         ).status_code == (422 if kind == TicketType.SUBSCRIBER_LINKED else 201)
@@ -1107,11 +1118,13 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
     old_payload = {
         "lookup_id": str(snapshot.id),
         "description": "Legacy synthetic request",
+        "subject": "Legacy synthetic request",
+        **CONTACT,
         "client_request_id": str(uuid4()),
     }
     old = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=old_payload)
     assert old.status_code == 201, old.text
-    assert old.json()["subject"] is None
+    assert old.json()["subject"] == "Legacy synthetic request"
     assert (
         ticket_client.post(
             "/api/v1/tickets", headers=csrf(ticket_client), json=old_payload
@@ -1123,6 +1136,7 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
             "ticket_type": kind.value,
             "subject": f"Synthetic {kind.value} task",
             "description": "Synthetic description",
+            **(CONTACT if kind != TicketType.INTERNAL else {}),
             "client_request_id": str(uuid4()),
         }
         if kind == TicketType.SUBSCRIBER_LINKED:
@@ -1192,6 +1206,7 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
             json={
                 "ticket_type": kind,
                 "description": f"Synthetic {kind}",
+                **({"subject": f"Synthetic {kind}", **CONTACT} if kind == "MANUAL" else {}),
                 "client_request_id": str(uuid4()),
             },
         )
@@ -1331,6 +1346,10 @@ def test_manual_internal_lifecycle_without_billing(
             json={
                 "ticket_type": kind.value,
                 "description": "Synthetic task without billing",
+                **(
+                    {"subject": "Synthetic task without billing", **CONTACT}
+                    if kind == TicketType.MANUAL else {}
+                ),
                 "client_request_id": str(uuid4()),
             },
         )
@@ -1438,6 +1457,7 @@ def test_ticket_type_validation_replay_and_legacy_client(
         payload = {
             "ticket_type": kind,
             "description": "Synthetic request",
+            **({"subject": "Synthetic request", **CONTACT} if kind == "MANUAL" else {}),
             "client_request_id": request_id,
         }
         first = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
@@ -1458,7 +1478,14 @@ def test_ticket_type_validation_replay_and_legacy_client(
             ticket_client.post(
                 "/api/v1/tickets",
                 headers=csrf(ticket_client),
-                json={**payload, "ticket_type": other_kind},
+                json={
+                    **payload,
+                    "ticket_type": other_kind,
+                    **(
+                        {"subject": "Synthetic request", **CONTACT}
+                        if other_kind == "MANUAL" else {}
+                    ),
+                },
             ).status_code
             == 409
         )
@@ -1517,7 +1544,9 @@ def test_concurrent_manual_idempotency_and_version_conflict(
     payload = CreateTicket.model_validate(
         {
             "ticket_type": "MANUAL",
+            "subject": "Concurrent synthetic request",
             "description": "Concurrent synthetic request",
+            **CONTACT,
             "client_request_id": str(uuid4()),
         }
     )
@@ -1575,6 +1604,7 @@ def test_own_ticket_edit_scope_conflict_and_history(
             "ticket_type": "MANUAL",
             "subject": "Original subject",
             "description": "Original description",
+            **CONTACT,
             "client_request_id": str(uuid4()),
         },
     )
@@ -1712,6 +1742,8 @@ def test_categories_rbac_csrf_origin_and_immutable_ticket_label(
             "lookup_id": str(snapshot.id),
             "category_id": category["id"],
             "caller_phone": "+7 (900) 000-00-01",
+            "city": "Тестовый город",
+            "description": "Нет интернета",
             "client_request_id": str(uuid4()),
         },
     )
@@ -1793,6 +1825,8 @@ def test_category_ticket_idempotency_and_manual_phone(
         "ticket_type": "MANUAL",
         "category_id": category["id"],
         "caller_phone": "(000) 123 456",
+        "city": "Тестовый город",
+        "description": "Synthetic category issue",
         "client_request_id": str(uuid4()),
     }
     first = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
@@ -1816,6 +1850,56 @@ def test_category_ticket_idempotency_and_manual_phone(
         ).status_code
         == 422
     )
+
+
+def test_free_topics_and_required_contact_for_manual_and_linked(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "free_topic_operator", Role.OPERATOR)
+    snapshot, _ = seed_snapshot(ticket_engine, operator)
+    login(ticket_client, operator.login)
+    for kind in ("MANUAL", "SUBSCRIBER_LINKED"):
+        payload = {
+            "ticket_type": kind,
+            "subject": f"Synthetic free topic {kind}",
+            "description": "Synthetic cable issue",
+            "caller_phone": "+7 900 111 22 33",
+            "city": "Тестовый город",
+            "client_request_id": str(uuid4()),
+            **({"lookup_id": str(snapshot.id)} if kind == "SUBSCRIBER_LINKED" else {}),
+        }
+        for missing in ("caller_phone", "city", "description", "subject"):
+            invalid = {key: value for key, value in payload.items() if key != missing}
+            assert ticket_client.post(
+                "/api/v1/tickets", headers=csrf(ticket_client), json=invalid
+            ).status_code == 422
+        first = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+        assert first.status_code == 201, first.text
+        assert first.json()["subject"] == payload["subject"]
+        assert first.json()["category_id"] is None
+        assert first.json()["category_name"] is None
+        assert first.json()["caller_phone"] == payload["caller_phone"]
+        assert first.json()["city"] == payload["city"]
+        detail = ticket_client.get(f"/api/v1/tickets/{first.json()['id']}")
+        assert detail.json()["city"] == payload["city"]
+        replay = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+        assert replay.status_code == 200
+        changed = {**payload, "city": "Другой город"}
+        assert ticket_client.post(
+            "/api/v1/tickets", headers=csrf(ticket_client), json=changed
+        ).status_code == 409
+    with Session(ticket_engine) as db:
+        saved = db.scalar(select(Ticket).where(Ticket.id == UUID(first.json()["id"])))
+        assert saved is not None and saved.city == "Тестовый город"
+        snapshot_after = db.get(SubscriberSnapshot, snapshot.id)
+        assert snapshot_after is not None
+        assert snapshot_after.actual_address == snapshot.actual_address
+        with pytest.raises(DBAPIError):
+            db.execute(
+                text("UPDATE tickets SET city = 'Другой город' WHERE id = :id"),
+                {"id": first.json()["id"]},
+            )
+        db.rollback()
 
 
 def test_0015_upgrade_preserves_existing_ticket(
@@ -1910,6 +1994,9 @@ def test_category_disable_and_ticket_create_serialize(ticket_engine: Engine) -> 
     payload = CreateTicket(
         ticket_type=TicketType.MANUAL,
         category_id=category_id,
+        caller_phone="+7 900 111 22 33",
+        city="Тестовый город",
+        description="Synthetic issue",
         client_request_id=uuid4(),
     )
     backend_pids: Queue[int] = Queue()
@@ -2001,6 +2088,7 @@ def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup
                 "ticket_type": kind,
                 "subject": f"Synthetic {kind}",
                 "description": "Synthetic request",
+                **(CONTACT if kind == "MANUAL" else {}),
                 "client_request_id": str(uuid4()),
             },
         )
@@ -2898,8 +2986,9 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     assert handoff["ready_to_send"] is True
     assert "Заявка #" in handoff["message_preview"]
     assert "Абонент: Synthetic Subscriber" in handoff["message_preview"]
-    assert "Контакт NetUP: +000000000" in handoff["message_preview"]
+    assert "Телефон звонящего: +7 900 111 22 33" in handoff["message_preview"]
     assert "Адрес: г. Тест, ул. Безопасная, д. 20" in handoff["message_preview"]
+    assert "Город: Тестовый город" in handoff["message_preview"]
     assert handoff["visit_address"] is None
     assert "Отправил инженер: Field_Dispatch_Engineer" in handoff["message_preview"]
 
@@ -3050,32 +3139,20 @@ def test_optional_visit_address_does_not_relax_required_contact(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:
     engineer = seed_user(ticket_engine, "field_missing_contact_engineer", Role.ENGINEER)
-    snapshot, connections = seed_snapshot(ticket_engine, engineer)
-    gateway = RecordingFieldGateway()
-    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    snapshot, _ = seed_snapshot(ticket_engine, engineer)
     login(ticket_client, engineer.login)
-    created = create(ticket_client, snapshot, connections[0])
-    assert created.status_code == 201, created.text
-    path = f"/api/v1/tickets/{created.json()['id']}"
-    assert ticket_client.post(
-        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
-    ).status_code == 200
-    assert ticket_client.post(
-        f"{path}/field-work-request",
-        headers={**csrf(ticket_client), "If-Match": '"2"'},
-        json={"reason": "Synthetic field visit"},
-    ).status_code == 200
-    handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
-    assert handoff["missing_fields"] == ["contact"]
-    assert handoff["ready_to_send"] is False
-    sent = ticket_client.post(
-        f"{path}/field-work-handoffs/{handoff['id']}/send",
+    created = ticket_client.post(
+        "/api/v1/tickets",
         headers=csrf(ticket_client),
-        json={"client_request_id": str(uuid4()), "visit_address": "г. Тест, ул. Ручная"},
+        json={
+            "lookup_id": str(snapshot.id),
+            "subject": "Synthetic field visit",
+            "description": "Synthetic field visit",
+            "city": "Тестовый город",
+            "client_request_id": str(uuid4()),
+        },
     )
-    assert sent.status_code == 409
-    assert sent.json()["code"] == "field_dispatch_incomplete"
-    assert gateway.calls == []
+    assert created.status_code == 422
 
 
 def test_telegram_replies_completion_and_engineer_verification_are_independent(

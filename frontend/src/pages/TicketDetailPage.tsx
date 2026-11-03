@@ -237,6 +237,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
           <div><dt>Абонент</dt><dd>{ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
           <div><dt>Лицевой счёт</dt><dd>{ticket.account_no || '—'}</dd></div>
           <div><dt>Телефон</dt><dd>{ticket.caller_phone || ticket.subscriber?.phone || '—'}</dd></div>
+          <div><dt>Город</dt><dd>{ticket.city || '—'}</dd></div>
           <div><dt>Адрес</dt><dd>{formatSubscriberAddress(ticket.subscriber?.actual_address, ticket.subscriber?.house_number) || '—'}</dd></div>
           <div><dt>Категория</dt><dd>{ticket.category_name || '—'}</dd></div>
         </dl>

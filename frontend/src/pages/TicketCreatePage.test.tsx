@@ -53,7 +53,12 @@ it.each([
   vi.mocked(ticketApi.create).mockResolvedValue({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
   renderCreate()
   fireEvent.click(screen.getByRole('button', { name: new RegExp(label) }))
-  fireEvent.change(screen.getByRole('textbox', { name: /Тема/ }), { target: { value: 'Тестовая тема' } })
+  if (kind === 'MANUAL') {
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: '__custom__' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /Контактный номер/ }), { target: { value: '+7 900 111 22 33' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /Город/ }), { target: { value: 'Москва' } })
+  }
+  fireEvent.change(screen.getByRole('textbox', { name: /тема/i }), { target: { value: 'Тестовая тема' } })
   fireEvent.change(screen.getByRole('textbox', { name: /Описание/ }), { target: { value: 'Тестовое описание' } })
   fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
   await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -87,6 +92,9 @@ it('requires explicit service and connection choices for an ambiguous subscriber
   fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
   expect(await screen.findByText('Тестовая организация')).toBeInTheDocument()
   fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Другой номер/ }), { target: { value: '+7 900 111 22 33' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Город/ }), { target: { value: 'Москва' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Описание проблемы/ }), { target: { value: 'Не работает связь' } })
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
   fireEvent.change(screen.getByRole('combobox', { name: 'Услуга' }), { target: { value: 'service-b' } })
   fireEvent.change(screen.getByRole('combobox', { name: 'Подключение' }), { target: { value: card.connections[1]!.connection_snapshot_id } })
@@ -140,6 +148,9 @@ it('shows active subscriber tickets and requires a different-problem reason', as
   expect(await screen.findByText('У абонента уже есть открытые обращения')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Открыть существующую заявку/ })).toHaveAttribute('href', '/tickets/00000000-0000-4000-8000-000000000021')
   fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Другой номер/ }), { target: { value: '+7 900 111 22 33' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Город/ }), { target: { value: 'Москва' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Описание проблемы/ }), { target: { value: 'Другая проблема со связью' } })
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
   fireEvent.click(screen.getByRole('checkbox', { name: /Другая проблема/ }))
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
@@ -177,7 +188,7 @@ it('does not create a linked ticket when billing is unavailable', async () => {
   expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
 })
 
-it('uses a selected NetUP contact while leaving the extra comment optional', async () => {
+it('uses a selected NetUP contact and allows a separate city', async () => {
   const card: SubscriberCard = {
     lookup_id: '00000000-0000-4000-8000-000000000010', source: 'MOCK',
     fetched_at: '2026-01-01T00:00:00Z', expires_at: '2999-01-01T00:00:00Z', is_expired: false,
@@ -194,9 +205,55 @@ it('uses a selected NetUP contact while leaving the extra comment optional', asy
   fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
   expect(await screen.findByText('Тестовый абонент')).toBeInTheDocument()
   fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
-  fireEvent.change(screen.getByRole('combobox', { name: 'Телефон входящего звонка' }), { target: { value: 'number:0' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Город/ }), { target: { value: 'Москва' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Описание проблемы/ }), { target: { value: 'Нет доступа' } })
   fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
   await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
-    category_id: categoryId, caller_phone: '+7 900 000 00 01', description: undefined,
+    category_id: categoryId, caller_phone: '+7 900 000 00 01', city: 'Москва', description: 'Нет доступа',
   })))
+})
+
+it('creates a manual ticket from a ready topic with structured contact fields', async () => {
+  vi.mocked(ticketApi.create).mockResolvedValue({ id: 'ticket-ready' } as Ticket)
+  renderCreate()
+  fireEvent.click(screen.getByRole('button', { name: /Ручная/ }))
+  await screen.findByRole('option', { name: 'Нет интернета' })
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Контактный номер/ }), { target: { value: '+7 900 000 00 01' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Город/ }), { target: { value: 'Москва' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Описание проблемы/ }), { target: { value: 'Пропала связь' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    ticket_type: 'MANUAL', category_id: categoryId, subject: undefined,
+    caller_phone: '+7 900 000 00 01', city: 'Москва', description: 'Пропала связь',
+  })))
+})
+
+it('creates a linked ticket with a free topic and overridden NetUP contact', async () => {
+  const card: SubscriberCard = {
+    lookup_id: '00000000-0000-4000-8000-000000000010', source: 'NETUP',
+    fetched_at: '2026-01-01T00:00:00Z', expires_at: '2999-01-01T00:00:00Z', is_expired: false,
+    subscriber: { ...subscriberDefaults, billing_account: '123', full_name: 'Абонент', organization_name: null,
+      phone: '+7 900 000 00 01', actual_address: 'г. Москва, ул. Сетевая, д. 1' },
+    accounts: [], financial_accounts: [], contracts: [], services: [], connections: [], technical_state: 'UNKNOWN',
+  }
+  vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  vi.mocked(ticketApi.create).mockResolvedValue({ id: 'ticket-custom' } as Ticket)
+  renderCreate()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Лицевой счёт' }), { target: { value: '123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByText('Абонент')).toBeInTheDocument()
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: '__custom__' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Своя тема/ }), { target: { value: 'Повреждён кабель' } })
+  expect(screen.getByRole('textbox', { name: /Город/ })).toHaveValue('Москва')
+  fireEvent.change(screen.getByRole('textbox', { name: /Город/ }), { target: { value: 'Химки' } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Источник контактного номера' }), { target: { value: '__manual__' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Другой номер/ }), { target: { value: '+7 900 222 33 44' } })
+  fireEvent.change(screen.getByRole('textbox', { name: /Описание проблемы/ }), { target: { value: 'Связь отсутствует' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    ticket_type: 'SUBSCRIBER_LINKED', subject: 'Повреждён кабель', caller_phone: '+7 900 222 33 44',
+    city: 'Химки', description: 'Связь отсутствует',
+  })))
+  expect(vi.mocked(ticketApi.create).mock.calls[0]?.[0]).not.toHaveProperty('category_id')
 })

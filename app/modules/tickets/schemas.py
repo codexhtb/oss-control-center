@@ -65,6 +65,7 @@ class CreateTicket(StrictModel):
     subject: str | None = Field(default=None, max_length=160)
     category_id: UUID | None = None
     caller_phone: str | None = Field(default=None, max_length=50)
+    city: str | None = Field(default=None, max_length=160)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
     duplicate_reason: str | None = Field(default=None, min_length=1, max_length=500)
@@ -87,19 +88,26 @@ class CreateTicket(StrictModel):
             raise ValueError("duplicate_reason must be trimmed and contain no control characters")
         return value
 
-    @field_validator("caller_phone")
+    @field_validator("caller_phone", "city")
     @classmethod
-    def validate_caller_phone(cls, value: str | None) -> str | None:
+    def validate_contact_field(cls, value: str | None) -> str | None:
         if value is None:
             return None
         if not value.strip() or value != value.strip() or any(category(ch) == "Cc" for ch in value):
             raise ValueError(
-                "caller_phone must be nonblank, trimmed and contain no control characters"
+                "contact field must be nonblank, trimmed and contain no control characters"
             )
         return value
 
     @model_validator(mode="after")
     def validate_source(self) -> "CreateTicket":
+        if self.ticket_type in (TicketType.MANUAL, TicketType.SUBSCRIBER_LINKED):
+            if not all((self.caller_phone, self.city, self.description)) or not (
+                self.description or ""
+            ).strip():
+                raise ValueError("caller_phone, city and description are required")
+            if self.category_id is None and self.subject is None:
+                raise ValueError("category_id or subject is required")
         if self.category_id is None and self.description is None:
             raise ValueError("description is required without a category")
         if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
@@ -276,6 +284,7 @@ class TicketView(BaseModel):
     category_id: UUID | None = None
     category_name: str | None = None
     caller_phone: str | None = None
+    city: str | None = None
     status: TicketStatus
     priority: TicketPriority
     created_by: UUID

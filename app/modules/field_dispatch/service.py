@@ -96,6 +96,7 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
             f"Абонент: {name}",
             f"{contact_label}: {contact}",
             f"Лицевой счёт: {account}",
+            f"Город: {ticket.city or 'не указан'}",
             f"Адрес: {address}",
             f"Причина передачи: {handoff.reason}",
             f"Отправил инженер: {sender.display_name}",
