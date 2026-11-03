@@ -9,7 +9,7 @@ export interface ChatMessage {
 }
 
 export interface ChatHistory { items: ChatMessage[]; next_before: number | null }
-export interface ChatSummary { latest_id: number; last_read_id: number; unread_count: number }
+export interface ChatSummary { latest_id: number; latest_event_id: number; last_read_id: number; unread_count: number }
 
 export const chatApi = {
   summary: (signal?: AbortSignal) => apiRequest<ChatSummary>('/api/v1/chat/summary', { signal }),
@@ -19,6 +19,7 @@ export const chatApi = {
   send: (body: string, clientId: string) => apiRequest<ChatMessage>('/api/v1/chat/messages', {
     method: 'POST', json: { body, client_id: clientId },
   }),
+  remove: (messageId: number) => apiRequest<void>(`/api/v1/chat/messages/${messageId}`, { method: 'DELETE' }),
   markRead: (throughId: number) => apiRequest<ChatSummary>('/api/v1/chat/read', {
     method: 'POST', json: { through_id: throughId },
   }),

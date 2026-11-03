@@ -34,6 +34,7 @@ class Permission(StrEnum):
     TICKET_AUDIT_READ = "audit.read"
     IDENTITY_MANAGE = "users.manage"
     USERS_READ = "users.read"
+    CHAT_MESSAGES_DELETE = "chat.messages.delete"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {

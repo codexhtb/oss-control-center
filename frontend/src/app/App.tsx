@@ -59,7 +59,7 @@ function AppRoutes() {
       <Routes>
         <Route path="/" element={<WorkspacePage session={session.data} />} />
         <Route path="/account" element={<AccountPage session={session.data} onPasswordChanged={sessionChanged} />} />
-        <Route path="/chat" element={<ChatPage user={session.data.user} />} />
+        <Route path="/chat" element={<ChatPage user={session.data.user} canDelete={session.data.user.role === 'admin' && session.data.permissions.includes('chat.messages.delete')} />} />
         <Route path="/tickets" element={canReadTickets ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/new" element={session.data.permissions.includes('tickets.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/:id" element={canReadTickets ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />

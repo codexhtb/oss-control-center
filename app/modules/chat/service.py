@@ -8,9 +8,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.modules.chat.models import ChatMessage, ChatRead
+from app.modules.chat.models import ChatEvent, ChatMessage, ChatRead
+from app.modules.identity.access import effective_permissions
 from app.modules.identity.models import User
-from app.modules.identity.service import utc_now
+from app.modules.identity.roles import Permission, Role
+from app.modules.identity.service import audit, utc_now
 
 STAFF_ROOM_ID = UUID("00000000-0000-4000-8000-000000000001")
 MESSAGE_LIMIT = 2000
@@ -23,10 +25,16 @@ def latest_id(db: Session) -> int:
     )
 
 
+def latest_event_id(db: Session) -> int:
+    return db.scalar(select(func.max(ChatEvent.id)).where(ChatEvent.room_id == STAFF_ROOM_ID)) or 0
+
+
 def list_messages(
     db: Session, *, before: int | None, limit: int
 ) -> tuple[list[ChatMessage], int | None]:
-    statement = select(ChatMessage).where(ChatMessage.room_id == STAFF_ROOM_ID)
+    statement = select(ChatMessage).where(
+        ChatMessage.room_id == STAFF_ROOM_ID, ChatMessage.deleted_at.is_(None)
+    )
     if before is not None:
         statement = statement.where(ChatMessage.id < before)
     rows = list(db.scalars(statement.order_by(ChatMessage.id.desc()).limit(limit + 1)))
@@ -35,12 +43,13 @@ def list_messages(
     return items, items[0].id if older and items else None
 
 
-def messages_after(db: Session, after: int, limit: int = 100) -> list[ChatMessage]:
+def events_after(db: Session, after: int, limit: int = 100) -> list[tuple[ChatEvent, ChatMessage]]:
     return list(
-        db.scalars(
-            select(ChatMessage)
-            .where(ChatMessage.room_id == STAFF_ROOM_ID, ChatMessage.id > after)
-            .order_by(ChatMessage.id)
+        db.execute(
+            select(ChatEvent, ChatMessage)
+            .join(ChatMessage, ChatMessage.id == ChatEvent.message_id)
+            .where(ChatEvent.room_id == STAFF_ROOM_ID, ChatEvent.id > after)
+            .order_by(ChatEvent.id)
             .limit(limit)
         )
     )
@@ -68,6 +77,8 @@ def send_message(
     )
     if existing:
         db.commit()
+        if existing.deleted_at is not None:
+            raise ApiError(409, "chat_message_deleted", "Message was deleted")
         if existing.body != body:
             raise ApiError(409, "chat_client_id_conflict", "Client message ID was already used")
         return existing, False
@@ -95,9 +106,43 @@ def send_message(
         body=body,
     )
     db.add(message)
+    db.flush()
+    db.add(ChatEvent(room_id=STAFF_ROOM_ID, message_id=message.id, event_type="MESSAGE"))
     db.commit()
     db.refresh(message)
     return message, True
+
+
+def delete_message(db: Session, *, actor_id: UUID, message_id: int) -> bool:
+    # The same lock orders deletion events with sends for resumable SSE.
+    db.execute(text("SELECT pg_advisory_xact_lock(2929, 1)"))
+    actor = db.scalar(select(User).where(User.id == actor_id).with_for_update())
+    if actor is None or not actor.is_active or actor.must_change_password:
+        raise ApiError(401, "unauthenticated", "Authentication required")
+    if actor.role != Role.ADMIN or Permission.CHAT_MESSAGES_DELETE not in effective_permissions(
+        db, actor
+    ):
+        audit(db, "chat_delete_denied", "denied", actor=actor_id)
+        db.commit()
+        raise ApiError(403, "forbidden", "Permission denied")
+    message = db.scalar(
+        select(ChatMessage)
+        .where(ChatMessage.room_id == STAFF_ROOM_ID, ChatMessage.id == message_id)
+        .with_for_update()
+    )
+    if message is None:
+        db.rollback()
+        raise ApiError(404, "chat_message_not_found", "Message not found")
+    if message.deleted_at is not None:
+        db.commit()
+        return False
+    message.body = ""
+    message.deleted_at = utc_now()
+    message.deleted_by = actor_id
+    db.add(ChatEvent(room_id=STAFF_ROOM_ID, message_id=message.id, event_type="DELETE"))
+    audit(db, "chat_message_deleted", "success", actor=actor_id, details={"message_id": message.id})
+    db.commit()
+    return True
 
 
 def read_summary(db: Session, user_id: UUID) -> dict[str, int]:
@@ -117,11 +162,17 @@ def read_summary(db: Session, user_id: UUID) -> dict[str, int]:
                 ChatMessage.room_id == STAFF_ROOM_ID,
                 ChatMessage.id > cursor,
                 ChatMessage.sender_id != user_id,
+                ChatMessage.deleted_at.is_(None),
             )
         )
         or 0
     )
-    return {"latest_id": latest_id(db), "last_read_id": cursor, "unread_count": unread}
+    return {
+        "latest_id": latest_id(db),
+        "latest_event_id": latest_event_id(db),
+        "last_read_id": cursor,
+        "unread_count": unread,
+    }
 
 
 def mark_read(db: Session, user_id: UUID, through_id: int) -> dict[str, int]:

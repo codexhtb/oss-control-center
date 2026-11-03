@@ -34,7 +34,11 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (
         UniqueConstraint("room_id", "sender_id", "client_id", name="uq_chat_messages_client"),
-        CheckConstraint("length(body) BETWEEN 1 AND 2000", name="ck_chat_messages_body"),
+        CheckConstraint(
+            "(deleted_at IS NULL AND deleted_by IS NULL AND length(body) BETWEEN 1 AND 2000) "
+            "OR (deleted_at IS NOT NULL AND deleted_by IS NOT NULL AND body = '')",
+            name="ck_chat_messages_body",
+        ),
         Index("ix_chat_messages_room_id", "room_id", "id"),
         Index("ix_chat_messages_rate", "sender_id", "created_at"),
     )
@@ -49,6 +53,29 @@ class ChatMessage(Base):
     sender_name: Mapped[str] = mapped_column(String(150), nullable=False)
     client_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     body: Mapped[str] = mapped_column(String(2000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id")
+    )
+
+
+class ChatEvent(Base):
+    __tablename__ = "chat_events"
+    __table_args__ = (
+        UniqueConstraint("message_id", "event_type", name="uq_chat_events_message_type"),
+        CheckConstraint("event_type IN ('MESSAGE', 'DELETE')", name="ck_chat_events_type"),
+        Index("ix_chat_events_room_id", "room_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    room_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("chat_rooms.id"), nullable=False
+    )
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_messages.id"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

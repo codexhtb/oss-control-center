@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { chatApi } from './chat-api'
-import { useChatRealtime } from './ChatRealtime'
+import { chatDeletedEvent, useChatRealtime } from './ChatRealtime'
 
 vi.mock('./chat-api', () => ({ chatApi: { summary: vi.fn() } }))
 
@@ -25,7 +25,7 @@ afterEach(() => {
 
 it('keeps one SSE connection as summaries advance and resumes from the initial cursor', async () => {
   let latest = 4
-  vi.mocked(chatApi.summary).mockImplementation(async () => ({ latest_id: latest, last_read_id: 0, unread_count: 1 }))
+  vi.mocked(chatApi.summary).mockImplementation(async () => ({ latest_id: latest, latest_event_id: latest, last_read_id: 0, unread_count: 1 }))
   vi.stubGlobal('EventSource', FakeStream)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const view = render(<QueryClientProvider client={client}><Host /></QueryClientProvider>)
@@ -37,4 +37,20 @@ it('keeps one SSE connection as summaries advance and resumes from the initial c
   expect(streams[0]!.closed).toBe(false)
   view.unmount()
   expect(streams[0]!.closed).toBe(true)
+})
+
+it('forwards a deletion event to the chat page', async () => {
+  vi.mocked(chatApi.summary).mockResolvedValue({ latest_id: 1, latest_event_id: 3, last_read_id: 0, unread_count: 1 })
+  vi.stubGlobal('EventSource', FakeStream)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const received: number[] = []
+  const listener = (event: Event) => received.push((event as CustomEvent<number>).detail)
+  window.addEventListener(chatDeletedEvent, listener)
+  const view = render(<QueryClientProvider client={client}><Host /></QueryClientProvider>)
+  await waitFor(() => expect(streams).toHaveLength(1))
+  expect(streams[0]!.url).toBe('/api/v1/chat/events?after=3')
+  await act(async () => streams[0]!.listeners.delete?.({ data: '{"message_id":1}' } as MessageEvent))
+  expect(received).toEqual([1])
+  view.unmount()
+  window.removeEventListener(chatDeletedEvent, listener)
 })

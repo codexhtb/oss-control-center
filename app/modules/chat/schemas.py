@@ -30,6 +30,7 @@ class ChatHistory(BaseModel):
 
 class ChatSummary(BaseModel):
     latest_id: int
+    latest_event_id: int
     last_read_id: int
     unread_count: int
 

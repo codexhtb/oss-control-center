@@ -18,10 +18,11 @@ from app.modules.chat.schemas import (
     SendChatMessage,
 )
 from app.modules.chat.service import (
-    latest_id,
+    delete_message,
+    events_after,
+    latest_event_id,
     list_messages,
     mark_read,
-    messages_after,
     read_summary,
     send_message,
 )
@@ -68,6 +69,14 @@ def read(payload: MarkChatRead, identity: CsrfIdentityDep, db: SessionDep) -> di
     return mark_read(db, identity.user.id, payload.through_id)
 
 
+@router.delete("/messages/{message_id}", status_code=204)
+def delete(message_id: int, identity: CsrfIdentityDep, db: SessionDep) -> Response:
+    if message_id < 1:
+        raise ApiError(422, "invalid_chat_message_id", "Invalid message ID")
+    delete_message(db, actor_id=identity.user.id, message_id=message_id)
+    return Response(status_code=204)
+
+
 def _poll(engine: Engine, token: str | None, cursor: int) -> list[dict] | None:
     with Session(engine) as db:
         try:
@@ -76,10 +85,23 @@ def _poll(engine: Engine, token: str | None, cursor: int) -> list[dict] | None:
                 return None
         except ApiError:
             return None
-        return [
-            ChatMessageView.model_validate(item).model_dump(mode="json")
-            for item in messages_after(db, cursor)
-        ]
+        result = []
+        for event, message in events_after(db, cursor):
+            if event.event_type == "DELETE":
+                result.append(
+                    {"id": event.id, "type": "delete", "data": {"message_id": message.id}}
+                )
+            elif message.deleted_at is None:
+                result.append(
+                    {
+                        "id": event.id,
+                        "type": "message",
+                        "data": ChatMessageView.model_validate(message).model_dump(mode="json"),
+                    }
+                )
+            else:
+                result.append({"id": event.id, "type": "skip", "data": {}})
+        return result
 
 
 @router.get("/events")
@@ -96,8 +118,8 @@ async def events(
             raise ApiError(422, "invalid_chat_cursor", "Invalid event cursor")
         cursor = int(last_event)
     else:
-        cursor = after if after is not None else latest_id(db)
-    if cursor > latest_id(db):
+        cursor = after if after is not None else latest_event_id(db)
+    if cursor > latest_event_id(db):
         raise ApiError(422, "invalid_chat_cursor", "Event cursor is ahead of the room")
 
     engine = db.get_bind()
@@ -114,8 +136,10 @@ async def events(
                 idle = 0
                 for item in batch:
                     cursor = item["id"]
-                    payload = json.dumps(item, ensure_ascii=False)
-                    yield f"id: {cursor}\nevent: message\ndata: {payload}\n\n"
+                    if item["type"] == "skip":
+                        continue
+                    payload = json.dumps(item["data"], ensure_ascii=False)
+                    yield f"id: {cursor}\nevent: {item['type']}\ndata: {payload}\n\n"
             else:
                 idle += 1
                 if idle >= 20:

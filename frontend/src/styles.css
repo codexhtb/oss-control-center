@@ -824,6 +824,10 @@ body:has(.staff-chat) { min-height: 0; overflow: hidden; }
 .staff-chat__message--grouped:not(.staff-chat__message--own) { padding-left: 36px; }
 .staff-chat__avatar { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: #353849; color: #e3d8f4; font-size: 12px; font-weight: 700; }
 .staff-chat__bubble { min-width: 0; padding: 7px 10px; border: 1px solid #36434d; border-radius: 12px 12px 12px 4px; background: #222d36; box-shadow: 0 2px 9px #00000016; }
+.staff-chat__delete { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 7px; color: #b9a9b4; background: transparent; cursor: pointer; }
+.staff-chat__delete:hover, .staff-chat__delete:focus-visible { color: #ffd6d5; background: #56343d; }
+.staff-chat__delete:disabled { opacity: .4; cursor: default; }
+.staff-chat__moderation-error { color: #f7afa5; font-size: 12px; margin: 5px 0; }
 .staff-chat__message--own .staff-chat__bubble { border-color: #55617d; border-radius: 14px 14px 4px 14px; background: #313b52; }
 .staff-chat__meta { display: flex; align-items: baseline; gap: 12px; margin-bottom: 2px; }
 .staff-chat__meta strong { color: #e9ecf3; font-size: 12px; }

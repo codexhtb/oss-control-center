@@ -1,28 +1,50 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
-import { chatMessageEvent } from '../features/chat/ChatRealtime'
+import { chatDeletedEvent, chatMessageEvent } from '../features/chat/ChatRealtime'
 import { chatApi } from '../features/chat/chat-api'
 import type { User } from '../shared/api/types'
 import { ChatPage } from './ChatPage'
 
 vi.mock('../features/chat/chat-api', () => ({ chatApi: {
-  history: vi.fn(), send: vi.fn(), markRead: vi.fn(), summary: vi.fn(),
+  history: vi.fn(), send: vi.fn(), remove: vi.fn(), markRead: vi.fn(), summary: vi.fn(),
 } }))
 
 const user = { id: 'self', display_name: 'Инженер', login: 'engineer', role: 'engineer', is_active: true,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' } as User
 const incoming = { id: 1, sender_id: 'other', sender_name: 'Оператор', body: 'Привет', created_at: '2026-11-03T10:00:00Z' }
 
-function renderPage() {
+function renderPage(canDelete = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><ChatPage user={user} /></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><ChatPage user={user} canDelete={canDelete} /></QueryClientProvider>)
 }
 
 beforeEach(() => {
   vi.mocked(chatApi.history).mockReset().mockResolvedValue({ items: [incoming], next_before: null })
   vi.mocked(chatApi.send).mockReset().mockImplementation(async (body) => ({ ...incoming, id: 2, sender_id: 'self', sender_name: 'Инженер', body }))
-  vi.mocked(chatApi.markRead).mockReset().mockResolvedValue({ latest_id: 2, last_read_id: 2, unread_count: 0 })
+  vi.mocked(chatApi.markRead).mockReset().mockResolvedValue({ latest_id: 2, latest_event_id: 2, last_read_id: 2, unread_count: 0 })
+  vi.mocked(chatApi.remove).mockReset().mockResolvedValue(undefined)
+})
+
+it('offers moderation only to administrators and removes a message after confirmation', async () => {
+  const regular = renderPage()
+  await screen.findByText('Привет')
+  expect(screen.queryByRole('button', { name: 'Удалить сообщение 1' })).not.toBeInTheDocument()
+  regular.unmount()
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPage(true)
+  await screen.findByText('Привет')
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить сообщение 1' }))
+  await waitFor(() => expect(chatApi.remove).toHaveBeenCalledWith(1))
+  await waitFor(() => expect(screen.queryByText('Привет')).not.toBeInTheDocument())
+  vi.restoreAllMocks()
+})
+
+it('removes messages received through the live deletion event', async () => {
+  renderPage()
+  await screen.findByText('Привет')
+  window.dispatchEvent(new CustomEvent(chatDeletedEvent, { detail: 1 }))
+  await waitFor(() => expect(screen.queryByText('Привет')).not.toBeInTheDocument())
 })
 
 it('loads history, receives realtime messages and marks the visible end as read', async () => {

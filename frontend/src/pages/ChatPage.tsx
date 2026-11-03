@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, LoaderCircle, Send } from 'lucide-react'
+import { ArrowDown, LoaderCircle, Send, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { chatMessageEvent } from '../features/chat/ChatRealtime'
+import { chatDeletedEvent, chatMessageEvent } from '../features/chat/ChatRealtime'
 import { chatApi, type ChatMessage } from '../features/chat/chat-api'
 import { errorText } from '../shared/api/client'
 import type { User } from '../shared/api/types'
@@ -15,7 +15,7 @@ function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMes
 const timeFormat = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' })
 const dayFormat = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'long', year: 'numeric' })
 
-export function ChatPage({ user }: { user: User }) {
+export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: boolean }) {
   const client = useQueryClient()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [olderBefore, setOlderBefore] = useState<number | null>(null)
@@ -29,6 +29,7 @@ export function ChatPage({ user }: { user: User }) {
   const bottomRef = useRef(true)
   const pendingScroll = useRef<{ height: number; top: number } | null>(null)
   const lastRead = useRef(0)
+  const deletedIds = useRef(new Set<number>())
 
   const markRead = useCallback((id: number) => {
     if (id <= lastRead.current || !bottomRef.current) return
@@ -41,7 +42,7 @@ export function ChatPage({ user }: { user: User }) {
   const refresh = useCallback(async () => {
     try {
       const page = await chatApi.history()
-      setMessages((current) => mergeMessages(current, page.items))
+      setMessages((current) => mergeMessages(current, page.items.filter((item) => !deletedIds.current.has(item.id))))
       setOlderBefore((current) => current === null ? page.next_before : current)
       setLoadError(null)
     } catch (error) {
@@ -55,10 +56,19 @@ export function ChatPage({ user }: { user: User }) {
   useEffect(() => {
     const receive = (event: Event) => {
       const item = (event as CustomEvent<ChatMessage>).detail
-      setMessages((current) => mergeMessages(current, [item]))
+      if (!deletedIds.current.has(item.id)) setMessages((current) => mergeMessages(current, [item]))
+    }
+    const receiveDeletion = (event: Event) => {
+      const id = (event as CustomEvent<number>).detail
+      deletedIds.current.add(id)
+      setMessages((current) => current.filter((item) => item.id !== id))
     }
     window.addEventListener(chatMessageEvent, receive)
-    return () => window.removeEventListener(chatMessageEvent, receive)
+    window.addEventListener(chatDeletedEvent, receiveDeletion)
+    return () => {
+      window.removeEventListener(chatMessageEvent, receive)
+      window.removeEventListener(chatDeletedEvent, receiveDeletion)
+    }
   }, [])
   useEffect(() => {
     const onFocus = () => { void refresh() }
@@ -101,7 +111,7 @@ export function ChatPage({ user }: { user: User }) {
     pendingScroll.current = { height: list.scrollHeight, top: list.scrollTop }
     try {
       const page = await chatApi.history(olderBefore)
-      setMessages((current) => mergeMessages(current, page.items))
+      setMessages((current) => mergeMessages(current, page.items.filter((item) => !deletedIds.current.has(item.id))))
       setOlderBefore(page.next_before)
       setLoadError(null)
     } catch (error) {
@@ -116,6 +126,14 @@ export function ChatPage({ user }: { user: User }) {
       bottomRef.current = true
       setNearBottom(true)
       setMessages((current) => mergeMessages(current, [item]))
+      void client.invalidateQueries({ queryKey: ['chat', 'summary'] })
+    },
+  })
+  const remove = useMutation({
+    mutationFn: (id: number) => chatApi.remove(id),
+    onSuccess: (_, id) => {
+      deletedIds.current.add(id)
+      setMessages((current) => current.filter((item) => item.id !== id))
       void client.invalidateQueries({ queryKey: ['chat', 'summary'] })
     },
   })
@@ -143,6 +161,7 @@ export function ChatPage({ user }: { user: User }) {
       {loading && <div className="staff-chat__state"><LoaderCircle className="spin" size={22} /> Загружаем переписку…</div>}
       {!loading && messages.length === 0 && !loadError && <div className="staff-chat__empty"><strong>Переписка начинается здесь</strong><span>Напишите первое сообщение команде.</span></div>}
       {loadError && <div className="staff-chat__state" role="alert">Не удалось загрузить переписку: {loadError} <button type="button" onClick={() => void refresh()}>Повторить</button></div>}
+      {remove.isError && <div className="staff-chat__moderation-error" role="alert">Не удалось удалить сообщение: {errorText(remove.error)}</div>}
       {messages.map((message) => {
         const own = message.sender_id === user.id
         const day = dayFormat.format(new Date(message.created_at))
@@ -160,6 +179,7 @@ export function ChatPage({ user }: { user: User }) {
               {!grouped && <div className="staff-chat__meta"><strong>{own ? 'Вы' : message.sender_name}</strong><time dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time></div>}
               <p>{message.body}{grouped && <time className="staff-chat__inline-time" dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time>}</p>
             </div>
+            {canDelete && <button type="button" className="staff-chat__delete" aria-label={`Удалить сообщение ${message.id}`} title="Удалить сообщение" disabled={remove.isPending} onClick={() => { if (window.confirm('Удалить сообщение из общего чата?')) remove.mutate(message.id) }}><Trash2 size={15} /></button>}
           </article>
         </div>
       })}

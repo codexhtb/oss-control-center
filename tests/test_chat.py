@@ -103,6 +103,53 @@ def read(client: TestClient, through_id: int):
     )
 
 
+def remove(client: TestClient, message_id: int, *, csrf: bool = True):
+    headers = {"X-CSRF-Token": client.cookies["oss_csrf"]} if csrf else {}
+    return client.delete(f"/api/v1/chat/messages/{message_id}", headers=headers)
+
+
+def test_admin_deletes_any_message_and_reconnects(chat_engine: Engine, chat_clients):
+    operator, engineer, admin = chat_clients
+    client_id = str(uuid4())
+    message = send(operator, "Private text to erase", client_id).json()
+    message_id = message["id"]
+    event_cursor = engineer.get("/api/v1/chat/summary").json()["latest_event_id"]
+    assert remove(operator, message_id).status_code == 403
+    assert remove(engineer, message_id).status_code == 403
+    assert remove(admin, message_id, csrf=False).status_code == 403
+    assert remove(admin, message_id).status_code == 204
+    assert remove(admin, message_id).status_code == 204
+    assert admin.get("/api/v1/chat/messages").json()["items"] == []
+    assert engineer.get("/api/v1/chat/summary").json()["unread_count"] == 0
+    assert _poll(chat_engine, engineer.cookies["oss_session"], event_cursor) == [
+        {"id": event_cursor + 1, "type": "delete", "data": {"message_id": message_id}}
+    ]
+    assert send(operator, "Private text to erase", client_id).status_code == 409
+    with Session(chat_engine) as db:
+        stored = db.get(ChatMessage, message_id)
+        assert stored is not None and stored.body == "" and stored.deleted_by is not None
+        assert db.scalar(text("SELECT count(*) FROM chat_events WHERE event_type='DELETE'")) == 1
+        assert (
+            db.scalar(
+                text(
+                    "SELECT count(*) FROM identity_audit_events "
+                    "WHERE details::text LIKE '%Private text to erase%'"
+                )
+            )
+            == 0
+        )
+
+
+def test_admin_delete_respects_saved_grant(chat_engine: Engine, chat_clients):
+    operator, _, admin = chat_clients
+    message_id = send(operator, "Test grant").json()["id"]
+    with Session(chat_engine) as db:
+        db.execute(text("UPDATE app_users SET permissions_customized = true WHERE login = 'admin'"))
+        db.commit()
+    assert remove(admin, message_id).status_code == 403
+    assert operator.get("/api/v1/chat/messages").json()["items"][0]["id"] == message_id
+
+
 def test_chat_send_history_unread_read_and_reconnect(chat_engine: Engine, chat_clients):
     operator, engineer, admin = chat_clients
     assert operator.get("/api/v1/chat/summary").json()["unread_count"] == 0
@@ -125,9 +172,9 @@ def test_chat_send_history_unread_read_and_reconnect(chat_engine: Engine, chat_c
     older = operator.get(f"/api/v1/chat/messages?before={second['id']}").json()
     assert [m["id"] for m in older["items"]] == [item["id"]]
     # A reconnect resumes strictly after the last delivered event.
-    assert [m["id"] for m in _poll(chat_engine, operator.cookies["oss_session"], item["id"])] == [
-        second["id"]
-    ]
+    assert [
+        m["data"]["id"] for m in _poll(chat_engine, operator.cookies["oss_session"], item["id"])
+    ] == [second["id"]]
     with Session(chat_engine) as db:
         assert db.scalar(select(ChatMessage).where(ChatMessage.id == item["id"])) is not None
 
