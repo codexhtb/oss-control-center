@@ -738,3 +738,4 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .ticket-work-panel .ticket-danger-action { color: #ffaaa1; }
 .ticket-work-panel--field .field-dispatch-preview pre { max-height: none; overflow: visible; }
 @media (max-width: 420px) { .ticket-detail-facts, .ticket-work-panel .ticket-meta { grid-template-columns: 1fr; } .ticket-work-toolbar .button { width: 100%; } }
+@media (max-width: 480px) { .ticket-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: visible; border-bottom: 0; } .ticket-tabs__tab { min-width: 0; padding: 11px 5px; border-bottom: 1px solid var(--line); text-align: center; white-space: normal; } }
