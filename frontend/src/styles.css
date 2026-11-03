@@ -56,22 +56,31 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-layout { position: relative; display: flex; flex-direction: column; justify-content: center; min-height: 100vh; overflow: hidden; background: #10161b; }
 .login-backdrop { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 18% 46%, rgba(52, 128, 111, .18), transparent 30%), radial-gradient(circle at 80% 20%, rgba(35, 83, 86, .13), transparent 29%), repeating-linear-gradient(90deg, transparent, transparent 79px, rgba(129, 164, 161, .025) 80px), repeating-linear-gradient(0deg, transparent, transparent 79px, rgba(129, 164, 161, .025) 80px); animation: login-backdrop-in 1s ease-out both; }
 .login-content { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 430px; align-items: center; gap: clamp(60px, 10vw, 190px); width: min(1120px, calc(100% - 80px)); margin: auto; padding: 60px 0 82px; }
-.login-hero { position: relative; display: flex; min-width: 0; min-height: 500px; align-items: center; justify-content: center; isolation: isolate; }
-.login-hero__ambient { position: absolute; z-index: -1; width: min(540px, 100%); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(54, 145, 112, .17), rgba(31, 80, 68, .06) 45%, transparent 72%); }
-.login-hero__mark-stage { width: min(560px, 100%); aspect-ratio: 2; transform: perspective(900px) rotateX(8deg) rotateY(-3deg); }
-.login-hero[data-performance="lite"] .login-hero__mark-stage { transform: none; }
-.login-hero__mark { display: block; width: 100%; height: 100%; overflow: visible; }
-.login-hero__piece { transform-box: fill-box; transform-origin: center; animation: login-piece-in .72s cubic-bezier(.2, .7, .18, 1) both; }
-.login-hero__piece--first { --assemble-x: -22px; animation-delay: .05s; }
-.login-hero__piece--second { --assemble-x: 0px; animation-delay: .17s; }
-.login-hero__piece--third { --assemble-x: 22px; animation-delay: .29s; }
-.login-hero__extrusion, .login-hero__bevel, .login-hero__face, .login-hero__glint { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.login-hero__extrusion { stroke: #0b2c29; stroke-width: 39; }
-.login-hero__bevel { stroke: url(#oss-brand-bevel); stroke-width: 37; }
-.login-hero__face { stroke: url(#oss-brand-face); stroke-width: 26; }
-.login-hero__glint { stroke: #d5ffed; stroke-opacity: .7; stroke-width: 2; animation: login-glint-in .45s .72s ease-out both; }
-.login-hero__floor { opacity: .5; }
-.login-hero__caption { position: absolute; bottom: 14px; left: 50%; width: 100%; text-align: center; transform: translateX(-50%); animation: login-caption-in .6s .2s ease-out both; }
+.login-hero { position: relative; display: flex; min-width: 0; min-height: 500px; align-items: center; justify-content: center; isolation: isolate; perspective: 1100px; }
+.login-hero__aura { position: absolute; z-index: -3; width: min(580px, 95%); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(72, 194, 159, .2) 0, rgba(39, 111, 96, .08) 35%, transparent 69%); filter: blur(8px); animation: login-aura-in 1.1s .05s cubic-bezier(.2, .8, .2, 1) both, login-aura-idle 6s 1.2s ease-in-out infinite alternate; }
+.login-hero__depth { position: absolute; z-index: -2; width: 390px; aspect-ratio: 1; border: 1px solid rgba(125, 224, 195, .09); border-radius: 50%; transform-style: preserve-3d; }
+.login-hero__depth::before, .login-hero__depth::after { content: ''; position: absolute; border: 1px solid rgba(125, 224, 195, .08); border-radius: 50%; }
+.login-hero__depth::before { inset: 42px; }
+.login-hero__depth::after { inset: 91px; }
+.login-hero__depth--back { transform: rotateX(68deg) rotateZ(-14deg) translateZ(-50px); animation: login-depth-in 1.2s .15s both, login-depth-drift 13s 1.4s linear infinite; }
+.login-hero__depth--front { width: 300px; border-color: rgba(125, 224, 195, .06); transform: rotateY(67deg) rotateZ(16deg) translateZ(12px); animation: login-depth-in 1.2s .3s both, login-depth-drift-reverse 16s 1.5s linear infinite; }
+.login-hero__mark-stage { width: min(570px, 100%); transform-style: preserve-3d; animation: login-mark-stage-in 1s .18s cubic-bezier(.18, .78, .24, 1) both; }
+.login-hero__mark { display: block; width: 100%; overflow: visible; filter: drop-shadow(0 22px 28px rgba(0, 0, 0, .32)) drop-shadow(0 0 20px rgba(80, 206, 169, .12)); animation: login-mark-idle 7s 1.6s ease-in-out infinite alternate; }
+.login-hero__module { transform-box: fill-box; transform-origin: center; opacity: 0; animation: login-module-in .9s cubic-bezier(.16, .86, .24, 1) both; }
+.login-hero__module--o { animation-delay: .34s; }
+.login-hero__module--c1 { animation-delay: .52s; }
+.login-hero__module--c2 { animation-delay: .7s; }
+.login-hero__edge, .login-hero__face { fill: none; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: login-stroke-in 1s cubic-bezier(.42, 0, .16, 1) forwards; }
+.login-hero__edge { stroke: url(#oss-mark-edge); stroke-width: 38; transform: translateY(9px); }
+.login-hero__face { stroke: url(#oss-mark-face); stroke-width: 27; }
+.login-hero__module--o .login-hero__edge, .login-hero__module--o .login-hero__face { animation-delay: .34s; }
+.login-hero__module--c1 .login-hero__edge, .login-hero__module--c1 .login-hero__face { animation-delay: .52s; }
+.login-hero__module--c2 .login-hero__edge, .login-hero__module--c2 .login-hero__face { animation-delay: .7s; }
+.login-hero__node { fill: #d2ffef; opacity: 0; filter: drop-shadow(0 0 8px rgba(125, 224, 195, .9)); animation: login-node-in .45s cubic-bezier(.2, .9, .2, 1.25) both; }
+.login-hero__node--one { animation-delay: .9s; }
+.login-hero__node--two { animation-delay: 1.03s; }
+.login-hero__node--three { animation-delay: 1.16s; }
+.login-hero__caption { position: absolute; bottom: 21px; left: 50%; width: 100%; text-align: center; transform: translateX(-50%); animation: login-caption-in .85s 1s cubic-bezier(.2, .75, .2, 1) both; }
 .login-hero__caption p { margin: 0 0 9px; color: #79bca9; font-size: 10px; font-weight: 800; letter-spacing: .26em; text-transform: uppercase; }
 .login-hero__caption h1 { margin: 0; color: #edf8f5; font-size: clamp(25px, 2.6vw, 37px); font-weight: 580; letter-spacing: -.04em; text-wrap: balance; text-shadow: 0 9px 34px rgba(0, 0, 0, .55); }
 .login-card { padding: 35px; border: 1px solid #314039; border-radius: 17px; background: linear-gradient(145deg, rgba(31, 40, 45, .96), rgba(22, 29, 35, .98)); box-shadow: 0 30px 95px rgba(0, 0, 0, .31); }
@@ -79,7 +88,6 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-card h2 { margin: 8px 0 8px; font-size: 28px; letter-spacing: -.045em; }
 .login-card .muted { margin: 0 0 30px; font-size: 13px; }
 .login-card form { display: grid; gap: 18px; }
-.login-card .effects-toggle { margin-top: 18px; }
 .effects-toggle { display: inline-flex; align-items: center; gap: 9px; width: fit-content; color: #aebdc1; font-size: 12px; cursor: pointer; }
 .effects-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .account-effects { display: grid; gap: 11px; width: fit-content; min-width: 250px; margin-top: 18px; padding: 18px 22px; }
@@ -97,14 +105,17 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .login-card .button--primary { width: 100%; justify-content: space-between; height: 47px; margin-top: 7px; padding: 0 16px; }
 
 @keyframes login-backdrop-in { from { opacity: 0; } }
-@keyframes login-piece-in { from { opacity: 0; transform: translate(var(--assemble-x), 12px) scale(.96); } to { opacity: 1; transform: translate(0, 0) scale(1); } }
-@keyframes login-glint-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes login-caption-in { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
-
-.login-hero[data-performance="lite"] .login-hero__piece, .login-hero[data-performance="lite"] .login-hero__glint,
-.login-hero[data-performance="lite"] .login-hero__caption { animation: none; }
-.login-hero[data-performance="lite"] .login-hero__ambient { display: none; }
-.login-layout:has(.login-hero[data-performance="lite"]) .login-backdrop { animation: none; }
+@keyframes login-aura-in { from { opacity: 0; transform: scale(.72); } }
+@keyframes login-aura-idle { to { opacity: .72; transform: scale(1.07); } }
+@keyframes login-depth-in { from { opacity: 0; filter: blur(12px); } to { opacity: 1; filter: blur(0); } }
+@keyframes login-depth-drift { to { transform: rotateX(68deg) rotateZ(346deg) translateZ(-50px); } }
+@keyframes login-depth-drift-reverse { to { transform: rotateY(67deg) rotateZ(-344deg) translateZ(12px); } }
+@keyframes login-mark-stage-in { from { opacity: 0; transform: rotateX(18deg) rotateY(-14deg) scale(.88); filter: blur(10px); } to { opacity: 1; transform: rotateX(0) rotateY(0) scale(1); filter: blur(0); } }
+@keyframes login-mark-idle { from { transform: translate3d(0, -3px, 18px) rotateX(1.5deg); } to { transform: translate3d(0, 5px, 30px) rotateX(-1.5deg); } }
+@keyframes login-module-in { from { opacity: 0; transform: translate3d(-18px, 20px, -80px) rotateY(-30deg) scale(.78); } to { opacity: 1; transform: translate3d(0, 0, 0) rotateY(0) scale(1); } }
+@keyframes login-stroke-in { to { stroke-dashoffset: 0; } }
+@keyframes login-node-in { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+@keyframes login-caption-in { from { opacity: 0; filter: blur(10px); transform: translate(-50%, 13px); } to { opacity: 1; filter: blur(0); transform: translate(-50%, 0); } }
 
 .app-shell { display: flex; min-height: 100vh; background: var(--bg); }
 .sidebar { position: sticky; top: 0; display: flex; flex-direction: column; width: 248px; height: 100vh; flex: none; border-right: 1px solid var(--line-soft); background: #131a20; }
@@ -241,6 +252,8 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
   .login-content { grid-template-columns: 1fr; gap: 20px; width: min(500px, calc(100% - 42px)); padding: 25px 0 35px; }
   .login-hero { min-height: 300px; }
   .login-hero__mark-stage { width: min(440px, 100%); }
+  .login-hero__depth { width: 280px; }
+  .login-hero__depth--front { width: 220px; }
   .login-hero__caption { bottom: 0; }
   .login-hero__caption h1 { font-size: 28px; }
 }
@@ -263,13 +276,17 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
   .login-content { gap: 15px; width: min(100% - 30px, 430px); padding-top: 18px; }
   .login-hero { min-height: 230px; }
   .login-hero__mark-stage { width: 335px; max-width: 100%; }
+  .login-hero__aura { width: 330px; }
+  .login-hero__depth { width: 225px; }
+  .login-hero__depth--front { width: 170px; }
   .login-hero__caption h1 { font-size: 22px; }
   .login-hero__caption p { margin-bottom: 5px; font-size: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-  .login-hero__piece, .login-hero__glint { opacity: 1; transform: none; }
+  .login-hero__module, .login-hero__node { opacity: 1; transform: none; }
+  .login-hero__edge, .login-hero__face { stroke-dashoffset: 0; }
   .login-hero__caption { opacity: 1; transform: translateX(-50%); }
 }
 

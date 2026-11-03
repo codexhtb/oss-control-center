@@ -7,7 +7,6 @@ import { Button } from '../../shared/ui/Button'
 import { Notice } from '../../shared/ui/Notice'
 import { authApi } from './auth-api'
 import { LoginBrandHero } from './LoginBrandHero'
-import { EffectsToggle } from '../../shared/ui/EffectsToggle'
 
 export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [login, setLogin] = useState('')
@@ -78,7 +77,6 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) 
               {!mutation.isPending && <ArrowRight size={17} aria-hidden="true" />}
             </Button>
           </form>
-          <EffectsToggle />
         </div>
       </div>
     </main>
