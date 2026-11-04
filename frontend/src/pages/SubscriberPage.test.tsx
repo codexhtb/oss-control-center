@@ -87,6 +87,18 @@ it('shows a compact overview and preserves source time, contacts and linked acti
   expect(ticketApi.subscriberTickets).toHaveBeenCalledWith(card.lookup_id, 1, expect.any(AbortSignal))
 })
 
+it('keeps source details accessible without repeated confirmed labels', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    subscriber: { ...card.subscriber, field_meta: { ...card.subscriber.field_meta,
+      full_name: { source: 'NETUP', observed_at: timestamp, quality: 'KNOWN' } } },
+  })
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  expect(screen.queryByText('Подтверждено источником')).not.toBeInTheDocument()
+  expect(screen.getByRole('img', { name: /^NETUP ·/ })).toBeInTheDocument()
+})
+
 it('hides finance from engineer and searches without account number in browser URL', async () => {
   vi.mocked(ticketApi.lookup).mockResolvedValue(card)
   renderPage('engineer', '/subscribers')

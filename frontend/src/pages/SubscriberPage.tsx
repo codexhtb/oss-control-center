@@ -13,13 +13,14 @@ import { errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 
-const qualityLabel: Record<DataQuality, string> = {
-  KNOWN: 'Подтверждено источником', UNKNOWN: 'Неизвестно', STALE: 'Устарело',
+const qualityLabel: Record<Exclude<DataQuality, 'KNOWN'>, string> = {
+  UNKNOWN: 'Неизвестно', STALE: 'Устарело',
   CONFLICT: 'Противоречие', UNAVAILABLE: 'Недоступно',
 }
 
 function Origin({ meta }: { meta?: FieldOrigin }) {
   if (!meta) return <span className="origin-chip origin-chip--unknown">Неизвестно</span>
+  if (meta.quality === 'KNOWN') return <span className="origin-dot origin-dot--known" role="img" aria-label={`${meta.source} · ${formatDate(meta.observed_at)}`} title={`${meta.source} · ${formatDate(meta.observed_at)}`} />
   if (meta.quality === 'STALE') return <span className="origin-dot origin-dot--stale" role="img" aria-label={`Устарело · ${meta.source} · ${formatDate(meta.observed_at)}`} title={`Устарело · ${meta.source} · ${formatDate(meta.observed_at)}`} />
   return <span className={`origin-chip origin-chip--${meta.quality.toLowerCase()}`} title={`${meta.source} · ${formatDate(meta.observed_at)}`}>{qualityLabel[meta.quality]}</span>
 }
