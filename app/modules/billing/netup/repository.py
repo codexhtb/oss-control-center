@@ -160,15 +160,16 @@ class NetupRepository:
             "psl.is_blocked AS billing_blocked,t.name AS tariff_name "
             "FROM service_links sl "
             "JOIN services_data sd ON sd.id=sl.service_id AND sd.is_deleted=0 "
-            "JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
+            "LEFT JOIN periodic_service_links psl ON psl.id=sl.id AND psl.is_deleted=0 "
             "LEFT JOIN account_tariff_link atl ON atl.id=sl.tariff_link_id "
             "AND atl.account_id=sl.account_id AND atl.tariff_id=sd.tariff_id "
             "AND atl.is_deleted=0 "
             "LEFT JOIN tariffs t ON t.id=atl.tariff_id AND t.is_deleted=0 "
             f"WHERE sl.user_id=%s AND sl.account_id IN ({self._placeholders(account_ids)}) "
-            "AND sl.is_deleted=0 AND sd.service_type IN (2,3) "
-            "AND psl.is_planned=0 AND psl.need_del=0 "
-            "AND psl.start_date<=%s AND psl.expire_date>%s "
+            "AND sl.is_deleted=0 "
+            "AND (sd.service_type NOT IN (2,3) OR "
+            "(psl.is_planned=0 AND psl.need_del=0 "
+            "AND psl.start_date<=%s AND psl.expire_date>%s)) "
             "ORDER BY sl.id LIMIT 51",
             (user_id, *account_ids, as_of, as_of),
             deadline,

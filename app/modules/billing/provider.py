@@ -29,6 +29,7 @@ class Service(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     account_id: str | None = Field(default=None, max_length=100)
     tariff_name: str | None = Field(default=None, max_length=200)
+    source_type_code: int | None = None
     billing_active: bool | None = None
     billing_blocked: bool | None = None
     field_meta: dict[str, FieldOrigin] = Field(default_factory=dict)

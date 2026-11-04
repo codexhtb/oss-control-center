@@ -230,7 +230,8 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
             name=bounded(item.name, 200),
             account_id=str(item.account_id),
             tariff_name=bounded(item.tariff_name, 200),
-            billing_active=True,
+            source_type_code=item.service_type,
+            billing_active=True if item.service_type in (2, 3) else None,
             billing_blocked=bool(item.billing_blocked)
             if item.billing_blocked is not None
             else None,
@@ -239,7 +240,10 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
                 "name": field(item.name, when),
                 "account_id": origin(when, DataQuality.KNOWN),
                 "tariff_name": field(item.tariff_name, when),
-                "billing_active": origin(when, DataQuality.KNOWN),
+                "source_type_code": origin(when, DataQuality.UNKNOWN),
+                "billing_active": origin(
+                    when, DataQuality.KNOWN if item.service_type in (2, 3) else DataQuality.UNKNOWN
+                ),
                 "billing_blocked": origin(
                     when,
                     DataQuality.KNOWN if item.billing_blocked is not None else DataQuality.UNKNOWN,

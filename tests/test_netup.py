@@ -455,6 +455,14 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
                         "tariff_name": None,
                         "billing_blocked": 0,
                     },
+                    {
+                        "id": 303,
+                        "account_id": 202,
+                        "service_name": "Synthetic unknown subtype",
+                        "service_type": 99,
+                        "tariff_name": None,
+                        "billing_blocked": None,
+                    },
                 ]
             elif sql.startswith("SELECT id,ip_group_id"):
                 self.rows = [{"id": 301, "ip_group_id": 9}]
@@ -500,11 +508,15 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
     connection = FakeConnection(cursor)
     raw = NetupRepository(lambda: connection).lookup_by_account("202")
     assert raw is not None
-    assert len(raw.accounts) == 2 and len(raw.services) == 2
+    assert len(raw.accounts) == 2 and len(raw.services) == 3
+    assert raw.services[2].service_type == 99 and not raw.services[2].groups
     assert len(raw.services[0].groups) == 1
     assert len(raw.services[0].groups[0].rows) == 2
     assert raw.building == "20"
     assert raw.services[0].groups[0].rows[0].ranges[0].range_id == 5
+    service_query = next(sql for sql, _ in cursor.calls if sql.startswith("SELECT sl.id"))
+    assert "sd.service_type IN (2,3)" not in service_query
+    assert "LEFT JOIN periodic_service_links" in service_query
     assert connection.rolled_back and connection.closed
     assert len(cursor.calls) == 12  # 3 transaction commands and 9 bounded data queries
     assert all("%s" in sql for sql, _ in cursor.calls if sql.startswith("SELECT"))
@@ -519,6 +531,25 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
     monkeypatch.setattr(netup_repository, "MAX_EXPANDED_RANGES", 0)
     with pytest.raises(BillingIncomplete):
         NetupRepository(lambda: FakeConnection(CompleteCursor([]))).lookup_by_account("202")
+
+
+def test_unknown_service_type_keeps_source_link_without_assuming_active_state() -> None:
+    raw = synthetic_subscriber()
+    unknown_type = NetupService(
+        link_id=999,
+        account_id=raw.requested_account_id,
+        name="Synthetic unknown subtype",
+        service_type=99,
+        groups=(),
+    )
+    normalized = normalize_netup(
+        NetupSubscriber(**{**raw.__dict__, "services": (*raw.services, unknown_type)})
+    )
+    service = next(item for item in normalized.services if item.service_id == "999")
+    assert service.source_type_code == 99
+    assert service.billing_active is None
+    assert service.billing_blocked is None
+    assert service.field_meta["billing_active"].quality == DataQuality.UNKNOWN
 
 
 def test_provider_hides_db_failure_and_secrets(caplog: pytest.LogCaptureFixture) -> None:
