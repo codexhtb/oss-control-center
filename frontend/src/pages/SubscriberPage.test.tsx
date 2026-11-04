@@ -73,16 +73,16 @@ beforeEach(() => {
   })
 })
 
-it('renders source quality, multiple contacts, tariff, IP rows, finance and linked action', async () => {
+it('shows a compact overview and preserves source time, contacts and linked action', async () => {
   renderPage('operator')
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
-  expect(screen.getByText(/Тариф: Синтетический тариф/)).toBeInTheDocument()
+  expect(screen.getByText('Синтетический тариф')).toBeInTheDocument()
   expect(screen.getByText('synthetic-phone-a')).toBeInTheDocument()
   expect(screen.getByText('synthetic-phone-b')).toBeInTheDocument()
-  expect(screen.getAllByText('192.0.2.10/32').length).toBeGreaterThan(0)
+  expect(screen.getByText('192.0.2.10/32')).toBeInTheDocument()
   expect(screen.getByText('г. Тест, ул. Примерная, д. 20')).toBeInTheDocument()
-  expect(screen.getByText('10.5')).toBeInTheDocument()
-  expect(screen.getByText('Номер договора UNKNOWN')).toBeInTheDocument()
+  expect(screen.getAllByText('Не удалось определить')).toHaveLength(4)
+  expect(screen.queryByText('10.5')).not.toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Создать заявку/ })).toHaveAttribute('href', `/tickets/new?lookup=${card.lookup_id}`)
   expect(ticketApi.subscriberTickets).toHaveBeenCalledWith(card.lookup_id, 1, expect.any(AbortSignal))
 })
@@ -94,7 +94,7 @@ it('hides finance from engineer and searches without account number in browser U
   fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
   await waitFor(() => expect(ticketApi.lookup).toHaveBeenCalledWith('synthetic-account', expect.anything()))
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
-  expect(screen.queryByText('Финансовые сведения')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Платежи' })).not.toBeInTheDocument()
   expect(screen.queryByText('10.5')).not.toBeInTheDocument()
 })
 
@@ -106,7 +106,30 @@ it('runs monitoring only for engineer and shows unavailable data without a made-
   })
   renderPage('engineer')
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Подключения' }))
   fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
   await waitFor(() => expect(ticketApi.checkSubscriber).toHaveBeenCalledWith(card.lookup_id, card.connections[0]!.connection_snapshot_id))
   expect(await screen.findByText('Нет подтверждённого сопоставления с мониторингом.')).toBeInTheDocument()
+})
+
+it('keeps multiple services and detailed IP rows accessible without exposing unverified money', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    services: [...card.services, { ...card.services[0]!, service_id: 'extra-service', name: 'Внешний IP' }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText('Всего услуг: 2')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
+  expect(screen.getByText('Внешний IP')).toBeInTheDocument()
+  expect(screen.getAllByText(/Тариф: Синтетический тариф/)).toHaveLength(2)
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  expect(screen.getByText(/суммы, валюта и итоги пока недоступны/)).toBeInTheDocument()
+  expect(screen.queryByText('10.5')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Подключения' }))
+  expect(screen.getByText('IP-группы и исходные записи')).toBeInTheDocument()
+  fireEvent.click(screen.getByText('IP-группы и исходные записи'))
+  expect(screen.getAllByText('192.0.2.10/32').length).toBeGreaterThan(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Обращения' }))
+  expect(screen.getByText('Связанных обращений пока нет')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Создать обращение' })).toHaveAttribute('href', `/tickets/new?lookup=${card.lookup_id}`)
 })

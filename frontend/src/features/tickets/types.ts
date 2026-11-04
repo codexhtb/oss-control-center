@@ -104,6 +104,7 @@ export interface SubscriberService {
   name: string | null
   account_id: string | null
   tariff_name: string | null
+  source_type_code?: number | null
   billing_active: boolean | null
   billing_blocked: boolean | null
   field_meta: Record<string, FieldOrigin>
