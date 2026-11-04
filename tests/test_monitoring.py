@@ -88,6 +88,19 @@ def test_exact_device_and_port_mapping_never_uses_ifindex() -> None:
     assert all(item.observed_at is not None and item.retrieved_at for item in report.observations)
 
 
+@pytest.mark.parametrize("access_type", ["ETHERNET", "GPON", "EPON", "UNKNOWN"])
+def test_monitoring_does_not_depend_on_connection_technology(access_type: str) -> None:
+    engine, _ = mapped_engine(datetime.now(UTC))
+    selected = connection([{"switch_id": "7", "port_id": 8}])
+    selected.access_type = access_type
+    report = engine.check(selected)
+    assert report.device_match == DataQuality.KNOWN
+    assert report.interface_match == DataQuality.KNOWN
+    assert {item.measured_object for item in report.observations} == {
+        "device:42", "interface:99:ifOperStatus", "interface:99:ifAdminStatus"
+    }
+
+
 def test_port_without_explicit_mapping_stays_unknown_even_if_ifindex_matches() -> None:
     engine, transport = mapped_engine(datetime.now(UTC), port_id=9)
     report = engine.check(connection([{"switch_id": "7", "port_id": 8}]))

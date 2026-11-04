@@ -311,7 +311,7 @@ it('shows PON diagnostics in one section and keeps equipment checks available on
       actual_address: null, fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
     connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
     selected_connection: { id: '00000000-0000-4000-8000-000000000041',
-      access_type: 'UNKNOWN', device: 'synthetic-olt', port: '7', vlan: '101',
+      access_type: 'EPON', device: 'synthetic-olt', port: '7', vlan: '101',
       onu_id: null, address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
   })
   vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
@@ -344,9 +344,96 @@ it('shows PON diagnostics in one section and keeps equipment checks available on
   expect(screen.getByRole('group', { name: 'ONU Rx' })).toHaveTextContent('-21 dBm')
   expect(screen.queryByText('Проверка OLT в мониторинге')).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Проверить OLT' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
+  expect(await screen.findByText('device:1')).toBeInTheDocument()
+})
+
+it.each([
+  { technology: 'GPON' as const, availability: 'AVAILABLE' as const, state: 'ONLINE' as const },
+  { technology: 'GPON' as const, availability: 'UNAVAILABLE' as const, state: null },
+  { technology: 'EPON' as const, availability: 'AVAILABLE' as const, state: 'OFFLINE' as const },
+  { technology: 'UNKNOWN' as const, availability: 'UNAVAILABLE' as const, state: null },
+])('keeps LibreNMS/Icinga available for $technology with ONU $availability $state', async ({ technology, availability, state }) => {
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'IN_PROGRESS',
+    subscriber_snapshot_id: '00000000-0000-4000-8000-000000000040',
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041',
+      access_type: technology, device: 'synthetic-olt', port: '7', vlan: '101',
+      onu_id: null, address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
+  })
+  vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
+    source: 'BDCOM', retrieved_at: base.created_at, availability,
+    association: state ? 'MATCHED_BY_RULE' : 'UNCONFIRMED',
+    limitations: state ? [] : ['onu_source_not_configured'], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
+    candidates: state ? [{ olt: 'synthetic-olt', interface: `${technology}0/1:17`, pon_type: technology,
+      mac: null, serial: null, state, reason: null, onu_rx_dbm: null, olt_rx_dbm: null,
+      onu_tx_dbm: null, inventory_polled_at: null, optical_measured_at: null }] : [],
+  })
+  vi.mocked(ticketApi.checkTicket).mockResolvedValue({
+    check_id: 'check-id', expires_at: base.created_at, report: {
+      connection_snapshot_id: '00000000-0000-4000-8000-000000000041', checked_at: base.created_at,
+      device_match: 'KNOWN', interface_match: 'UNKNOWN', limitations: ['interface_mapping_unconfirmed'],
+      observations: [
+        { source: 'LIBRENMS', measured_object: 'device:1', result: 'DOWN', quality: 'KNOWN', observed_at: base.created_at, retrieved_at: base.created_at },
+        { source: 'ICINGA', measured_object: 'host:1', result: 'WARNING', quality: 'KNOWN', observed_at: base.created_at, retrieved_at: base.created_at },
+      ],
+    },
+  })
+  renderDetail('engineer')
+  fireEvent.click(await screen.findByRole('tab', { name: 'Диагностика' }))
+  expect(screen.getByRole('heading', { name: 'Диагностика подключения' })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
+  if (technology === 'UNKNOWN') expect(ticketApi.ticketOnu).not.toHaveBeenCalled()
+  else if (availability === 'UNAVAILABLE') expect(await screen.findByText('Источник BDCOM ONU не подключён или недоступен.')).toBeInTheDocument()
+  else expect(await screen.findByText(new RegExp(`${technology}0/1:17`))).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
+  expect(await screen.findByText('device:1')).toBeInTheDocument()
+  expect(screen.getByText('host:1')).toBeInTheDocument()
+})
+
+it('keeps monitoring available when the BDCOM request fails and shows source failures', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS',
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041', access_type: 'GPON',
+      device: 'synthetic-olt', port: '7', vlan: '101', onu_id: null, address: null,
+      service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
+  })
+  vi.mocked(ticketApi.ticketOnu).mockRejectedValue(new Error('BDCOM unavailable'))
+  vi.mocked(ticketApi.checkTicket).mockResolvedValue({ check_id: 'check-id', expires_at: base.created_at,
+    report: { connection_snapshot_id: '00000000-0000-4000-8000-000000000041', checked_at: base.created_at,
+      device_match: 'UNKNOWN', interface_match: 'UNKNOWN',
+      observations: [{ source: 'LIBRENMS', measured_object: 'mapped_device', result: 'UNAVAILABLE',
+        quality: 'UNAVAILABLE', observed_at: null, retrieved_at: base.created_at }],
+      limitations: ['librenms_unavailable', 'icinga_unavailable'] },
+  })
+  renderDetail('engineer')
+  fireEvent.click(await screen.findByRole('tab', { name: 'Диагностика' }))
+  expect(await screen.findByText('Не удалось связаться с сервером. Проверьте подключение.')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  expect(await screen.findByText('LibreNMS не ответил на запрос.')).toBeInTheDocument()
+  expect(screen.getByText('Icinga2 не ответила на запрос.')).toBeInTheDocument()
+  expect(screen.getAllByText('Источник недоступен')).toHaveLength(2)
+})
+
+it('does not offer monitoring without a connection snapshot', async () => {
+  renderDetail('engineer')
+  fireEvent.click(await screen.findByRole('tab', { name: 'Диагностика' }))
   expect(screen.queryByRole('button', { name: 'Проверить подключение' })).not.toBeInTheDocument()
-  expect(screen.queryByText('device:1')).not.toBeInTheDocument()
-  expect(ticketApi.checkTicket).not.toHaveBeenCalled()
+})
+
+it('does not offer monitoring without diagnostics.run', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base,
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041', access_type: 'ETHERNET',
+      device: 'synthetic-switch', port: '1', vlan: '101', onu_id: null, address: null,
+      service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
+  })
+  renderDetail('operator')
+  fireEvent.click(await screen.findByRole('tab', { name: 'Диагностика' }))
+  expect(screen.queryByRole('button', { name: 'Проверить подключение' })).not.toBeInTheDocument()
 })
 
 it('keeps equipment monitoring primary for a confirmed Ethernet connection', async () => {
