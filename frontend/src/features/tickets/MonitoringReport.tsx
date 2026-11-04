@@ -24,6 +24,7 @@ const limitations: Record<string, string> = {
   librenms_not_configured: 'LibreNMS не настроен.',
   icinga_unavailable: 'Icinga2 не ответила на запрос.',
   icinga_not_configured: 'Icinga2 не настроена.',
+  icinga_mapping_missing: 'Для устройства нет утверждённого сопоставления с Icinga2.',
   monitoring_mapping_missing: 'Нет подтверждённого сопоставления с мониторингом.',
   optical_measurement_not_verified: 'Оптические параметры для этого подключения не подтверждены.',
 }

@@ -26,7 +26,7 @@ function OpticalValue({ label, value }: { label: string; value: string | null })
   return <div className="onu-optic" role="group" aria-label={label}><span>{label}</span><div>{value === null ? <span className="onu-optic__missing">Нет измерения</span> : <><strong>{value}</strong><span className="onu-optic__unit"> dBm</span></>}</div></div>
 }
 
-function Candidate({ item, vlan, retrievedAt, onCopy }: { item: OnuResult['candidates'][number]; vlan: string | number | null | undefined; retrievedAt: string; onCopy?: (label: string, value: string) => void }) {
+function Candidate({ item, vlan, retrievedAt, onCopy, showPollTime }: { item: OnuResult['candidates'][number]; vlan: string | number | null | undefined; retrievedAt: string; onCopy?: (label: string, value: string) => void; showPollTime?: boolean }) {
   const disconnected = item.state === 'OFFLINE' || item.state === 'DEREGISTERED'
   const copy = (label: string, value: string | number | null | undefined) => value != null && String(value).trim() && !['UNKNOWN', 'UNAVAILABLE', 'CONFLICT'].includes(String(value).trim().toUpperCase()) && onCopy
     ? <button type="button" className="onu-copy" aria-label={`Скопировать ${label}`} title={`Скопировать ${label}`} onClick={() => onCopy(label, String(value))}><Copy size={13} aria-hidden="true" /></button> : null
@@ -44,11 +44,11 @@ function Candidate({ item, vlan, retrievedAt, onCopy }: { item: OnuResult['candi
       <OpticalValue label="ONU Tx" value={item.onu_tx_dbm} />
     </div>
     {disconnected && item.disconnection_at && <p className="onu-disconnect-time">{item.disconnection_time_basis === 'EPON_DEREGISTRATION' ? 'Время отключения' : 'Отключение обнаружено'}: <strong>{sourceTime(item.disconnection_at)}</strong></p>}
-    <div className="onu-source-times"><SourceTime label="Оптика измерена" value={item.optical_measured_at} retrievedAt={retrievedAt} /></div>
+    <div className="onu-source-times">{showPollTime && <SourceTime label="ONU опрошена" value={item.inventory_polled_at} retrievedAt={retrievedAt} />}<SourceTime label="Оптика измерена" value={item.optical_measured_at} retrievedAt={retrievedAt} /></div>
   </div>
 }
 
-export function OnuCard({ result, vlan, onRefresh, refreshing = false }: { result: OnuResult; vlan?: string | null; onRefresh?: () => Promise<OnuResult>; refreshing?: boolean }) {
+export function OnuCard({ result, vlan, onRefresh, refreshing = false, showPollTime = false }: { result: OnuResult; vlan?: string | null; onRefresh?: () => Promise<OnuResult>; refreshing?: boolean; showPollTime?: boolean }) {
   const [feedback, setFeedback] = useState('')
   const [refreshBusy, setRefreshBusy] = useState(false)
   const refreshLock = useRef(false)
@@ -76,9 +76,10 @@ export function OnuCard({ result, vlan, onRefresh, refreshing = false }: { resul
   }
   return <div className={`onu-candidates${confirmed ? ' onu-candidates--matched' : ''}`}>
     {onRefresh && <div className="onu-quick-actions"><Button type="button" variant="quiet" icon={<RefreshCw size={14} />} disabled={refreshing || refreshBusy} onClick={() => void refresh()}>{refreshing || refreshBusy ? 'Обновляем…' : 'Обновить данные'}</Button>{confirmed && result.match && <Button type="button" variant="quiet" icon={<Copy size={14} />} onClick={() => void copy('Сводка', diagnosticSummary(confirmed, result.match!.vlan))}>Скопировать сводку</Button>}<span role="status" aria-live="polite">{feedback}</span></div>}
+    {showPollTime && confirmed && <p className="muted">Сопоставление ONU подтверждено по устройству, PON-порту и VLAN.</p>}
     {result.availability === 'UNAVAILABLE' ? <Notice tone="error">Источник BDCOM ONU не подключён или недоступен.</Notice> : !result.candidates.length ? <p className="muted">ONU не сопоставлена с абонентом. {result.limitations.includes('olt_mapping_unconfirmed') ? 'Соответствие OLT не утверждено.' : result.limitations.includes('multiple_service_links_same_pon_vlan') ? 'Один OLT, PON-порт и VLAN указаны у нескольких сервисных связок.' : result.limitations.includes('onu_composite_key_not_found') ? 'Нет действующей ONU с таким OLT, PON-портом и VLAN.' : result.availability === 'CONFLICT' ? 'В NetUP есть противоречивые привязки.' : 'Подтверждённых данных нет.'}</p> : <>
     {result.association !== 'MATCHED_BY_RULE' && <p className="muted">Кандидаты для проверки инженером. Привязка к абоненту не подтверждена.</p>}
-    {result.candidates.map((item) => <Candidate key={`${item.pon_type}-${item.interface}-${item.serial || item.mac}`} item={item} vlan={result.association === 'MATCHED_BY_RULE' ? result.match?.vlan ?? vlan : vlan} retrievedAt={result.retrieved_at} onCopy={confirmed === item ? (label, value) => void copy(label, value) : undefined} />)}
+    {result.candidates.map((item) => <Candidate key={`${item.pon_type}-${item.interface}-${item.serial || item.mac}`} item={item} vlan={result.association === 'MATCHED_BY_RULE' ? result.match?.vlan ?? vlan : vlan} retrievedAt={result.retrieved_at} onCopy={confirmed === item ? (label, value) => void copy(label, value) : undefined} showPollTime={showPollTime} />)}
     {result.limitations.includes('onu_candidates_truncated') && <p className="muted">Показаны первые 20 кандидатов.</p>}
     </>}
   </div>

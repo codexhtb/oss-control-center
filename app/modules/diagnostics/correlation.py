@@ -229,6 +229,10 @@ class CorrelationEngine:
                 )
         elif mapping and mapping.icinga_host:
             limitations.append("icinga_not_configured")
+        elif mapping:
+            limitations.append("icinga_mapping_missing")
+            if self.icinga is None:
+                limitations.append("icinga_not_configured")
         if not mapping or (mapping.librenms_device_id is None and mapping.icinga_host is None):
             limitations.append("monitoring_mapping_missing")
         if (

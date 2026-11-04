@@ -338,7 +338,8 @@ it('shows PON diagnostics in one section and keeps equipment checks available on
   expect(screen.getAllByRole('heading', { name: 'Диагностика подключения' })).toHaveLength(1)
   expect(screen.queryByRole('heading', { name: 'Абонент и подключение' })).not.toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Комментарии' })).not.toBeInTheDocument()
-  expect(screen.queryByRole('heading', { name: 'BDCOM ONU' })).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'BDCOM ONU' })).toBeVisible()
+  expect(screen.getByText('ONU опрошена')).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'Мониторинг подключения' })).not.toBeInTheDocument()
   expect(screen.queryByText('power-off')).not.toBeInTheDocument()
   expect(screen.getByRole('group', { name: 'ONU Rx' })).toHaveTextContent('-21 dBm')
@@ -385,13 +386,54 @@ it.each([
   fireEvent.click(await screen.findByRole('tab', { name: 'Диагностика' }))
   expect(screen.getByRole('heading', { name: 'Диагностика подключения' })).toBeVisible()
   expect(screen.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
-  if (technology === 'UNKNOWN') expect(ticketApi.ticketOnu).not.toHaveBeenCalled()
-  else if (availability === 'UNAVAILABLE') expect(await screen.findByText('Источник BDCOM ONU не подключён или недоступен.')).toBeInTheDocument()
+  await waitFor(() => expect(ticketApi.ticketOnu).toHaveBeenCalledWith(ticketId, expect.anything()))
+  if (availability === 'UNAVAILABLE') expect(await screen.findByText('Источник BDCOM ONU не подключён или недоступен.')).toBeInTheDocument()
   else expect(await screen.findByText(new RegExp(`${technology}0/1:17`))).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
   await waitFor(() => expect(ticketApi.checkTicket).toHaveBeenCalledWith(ticketId, 3))
   expect(await screen.findByText('device:1')).toBeInTheDocument()
   expect(screen.getByText('host:1')).toBeInTheDocument()
+})
+
+it('shows a confirmed GPON ONU for an UNKNOWN ticket connection alongside monitoring reasons', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', status: 'IN_PROGRESS',
+    connection_snapshot_id: '00000000-0000-4000-8000-000000000041',
+    selected_connection: { id: '00000000-0000-4000-8000-000000000041',
+      access_type: 'UNKNOWN', device: 'synthetic-olt', port: '21', vlan: '350',
+      onu_id: null, address: null, service_id: null, ip_group: null, ip_groups: [], field_meta: {} },
+  })
+  vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
+    source: 'BDCOM', retrieved_at: base.created_at, availability: 'AVAILABLE',
+    association: 'MATCHED_BY_RULE', limitations: [], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
+    match: { netup_port: 21, pon_port: 8, vlan: 350, olt_mapping_basis: 'manual_verified',
+      billing_observed_at: null, billing_source: 'NETUP', onu_source: 'LIBRENMS_BDCOM' },
+    candidates: [{ olt: 'synthetic-olt', interface: 'GPON0/8:26', pon_type: 'GPON',
+      mac: null, serial: null, state: 'ONLINE', reason: null,
+      onu_rx_dbm: '-21', olt_rx_dbm: '-24', onu_tx_dbm: '-3',
+      inventory_polled_at: '2026-01-01 00:00:00', optical_measured_at: '2026-01-01 00:00:00' }],
+  })
+  vi.mocked(ticketApi.checkTicket).mockResolvedValue({
+    check_id: 'check-id', expires_at: base.created_at, report: {
+      connection_snapshot_id: '00000000-0000-4000-8000-000000000041', checked_at: base.created_at,
+      device_match: 'KNOWN', interface_match: 'UNKNOWN',
+      limitations: ['interface_mapping_unconfirmed', 'icinga_mapping_missing', 'icinga_not_configured'],
+      observations: [{ source: 'LIBRENMS', measured_object: 'device:20', result: 'UP',
+        quality: 'KNOWN', observed_at: base.created_at, retrieved_at: base.created_at }],
+    },
+  })
+  renderDetail('engineer')
+  fireEvent.click(await screen.findByRole('tab', { name: 'Диагностика' }))
+  expect(await screen.findByText('GPON0/8:26')).toBeInTheDocument()
+  expect(screen.getByText('Сопоставление ONU подтверждено по устройству, PON-порту и VLAN.')).toBeInTheDocument()
+  expect(screen.getByText('Online')).toBeInTheDocument()
+  expect(screen.getByRole('group', { name: 'ONU Rx' })).toHaveTextContent('-21 dBm')
+  expect(screen.getByText('ONU опрошена')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Проверить подключение' })).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить подключение' }))
+  expect(await screen.findByText('device:20')).toBeInTheDocument()
+  expect(screen.getByText('Для устройства нет утверждённого сопоставления с Icinga2.')).toBeInTheDocument()
+  expect(screen.getByText('Icinga2 не настроена.')).toBeInTheDocument()
 })
 
 it('keeps monitoring available when the BDCOM request fails and shows source failures', async () => {

@@ -110,6 +110,15 @@ def test_port_without_explicit_mapping_stays_unknown_even_if_ifindex_matches() -
     assert transport.paths == ["/api/v0/devices/42"]
 
 
+def test_missing_icinga_mapping_and_source_are_explicit() -> None:
+    engine, _ = mapped_engine(datetime.now(UTC), port_id=9)
+    report = engine.check(connection([{"switch_id": "7", "port_id": 8}]))
+    assert report.interface_match == DataQuality.UNKNOWN
+    assert "icinga_mapping_missing" in report.limitations
+    assert "icinga_not_configured" in report.limitations
+    assert all(item.source != "ICINGA" for item in report.observations)
+
+
 def test_conflicting_switches_do_not_query_monitoring() -> None:
     engine, transport = mapped_engine(datetime.now(UTC))
     report = engine.check(
