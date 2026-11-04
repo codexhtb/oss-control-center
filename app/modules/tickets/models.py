@@ -155,7 +155,9 @@ class Ticket(Base):
             "(deleted_at IS NOT NULL AND deleted_by IS NOT NULL)",
             name="ck_tickets_delete_fields",
         ),
-        CheckConstraint("length(description) > 0", name="ck_tickets_description"),
+        CheckConstraint(
+            "ticket_type = 'MANUAL' OR length(description) > 0", name="ck_tickets_description"
+        ),
         CheckConstraint(
             "subject IS NULL OR (length(btrim(subject)) > 0 AND subject !~ '[[:cntrl:]]')",
             name="ck_tickets_subject",
@@ -176,6 +178,12 @@ class Ticket(Base):
             "city IS NULL OR (length(btrim(city)) > 0 AND city = btrim(city) "
             "AND city !~ '[[:cntrl:]]')",
             name="ck_tickets_city",
+        ),
+        CheckConstraint(
+            "caller_full_name IS NULL OR (length(btrim(caller_full_name)) > 0 "
+            "AND caller_full_name = btrim(caller_full_name) "
+            "AND caller_full_name !~ '[[:cntrl:]]')",
+            name="ck_tickets_caller_full_name",
         ),
         CheckConstraint(
             "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
@@ -240,6 +248,7 @@ class Ticket(Base):
     category_name: Mapped[str | None] = mapped_column(String(160))
     caller_phone: Mapped[str | None] = mapped_column(String(50))
     city: Mapped[str | None] = mapped_column(String(160))
+    caller_full_name: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     created_by: Mapped[UUID] = mapped_column(

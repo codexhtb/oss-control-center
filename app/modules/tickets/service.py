@@ -134,6 +134,12 @@ def edit_ticket(
         raise ApiError(403, "forbidden", "Permission denied")
     _version(ticket, version)
     _open(ticket)
+    if (
+        "description" in payload.model_fields_set
+        and payload.description == ""
+        and ticket.ticket_type != TicketType.MANUAL
+    ):
+        raise ApiError(422, "invalid_description", "Description is required for this ticket type")
     changed: dict[str, dict[str, str | None]] = {}
     for field in ("subject", "description"):
         if field in payload.model_fields_set:
@@ -257,9 +263,7 @@ def purge_ticket(
     db.execute(
         delete(FieldReportNotification).where(FieldReportNotification.id.in_(notification_ids))
     )
-    db.execute(
-        delete(FieldExternalMessage).where(FieldExternalMessage.handoff_id.in_(handoff_ids))
-    )
+    db.execute(delete(FieldExternalMessage).where(FieldExternalMessage.handoff_id.in_(handoff_ids)))
     db.execute(
         delete(FieldWorkCompletionPrompt).where(
             FieldWorkCompletionPrompt.handoff_id.in_(handoff_ids)
@@ -267,9 +271,7 @@ def purge_ticket(
     )
     db.execute(delete(FieldDispatchUpdate).where(FieldDispatchUpdate.id.in_(update_ids)))
     db.execute(
-        delete(FieldWorkDeliveryAttempt).where(
-            FieldWorkDeliveryAttempt.handoff_id.in_(handoff_ids)
-        )
+        delete(FieldWorkDeliveryAttempt).where(FieldWorkDeliveryAttempt.handoff_id.in_(handoff_ids))
     )
     db.execute(delete(FieldWorkHandoff).where(FieldWorkHandoff.ticket_id == ticket_id))
     for model in (
@@ -307,16 +309,18 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
             raise ApiError(422, "invalid_category", "Select an active category")
         category_name = category.name
         if category.is_other:
-            if payload.subject is None:
-                raise ApiError(422, "subject_required", "Clarify the Other category")
-            subject = payload.subject
+            subject = payload.subject or category.name
         else:
             if payload.subject is not None and payload.subject != category.name:
                 raise ApiError(422, "category_subject_conflict", "Subject is set by the category")
             subject = category.name
     else:
-        subject = payload.subject
-    description = payload.description or subject
+        subject = payload.subject or (
+            "Ручное обращение" if payload.ticket_type == TicketType.MANUAL else None
+        )
+    description = payload.description or (
+        "" if payload.ticket_type == TicketType.MANUAL else subject
+    )
     account_no = None
     snapshot_id = None
     selected_service = None
@@ -345,6 +349,7 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         category_name=category_name,
         caller_phone=payload.caller_phone,
         city=payload.city,
+        caller_full_name=payload.caller_full_name,
         status=TicketStatus.OPEN,
         priority=payload.priority,
         created_by=actor_id,
@@ -433,9 +438,13 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
     if ticket.category_id is not None and category is None:
         raise ApiError(409, "request_id_conflict", "Ticket category is unavailable")
     expected_subject = (
-        payload.subject if category is None or category.is_other else ticket.category_name
+        payload.subject or ("Ручное обращение" if ticket.ticket_type == TicketType.MANUAL else None)
+        if category is None
+        else payload.subject or ticket.category_name
     )
-    expected_description = payload.description or expected_subject
+    expected_description = payload.description or (
+        "" if ticket.ticket_type == TicketType.MANUAL else expected_subject
+    )
     if (
         ticket.ticket_type != payload.ticket_type
         or (
@@ -448,6 +457,7 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         or ticket.category_id != payload.category_id
         or ticket.caller_phone != payload.caller_phone
         or ticket.city != payload.city
+        or ticket.caller_full_name != payload.caller_full_name
         or ticket.priority != payload.priority
     ):
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")
@@ -595,10 +605,12 @@ def list_tickets(
     if active_only:
         conditions.append(Ticket.status.in_((TicketStatus.OPEN, TicketStatus.IN_PROGRESS)))
     if callback_queue:
-        conditions.extend((
-            Ticket.status == TicketStatus.RESOLVED,
-            Ticket.ticket_type == TicketType.SUBSCRIBER_LINKED,
-        ))
+        conditions.extend(
+            (
+                Ticket.status == TicketStatus.RESOLVED,
+                Ticket.ticket_type == TicketType.SUBSCRIBER_LINKED,
+            )
+        )
 
     count_query = select(func.count()).select_from(Ticket)
     items_query = select(Ticket)
@@ -934,8 +946,12 @@ def resolve_ticket(
 
 
 def close_ticket(
-    db: Session, actor_id: UUID, ticket_id: UUID, decision_id: UUID,
-    version: int | None, reason: str | None = None,
+    db: Session,
+    actor_id: UUID,
+    ticket_id: UUID,
+    decision_id: UUID,
+    version: int | None,
+    reason: str | None = None,
 ) -> Ticket:
     _actor(db, actor_id, Permission.TICKET_CLOSE)
     ticket = _ticket(db, ticket_id, lock=True)
@@ -958,27 +974,42 @@ def close_ticket(
     ticket.closed_at = datetime.now(UTC)
     ticket.closed_decision_id = decision_id
     _changed(ticket)
-    _fact(db, ticket, actor_id, "ticket_closed_without_call", {
-        "decision_id": str(decision_id), "reason": reason.strip(),
-    })
+    _fact(
+        db,
+        ticket,
+        actor_id,
+        "ticket_closed_without_call",
+        {
+            "decision_id": str(decision_id),
+            "reason": reason.strip(),
+        },
+    )
     db.commit()
     db.refresh(ticket)
     return ticket
 
 
 def record_callback(
-    db: Session, actor_id: UUID, ticket_id: UUID, payload: RecordCallback,
+    db: Session,
+    actor_id: UUID,
+    ticket_id: UUID,
+    payload: RecordCallback,
     version: int | None,
 ) -> Ticket:
     _actor(db, actor_id, Permission.TICKET_CALLBACK)
     ticket = _ticket(db, ticket_id, lock=True)
-    previous = db.scalar(select(TicketCallback).where(
-        TicketCallback.ticket_id == ticket_id,
-        TicketCallback.client_request_id == payload.client_request_id,
-    ))
+    previous = db.scalar(
+        select(TicketCallback).where(
+            TicketCallback.ticket_id == ticket_id,
+            TicketCallback.client_request_id == payload.client_request_id,
+        )
+    )
     if previous is not None:
-        if (previous.actor_id != actor_id or previous.outcome != payload.outcome
-                or previous.comment != payload.comment):
+        if (
+            previous.actor_id != actor_id
+            or previous.outcome != payload.outcome
+            or previous.comment != payload.comment
+        ):
             raise ApiError(409, "request_id_conflict", "Request ID has different content")
         return ticket
     _version(ticket, version)

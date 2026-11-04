@@ -66,6 +66,7 @@ class CreateTicket(StrictModel):
     category_id: UUID | None = None
     caller_phone: str | None = Field(default=None, max_length=50)
     city: str | None = Field(default=None, max_length=160)
+    caller_full_name: str | None = Field(default=None, max_length=160)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
     duplicate_reason: str | None = Field(default=None, min_length=1, max_length=500)
@@ -88,7 +89,7 @@ class CreateTicket(StrictModel):
             raise ValueError("duplicate_reason must be trimmed and contain no control characters")
         return value
 
-    @field_validator("caller_phone", "city")
+    @field_validator("caller_phone", "city", "caller_full_name")
     @classmethod
     def validate_contact_field(cls, value: str | None) -> str | None:
         if value is None:
@@ -101,15 +102,19 @@ class CreateTicket(StrictModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> "CreateTicket":
-        if self.ticket_type in (TicketType.MANUAL, TicketType.SUBSCRIBER_LINKED):
-            if not all((self.caller_phone, self.city, self.description)) or not (
-                self.description or ""
-            ).strip():
-                raise ValueError("caller_phone, city and description are required")
-            if self.category_id is None and self.subject is None:
-                raise ValueError("category_id or subject is required")
-        if self.category_id is None and self.description is None:
-            raise ValueError("description is required without a category")
+        if self.ticket_type == TicketType.MANUAL and not all(
+            (self.caller_full_name, self.caller_phone, self.city)
+        ):
+            raise ValueError("caller_full_name, caller_phone and city are required")
+        if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
+            if self.category_id is None and self.subject is None and self.description is None:
+                raise ValueError("category_id, subject or description is required")
+            if self.caller_full_name is not None:
+                raise ValueError("caller_full_name is only valid for MANUAL")
+        if self.ticket_type == TicketType.INTERNAL and self.description is None:
+            raise ValueError("description is required for INTERNAL")
+        if self.ticket_type == TicketType.INTERNAL and self.caller_full_name is not None:
+            raise ValueError("caller_full_name is only valid for MANUAL")
         if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
             if self.lookup_id is None:
                 raise ValueError("lookup_id is required for SUBSCRIBER_LINKED")
@@ -130,7 +135,7 @@ class AssignEngineer(StrictModel):
 
 class EditTicket(StrictModel):
     subject: str | None = Field(default=None, max_length=160)
-    description: str | None = Field(default=None, min_length=1, max_length=10000)
+    description: str | None = Field(default=None, max_length=10000)
 
     @field_validator("subject")
     @classmethod
@@ -141,7 +146,8 @@ class EditTicket(StrictModel):
     @classmethod
     def valid_description(cls, value: str | None) -> str | None:
         if value is not None and (
-            not value.strip() or any(category(ch) == "Cc" and ch not in "\n\r\t" for ch in value)
+            (bool(value) and not value.strip())
+            or any(category(ch) == "Cc" and ch not in "\n\r\t" for ch in value)
         ):
             raise ValueError("description must contain text and no control characters")
         return value
@@ -285,6 +291,7 @@ class TicketView(BaseModel):
     category_name: str | None = None
     caller_phone: str | None = None
     city: str | None = None
+    caller_full_name: str | None = None
     status: TicketStatus
     priority: TicketPriority
     created_by: UUID

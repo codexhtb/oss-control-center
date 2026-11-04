@@ -234,7 +234,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         <div className="ticket-detail-heading__title"><p className="eyebrow">SERVICEDESK / ЗАЯВКА #{ticket.number}</p><h1>{ticketTitle(ticket.subject)}</h1><div className="ticket-detail-tags"><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span><span className="type-label">{typeLabel[ticket.ticket_type]}</span><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></div></div>
         <Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void ticketQuery.refetch()} disabled={ticketQuery.isFetching}>Обновить</Button>
         <dl className="ticket-detail-facts">
-          <div><dt>Абонент</dt><dd>{ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
+          <div><dt>{ticket.ticket_type === 'MANUAL' ? 'Обратившийся' : 'Абонент'}</dt><dd>{ticket.ticket_type === 'MANUAL' ? ticket.caller_full_name || 'Не указан' : ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
           <div><dt>Лицевой счёт</dt><dd>{ticket.account_no || '—'}</dd></div>
           <div><dt>Телефон</dt><dd>{ticket.caller_phone || ticket.subscriber?.phone || '—'}</dd></div>
           <div><dt>Город</dt><dd>{ticket.city || '—'}</dd></div>
@@ -329,9 +329,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
             {(ticket.category_name || ticket.caller_phone) && <div className="subscriber-summary">{ticket.category_name && <span>Категория при создании: <strong>{ticket.category_name}</strong></span>}{ticket.caller_phone && <span>Телефон входящего звонка: <strong>{ticket.caller_phone}</strong></span>}</div>}
             {editing ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void runAction('edit', () => ticketApi.edit(id, ticket.version, editSubject.trim(), editDescription.trim()), () => setEditing(false)) }}>
               <label className="field"><span>Тема</span><input value={editSubject} maxLength={160} onChange={(event) => setEditSubject(event.target.value)} required /></label>
-              <label className="field"><span>Описание</span><textarea value={editDescription} maxLength={10000} rows={5} onChange={(event) => setEditDescription(event.target.value)} required /></label>
-              <div className="user-actions"><Button type="submit" disabled={!!busy || !editSubject.trim() || !editDescription.trim()}>Сохранить изменения</Button><Button variant="quiet" type="button" onClick={() => setEditing(false)}>Отмена</Button></div>
-            </form> : <><p className="ticket-description">{ticket.description}</p>{canEdit && <Button variant="secondary" onClick={() => { setEditSubject(ticket.subject || ''); setEditDescription(ticket.description); setEditing(true) }}>Редактировать заявку</Button>}</>}
+              <label className="field"><span>Описание{ticket.ticket_type === 'MANUAL' && ' (необязательно)'}</span><textarea value={editDescription} maxLength={10000} rows={5} onChange={(event) => setEditDescription(event.target.value)} required={ticket.ticket_type !== 'MANUAL'} /></label>
+              <div className="user-actions"><Button type="submit" disabled={!!busy || !editSubject.trim() || (ticket.ticket_type !== 'MANUAL' && !editDescription.trim())}>Сохранить изменения</Button><Button variant="quiet" type="button" onClick={() => setEditing(false)}>Отмена</Button></div>
+            </form> : <>{ticket.description && <p className="ticket-description">{ticket.description}</p>}{canEdit && <Button variant="secondary" onClick={() => { setEditSubject(ticket.subject || ''); setEditDescription(ticket.description); setEditing(true) }}>Редактировать заявку</Button>}</>}
           </section>
         {!ticket.subscriber && <div className="unlinked-note">Заявка без привязки к абоненту.</div>}
         {canDelete && <section className="detail-panel ticket-work-panel ticket-work-panel--more">
