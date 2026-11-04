@@ -1,4 +1,4 @@
-export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'INTERNAL'
+export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'INTERNAL' | 'ERRONEOUS_PAYMENT'
 export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'
 export type TicketPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
 export type ResolutionReason = 'CABLE_BREAK' | 'CUSTOMER_EQUIPMENT' | 'ONU_POWER' |
@@ -22,6 +22,10 @@ export interface Ticket {
   caller_phone?: string | null
   city?: string | null
   caller_full_name?: string | null
+  correct_account_no?: string | null
+  erroneous_account_no?: string | null
+  payment_occurred_at?: string | null
+  payment_amount?: string | null
   description: string
   status: TicketStatus
   priority: TicketPriority
@@ -330,6 +334,14 @@ export type CreateTicketInput = {
   client_request_id: string
 } & (
   | { ticket_type: 'MANUAL' | 'INTERNAL' }
+  | {
+      ticket_type: 'ERRONEOUS_PAYMENT'
+      caller_full_name: string
+      correct_account_no: string
+      erroneous_account_no: string
+      payment_occurred_at: string
+      payment_amount: string
+    }
   | {
       ticket_type: 'SUBSCRIBER_LINKED'
       lookup_id: string

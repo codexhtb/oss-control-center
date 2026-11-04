@@ -7,6 +7,7 @@ class TicketType(StrEnum):
     SUBSCRIBER_LINKED = "SUBSCRIBER_LINKED"
     MANUAL = "MANUAL"
     INTERNAL = "INTERNAL"
+    ERRONEOUS_PAYMENT = "ERRONEOUS_PAYMENT"
 
 
 class TicketStatus(StrEnum):

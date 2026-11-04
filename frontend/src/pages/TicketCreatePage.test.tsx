@@ -46,6 +46,26 @@ beforeEach(() => {
   })
 })
 
+it('creates an erroneous payment with structured fields and no category or description', async () => {
+  vi.mocked(ticketApi.create).mockResolvedValue({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
+  renderCreate()
+  fireEvent.click(screen.getByRole('button', { name: /Ошибочный платёж/ }))
+  expect(screen.queryByRole('combobox', { name: 'Тема обращения' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText(/Наименование обратившегося/), { target: { value: 'Синтетический плательщик' } })
+  fireEvent.change(screen.getByLabelText(/Верный лицевой счёт/), { target: { value: 'CORRECT-001' } })
+  fireEvent.change(screen.getByLabelText(/Ошибочный лицевой счёт/), { target: { value: 'WRONG-002' } })
+  fireEvent.change(screen.getByLabelText(/Дата и время платежа/), { target: { value: '2026-11-03T12:34' } })
+  fireEvent.change(screen.getByLabelText(/Сумма платежа/), { target: { value: '125.50' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    ticket_type: 'ERRONEOUS_PAYMENT', caller_full_name: 'Синтетический плательщик',
+    correct_account_no: 'CORRECT-001', erroneous_account_no: 'WRONG-002',
+    payment_occurred_at: new Date('2026-11-03T12:34').toISOString(), payment_amount: '125.50',
+    subject: undefined, description: undefined,
+  })))
+  expect(await screen.findByText('Карточка открыта')).toBeInTheDocument()
+})
+
 it.each([
   ['MANUAL', 'Ручная'],
   ['INTERNAL', 'Внутренняя'],

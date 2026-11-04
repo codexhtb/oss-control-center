@@ -1052,7 +1052,7 @@ def test_three_types_http_creation_rbac_and_filters(
     for actor in (operator, engineer):
         snapshot, _ = seed_snapshot(ticket_engine, actor)
         login(ticket_client, actor.login)
-        for kind in TicketType:
+        for kind in (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL, TicketType.INTERNAL):
             payload = {
                 "ticket_type": kind.value,
                 "description": f"Synthetic {kind.value} request",
@@ -1101,7 +1101,7 @@ def test_three_types_http_creation_rbac_and_filters(
         assert db.scalar(select(func.count()).select_from(TicketAudit)) == 6
     login(ticket_client, "admin")
     assert ticket_client.get("/api/v1/tickets").status_code == 200
-    for kind in TicketType:
+    for kind in (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL, TicketType.INTERNAL):
         assert ticket_client.post(
             "/api/v1/tickets",
             headers=csrf(ticket_client),
@@ -1143,7 +1143,7 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
         ).status_code
         == 200
     )
-    for kind in TicketType:
+    for kind in (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL, TicketType.INTERNAL):
         payload = {
             "ticket_type": kind.value,
             "subject": f"Synthetic {kind.value} task",
@@ -1463,6 +1463,71 @@ def test_manual_internal_lifecycle_without_billing(
                 == 1
             )
         login(ticket_client, operator.login)
+
+
+def test_erroneous_payment_create_validation_replay_and_detail(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "payment-operator", Role.OPERATOR)
+    login(ticket_client, operator.login)
+    payload = {
+        "ticket_type": "ERRONEOUS_PAYMENT",
+        "caller_full_name": "Синтетический плательщик",
+        "correct_account_no": "CORRECT-001",
+        "erroneous_account_no": "WRONG-002",
+        "payment_occurred_at": "2026-11-03T12:34:00+03:00",
+        "payment_amount": "125.50",
+        "client_request_id": str(uuid4()),
+    }
+    first = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert first.status_code == 201, first.text
+    body = first.json()
+    assert body["subject"] == "Ошибочный платёж"
+    assert body["description"] == ""
+    assert body["category_id"] is None
+    assert body["account_no"] is None
+    assert body["payment_amount"] == "125.50"
+    assert body["payment_occurred_at"] == "2026-11-03T09:34:00Z"
+    detail = ticket_client.get(f"/api/v1/tickets/{body['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["correct_account_no"] == "CORRECT-001"
+    assert detail.json()["erroneous_account_no"] == "WRONG-002"
+    repeated = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert repeated.status_code == 200
+    assert repeated.json()["id"] == body["id"]
+    conflict = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={**payload, "payment_amount": "126.00"},
+    )
+    assert conflict.status_code == 409
+    for invalid in (
+        {key: value for key, value in payload.items() if key != "caller_full_name"},
+        {**payload, "correct_account_no": "WRONG-002"},
+        {**payload, "payment_amount": "0"},
+        {**payload, "payment_occurred_at": "2026-11-03T12:34:00"},
+        {**payload, "category_id": str(uuid4())},
+        {**payload, "subject": "Другая тема"},
+    ):
+        invalid["client_request_id"] = str(uuid4())
+        response = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=invalid)
+        assert response.status_code == 422, response.text
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(select(func.count()).select_from(Ticket).where(Ticket.id == UUID(body["id"])))
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketEvent)
+                .where(
+                    TicketEvent.ticket_id == UUID(body["id"]),
+                    TicketEvent.event_type == "ticket_created",
+                )
+            )
+            == 1
+        )
 
 
 def test_ticket_type_validation_replay_and_legacy_client(

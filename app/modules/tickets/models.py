@@ -1,6 +1,7 @@
 """Service Desk records and immutable source snapshots."""
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -156,7 +158,8 @@ class Ticket(Base):
             name="ck_tickets_delete_fields",
         ),
         CheckConstraint(
-            "ticket_type = 'MANUAL' OR length(description) > 0", name="ck_tickets_description"
+            "ticket_type IN ('MANUAL', 'ERRONEOUS_PAYMENT') OR length(description) > 0",
+            name="ck_tickets_description",
         ),
         CheckConstraint(
             "subject IS NULL OR (length(btrim(subject)) > 0 AND subject !~ '[[:cntrl:]]')",
@@ -188,7 +191,8 @@ class Ticket(Base):
         CheckConstraint(
             "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
             "AND account_no IS NOT NULL AND length(account_no) > 0) OR "
-            "(ticket_type IN ('MANUAL', 'INTERNAL') AND subscriber_snapshot_id IS NULL "
+            "(ticket_type IN ('MANUAL', 'INTERNAL', 'ERRONEOUS_PAYMENT') "
+            "AND subscriber_snapshot_id IS NULL "
             "AND account_no IS NULL AND connection_snapshot_id IS NULL "
             "AND selected_service_id IS NULL)",
             name="ck_tickets_type_snapshot",
@@ -196,6 +200,30 @@ class Ticket(Base):
         CheckConstraint(
             "selected_service_id IS NULL OR length(selected_service_id) > 0",
             name="ck_tickets_selected_service_id",
+        ),
+        CheckConstraint(
+            "(ticket_type = 'ERRONEOUS_PAYMENT' AND caller_full_name IS NOT NULL "
+            "AND correct_account_no IS NOT NULL AND erroneous_account_no IS NOT NULL "
+            "AND correct_account_no <> erroneous_account_no "
+            "AND payment_occurred_at IS NOT NULL AND payment_amount IS NOT NULL "
+            "AND payment_amount > 0 AND subject IS NOT NULL "
+            "AND subject = 'Ошибочный платёж' AND category_id IS NULL) OR "
+            "(ticket_type <> 'ERRONEOUS_PAYMENT' AND correct_account_no IS NULL "
+            "AND erroneous_account_no IS NULL AND payment_occurred_at IS NULL "
+            "AND payment_amount IS NULL)",
+            name="ck_tickets_payment_fields",
+        ),
+        CheckConstraint(
+            "correct_account_no IS NULL OR (length(btrim(correct_account_no)) > 0 "
+            "AND correct_account_no = btrim(correct_account_no) "
+            "AND correct_account_no !~ '[[:cntrl:]]')",
+            name="ck_tickets_correct_account_no",
+        ),
+        CheckConstraint(
+            "erroneous_account_no IS NULL OR (length(btrim(erroneous_account_no)) > 0 "
+            "AND erroneous_account_no = btrim(erroneous_account_no) "
+            "AND erroneous_account_no !~ '[[:cntrl:]]')",
+            name="ck_tickets_erroneous_account_no",
         ),
         CheckConstraint(
             "(status = 'CLOSED' AND closed_by IS NOT NULL AND closed_at IS NOT NULL "
@@ -249,6 +277,10 @@ class Ticket(Base):
     caller_phone: Mapped[str | None] = mapped_column(String(50))
     city: Mapped[str | None] = mapped_column(String(160))
     caller_full_name: Mapped[str | None] = mapped_column(String(160))
+    correct_account_no: Mapped[str | None] = mapped_column(String(100))
+    erroneous_account_no: Mapped[str | None] = mapped_column(String(100))
+    payment_occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     created_by: Mapped[UUID] = mapped_column(

@@ -37,7 +37,7 @@ def test_ticket_creation_permissions_are_centralized() -> None:
     assert {Permission.TICKET_CREATE, Permission.SUBSCRIBER_READ, Permission.TICKET_READ} <= (
         permissions_for(Role.ADMIN)
     )
-    assert set(TicketType) == {"SUBSCRIBER_LINKED", "MANUAL", "INTERNAL"}
+    assert set(TicketType) == {"SUBSCRIBER_LINKED", "MANUAL", "INTERNAL", "ERRONEOUS_PAYMENT"}
 
 
 def _config(url: URL, monkeypatch: pytest.MonkeyPatch) -> Config:

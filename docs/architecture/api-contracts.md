@@ -1,5 +1,15 @@
 # API contracts — Phase 1
 
+**Дополнение `0035_erroneous_payment_ticket`:** `POST /api/v1/tickets` принимает
+`{ticket_type:"ERRONEOUS_PAYMENT", caller_full_name, correct_account_no,
+erroneous_account_no, payment_occurred_at, payment_amount, description?,
+client_request_id, priority?}`. Наименование обратившегося, два разных ЛС,
+дата с часовым поясом и положительная сумма с максимум двумя знаками обязательны.
+`subject="Ошибочный платёж"` сервер устанавливает сам; категория, свободная тема
+и NetUP snapshot запрещены. `description` — необязательный комментарий.
+Повтор с тем же `client_request_id` и данными возвращает `200`, изменённый — `409`.
+Поля возвращаются в списке и карточке; RBAC, CSRF и аудит прежние.
+
 **Адрес для Telegram-передачи (`0028`):** `GET /api/v1/tickets/{id}/field-work-handoffs/latest` включает nullable `visit_address`. `message_preview` содержит адрес из subscriber snapshot либо сохранённый ручной адрес; если оба отсутствуют, строку `Адрес: не указан`. Отсутствие адреса не входит в `missing_fields` и не блокирует `ready_to_send`. `POST /api/v1/tickets/{id}/field-work-handoffs/{handoff_id}/send` принимает необязательный `visit_address` (до 500 символов, одна строка без управляющих символов); явно переданный `null` очищает ранее сохранённый ручной адрес при новой попытке. При адресе NetUP ручной адрес отклоняется (`422`). Повтор с тем же `client_request_id` не меняет сохранённый текст или адрес.
 
 ## Уведомления об отчётах выездных работ (`0027`)

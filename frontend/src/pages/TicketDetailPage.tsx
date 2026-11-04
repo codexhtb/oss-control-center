@@ -234,12 +234,20 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         <div className="ticket-detail-heading__title"><p className="eyebrow">SERVICEDESK / ЗАЯВКА #{ticket.number}</p><h1>{ticketTitle(ticket.subject)}</h1><div className="ticket-detail-tags"><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span><span className="type-label">{typeLabel[ticket.ticket_type]}</span><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></div></div>
         <Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void ticketQuery.refetch()} disabled={ticketQuery.isFetching}>Обновить</Button>
         <dl className="ticket-detail-facts">
+          {ticket.ticket_type === 'ERRONEOUS_PAYMENT' ? <>
+            <div><dt>Наименование обратившегося</dt><dd>{ticket.caller_full_name || '—'}</dd></div>
+            <div><dt>Верный лицевой счёт</dt><dd>{ticket.correct_account_no || '—'}</dd></div>
+            <div><dt>Ошибочный лицевой счёт</dt><dd>{ticket.erroneous_account_no || '—'}</dd></div>
+            <div><dt>Дата и время платежа</dt><dd>{ticket.payment_occurred_at ? formatDate(ticket.payment_occurred_at) : '—'}</dd></div>
+            <div><dt>Сумма платежа</dt><dd>{ticket.payment_amount ?? '—'}</dd></div>
+          </> : <>
           <div><dt>{ticket.ticket_type === 'MANUAL' ? 'Обратившийся' : 'Абонент'}</dt><dd>{ticket.ticket_type === 'MANUAL' ? ticket.caller_full_name || 'Не указан' : ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
           <div><dt>Лицевой счёт</dt><dd>{ticket.account_no || '—'}</dd></div>
           <div><dt>Телефон</dt><dd>{ticket.caller_phone || ticket.subscriber?.phone || '—'}</dd></div>
           <div><dt>Город</dt><dd>{ticket.city || '—'}</dd></div>
           <div><dt>Адрес</dt><dd>{formatSubscriberAddress(ticket.subscriber?.actual_address, ticket.subscriber?.house_number) || '—'}</dd></div>
           <div><dt>Категория</dt><dd>{ticket.category_name || '—'}</dd></div>
+          </>}
         </dl>
       </header>
       {actionError !== null && <Notice tone="error">{actionError instanceof ApiError && actionError.code === 'ticket_already_claimed' ? 'Заявку уже взял другой инженер.' : errorText(actionError)}{actionError instanceof ApiError && actionError.status === 409 ? ' Карточка обновлена; проверьте исполнителя перед повтором.' : ''}</Notice>}
@@ -328,9 +336,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         <section className="detail-panel"><div className="detail-panel__heading"><h2>Описание</h2><span>Создана {formatDate(ticket.created_at)}</span></div>
             {(ticket.category_name || ticket.caller_phone) && <div className="subscriber-summary">{ticket.category_name && <span>Категория при создании: <strong>{ticket.category_name}</strong></span>}{ticket.caller_phone && <span>Телефон входящего звонка: <strong>{ticket.caller_phone}</strong></span>}</div>}
             {editing ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void runAction('edit', () => ticketApi.edit(id, ticket.version, editSubject.trim(), editDescription.trim()), () => setEditing(false)) }}>
-              <label className="field"><span>Тема</span><input value={editSubject} maxLength={160} onChange={(event) => setEditSubject(event.target.value)} required /></label>
-              <label className="field"><span>Описание{ticket.ticket_type === 'MANUAL' && ' (необязательно)'}</span><textarea value={editDescription} maxLength={10000} rows={5} onChange={(event) => setEditDescription(event.target.value)} required={ticket.ticket_type !== 'MANUAL'} /></label>
-              <div className="user-actions"><Button type="submit" disabled={!!busy || !editSubject.trim() || (ticket.ticket_type !== 'MANUAL' && !editDescription.trim())}>Сохранить изменения</Button><Button variant="quiet" type="button" onClick={() => setEditing(false)}>Отмена</Button></div>
+              {ticket.ticket_type !== 'ERRONEOUS_PAYMENT' && <label className="field"><span>Тема</span><input value={editSubject} maxLength={160} onChange={(event) => setEditSubject(event.target.value)} required /></label>}
+              <label className="field"><span>{ticket.ticket_type === 'ERRONEOUS_PAYMENT' ? 'Комментарий' : 'Описание'}{(ticket.ticket_type === 'MANUAL' || ticket.ticket_type === 'ERRONEOUS_PAYMENT') && ' (необязательно)'}</span><textarea value={editDescription} maxLength={10000} rows={5} onChange={(event) => setEditDescription(event.target.value)} required={ticket.ticket_type !== 'MANUAL' && ticket.ticket_type !== 'ERRONEOUS_PAYMENT'} /></label>
+              <div className="user-actions"><Button type="submit" disabled={!!busy || (ticket.ticket_type !== 'MANUAL' && ticket.ticket_type !== 'ERRONEOUS_PAYMENT' && !editDescription.trim())}>Сохранить изменения</Button><Button variant="quiet" type="button" onClick={() => setEditing(false)}>Отмена</Button></div>
             </form> : <>{ticket.description && <p className="ticket-description">{ticket.description}</p>}{canEdit && <Button variant="secondary" onClick={() => { setEditSubject(ticket.subject || ''); setEditDescription(ticket.description); setEditing(true) }}>Редактировать заявку</Button>}</>}
           </section>
         {!ticket.subscriber && <div className="unlinked-note">Заявка без привязки к абоненту.</div>}

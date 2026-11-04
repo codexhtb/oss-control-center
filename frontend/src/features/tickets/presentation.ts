@@ -16,6 +16,7 @@ export const typeLabel: Record<TicketType, string> = {
   SUBSCRIBER_LINKED: 'По абоненту',
   MANUAL: 'Ручная',
   INTERNAL: 'Внутренняя',
+  ERRONEOUS_PAYMENT: 'Ошибочный платёж',
 }
 
 export const statusLabel: Record<TicketStatus, string> = {

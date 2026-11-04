@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowRight, FilePlus2, Layers3, Search, UserRound } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CreditCard, FilePlus2, Layers3, Search, UserRound } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import type { MeResponse } from '../shared/api/types'
@@ -27,6 +27,10 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const [manualPhone, setManualPhone] = useState('')
   const [callerFullName, setCallerFullName] = useState('')
   const [city, setCity] = useState('')
+  const [correctAccountNo, setCorrectAccountNo] = useState('')
+  const [erroneousAccountNo, setErroneousAccountNo] = useState('')
+  const [paymentDate, setPaymentDate] = useState('')
+  const [paymentAmount, setPaymentAmount] = useState('')
   const [priority, setPriority] = useState<TicketPriority>('NORMAL')
   const [accountNo, setAccountNo] = useState('')
   const [card, setCard] = useState<SubscriberCard | null>(null)
@@ -103,8 +107,9 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const ambiguousService = eligibleServices.length > 1
   const ambiguousConnection = (card?.connections.length ?? 0) > 1
   const expired = card ? card.is_expired || Date.now() >= new Date(card.expires_at).getTime() : false
-  const readyOrCustom = type === 'INTERNAL' || categoryId === '' && type === 'MANUAL' || (categoryId === '__custom__' ? !!subject.trim() : !!selectedCategory)
-  const canSubmit = (type !== 'INTERNAL' || !!description.trim()) && readyOrCustom && (type !== 'MANUAL' || (!!callerFullName.trim() && !!callerPhone && !!city.trim())) && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
+  const readyOrCustom = type === 'INTERNAL' || type === 'ERRONEOUS_PAYMENT' || categoryId === '' && type === 'MANUAL' || (categoryId === '__custom__' ? !!subject.trim() : !!selectedCategory)
+  const paymentReady = !!callerFullName.trim() && !!correctAccountNo.trim() && !!erroneousAccountNo.trim() && correctAccountNo.trim() !== erroneousAccountNo.trim() && !!paymentDate && !Number.isNaN(new Date(paymentDate).getTime()) && /^\d+(?:\.\d{1,2})?$/.test(paymentAmount) && Number(paymentAmount) > 0
+  const canSubmit = (type !== 'INTERNAL' || !!description.trim()) && readyOrCustom && (type !== 'MANUAL' || (!!callerFullName.trim() && !!callerPhone && !!city.trim())) && (type !== 'ERRONEOUS_PAYMENT' || paymentReady) && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
 
   function edited() {
     setRequestId(crypto.randomUUID())
@@ -120,7 +125,9 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
       priority,
       client_request_id: requestId,
     }
-    const payload: CreateTicketInput = type === 'SUBSCRIBER_LINKED' && card
+    const payload: CreateTicketInput = type === 'ERRONEOUS_PAYMENT'
+      ? { ...common, subject: undefined, ticket_type: type, caller_full_name: callerFullName.trim(), correct_account_no: correctAccountNo.trim(), erroneous_account_no: erroneousAccountNo.trim(), payment_occurred_at: new Date(paymentDate).toISOString(), payment_amount: paymentAmount }
+      : type === 'SUBSCRIBER_LINKED' && card
       ? { ...common, ticket_type: type, lookup_id: card.lookup_id,
           ...(categoryId !== '__custom__' ? { category_id: categoryId } : {}),
           ...(callerPhone ? { caller_phone: callerPhone } : {}),
@@ -156,6 +163,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
             <button type="button" className={`type-option ${type === 'MANUAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('MANUAL'); setManualPhone(''); setCity(''); edited() }}><FilePlus2 size={20} /><strong>Ручная</strong><span>Обращение без привязки к NetUP</span></button>
             <button type="button" className={`type-option ${type === 'INTERNAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('INTERNAL'); edited() }}><Layers3 size={20} /><strong>Внутренняя</strong><span>Задача команды OSS</span></button>
             <button type="button" className={`type-option ${linked ? 'type-option--selected' : ''}`} onClick={() => { setType('SUBSCRIBER_LINKED'); setPhoneChoice(''); setManualPhone(''); edited() }}><UserRound size={20} /><strong>По абоненту</strong><span>Из Subscriber 360</span></button>
+            <button type="button" className={`type-option ${type === 'ERRONEOUS_PAYMENT' ? 'type-option--selected' : ''}`} onClick={() => { setType('ERRONEOUS_PAYMENT'); edited() }}><CreditCard size={20} /><strong>Ошибочный платёж</strong><span>Перевод на неверный лицевой счёт</span></button>
           </div>
           {linked && <div className="lookup-section">
             {existingLookup.isError && <Notice tone="error">Не удалось открыть сохранённую карточку. {errorText(existingLookup.error)}</Notice>}
@@ -178,7 +186,14 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
           </div>}
           <div className="form-section-heading form-section-heading--later"><span className="step-number">{linked ? '03' : '02'}</span><div><h2>Содержание</h2></div></div>
           <div className="form-fields">
-            {type !== 'INTERNAL' ? <>
+            {type === 'ERRONEOUS_PAYMENT' ? <>
+              <label className="field"><span>Наименование обратившегося <em>*</em></span><input value={callerFullName} maxLength={160} required onChange={(event) => { setCallerFullName(event.target.value); edited() }} /></label>
+              <label className="field"><span>Верный лицевой счёт <em>*</em></span><input value={correctAccountNo} maxLength={100} required onChange={(event) => { setCorrectAccountNo(event.target.value); edited() }} /></label>
+              <label className="field"><span>Ошибочный лицевой счёт <em>*</em></span><input value={erroneousAccountNo} maxLength={100} required onChange={(event) => { setErroneousAccountNo(event.target.value); edited() }} /></label>
+              <label className="field"><span>Дата и время платежа <em>*</em></span><input type="datetime-local" value={paymentDate} required onChange={(event) => { setPaymentDate(event.target.value); edited() }} /></label>
+              <label className="field"><span>Сумма платежа <em>*</em></span><input type="number" min="0.01" step="0.01" value={paymentAmount} required onChange={(event) => { setPaymentAmount(event.target.value); edited() }} /></label>
+              <label className="field"><span>Комментарий <small>необязательно</small></span><textarea value={description} maxLength={10000} rows={3} onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
+            </> : type !== 'INTERNAL' ? <>
               {!linked && <label className="field"><span>ФИО обратившегося <em>*</em></span><input value={callerFullName} maxLength={160} required onChange={(event) => { setCallerFullName(event.target.value); edited() }} /></label>}
               <label className="field"><span>Тема обращения {linked && <em>*</em>}</span><select aria-label="Тема обращения" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); edited() }} required={linked}><option value="">{linked ? 'Выберите тему' : 'Ручное обращение'}</option>{categories.data?.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__custom__">Своя тема</option></select></label>
               {categories.isError && <Notice tone="error">Не удалось загрузить темы обращений. {errorText(categories.error)}</Notice>}

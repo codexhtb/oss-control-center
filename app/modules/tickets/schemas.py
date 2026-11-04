@@ -1,6 +1,7 @@
 """Strict public Service Desk payloads; snapshots are read from PostgreSQL."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal
 from unicodedata import category
 from uuid import UUID
@@ -67,6 +68,10 @@ class CreateTicket(StrictModel):
     caller_phone: str | None = Field(default=None, max_length=50)
     city: str | None = Field(default=None, max_length=160)
     caller_full_name: str | None = Field(default=None, max_length=160)
+    correct_account_no: str | None = Field(default=None, max_length=100)
+    erroneous_account_no: str | None = Field(default=None, max_length=100)
+    payment_occurred_at: datetime | None = None
+    payment_amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     client_request_id: UUID
     priority: TicketPriority = TicketPriority.NORMAL
     duplicate_reason: str | None = Field(default=None, min_length=1, max_length=500)
@@ -89,7 +94,9 @@ class CreateTicket(StrictModel):
             raise ValueError("duplicate_reason must be trimmed and contain no control characters")
         return value
 
-    @field_validator("caller_phone", "city", "caller_full_name")
+    @field_validator(
+        "caller_phone", "city", "caller_full_name", "correct_account_no", "erroneous_account_no"
+    )
     @classmethod
     def validate_contact_field(cls, value: str | None) -> str | None:
         if value is None:
@@ -99,6 +106,13 @@ class CreateTicket(StrictModel):
                 "contact field must be nonblank, trimmed and contain no control characters"
             )
         return value
+
+    @field_validator("payment_occurred_at")
+    @classmethod
+    def valid_payment_instant(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("payment_occurred_at must include a timezone")
+        return value.astimezone(UTC) if value is not None else None
 
     @model_validator(mode="after")
     def validate_source(self) -> "CreateTicket":
@@ -115,6 +129,25 @@ class CreateTicket(StrictModel):
             raise ValueError("description is required for INTERNAL")
         if self.ticket_type == TicketType.INTERNAL and self.caller_full_name is not None:
             raise ValueError("caller_full_name is only valid for MANUAL")
+        payment_fields = (
+            self.correct_account_no,
+            self.erroneous_account_no,
+            self.payment_occurred_at,
+            self.payment_amount,
+        )
+        if self.ticket_type == TicketType.ERRONEOUS_PAYMENT:
+            if not self.caller_full_name or any(value is None for value in payment_fields):
+                raise ValueError("name, both accounts, payment date and amount are required")
+            if self.correct_account_no == self.erroneous_account_no:
+                raise ValueError("correct and erroneous accounts must differ")
+            if self.category_id is not None or self.subject is not None:
+                raise ValueError(
+                    "payment ticket subject is set automatically; category is forbidden"
+                )
+            if self.caller_phone is not None or self.city is not None:
+                raise ValueError("contact fields are not part of erroneous payment")
+        elif any(value is not None for value in payment_fields):
+            raise ValueError("payment fields are only valid for ERRONEOUS_PAYMENT")
         if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
             if self.lookup_id is None:
                 raise ValueError("lookup_id is required for SUBSCRIBER_LINKED")
@@ -292,6 +325,10 @@ class TicketView(BaseModel):
     caller_phone: str | None = None
     city: str | None = None
     caller_full_name: str | None = None
+    correct_account_no: str | None = None
+    erroneous_account_no: str | None = None
+    payment_occurred_at: datetime | None = None
+    payment_amount: Decimal | None = None
     status: TicketStatus
     priority: TicketPriority
     created_by: UUID

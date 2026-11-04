@@ -137,9 +137,15 @@ def edit_ticket(
     if (
         "description" in payload.model_fields_set
         and payload.description == ""
-        and ticket.ticket_type != TicketType.MANUAL
+        and ticket.ticket_type not in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT)
     ):
         raise ApiError(422, "invalid_description", "Description is required for this ticket type")
+    if (
+        ticket.ticket_type == TicketType.ERRONEOUS_PAYMENT
+        and "subject" in payload.model_fields_set
+        and payload.subject != "Ошибочный платёж"
+    ):
+        raise ApiError(422, "fixed_subject", "Subject is fixed for erroneous payment tickets")
     changed: dict[str, dict[str, str | None]] = {}
     for field in ("subject", "description"):
         if field in payload.model_fields_set:
@@ -315,11 +321,14 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
                 raise ApiError(422, "category_subject_conflict", "Subject is set by the category")
             subject = category.name
     else:
-        subject = payload.subject or (
-            "Ручное обращение" if payload.ticket_type == TicketType.MANUAL else None
+        subject = (
+            "Ошибочный платёж"
+            if payload.ticket_type == TicketType.ERRONEOUS_PAYMENT
+            else payload.subject
+            or ("Ручное обращение" if payload.ticket_type == TicketType.MANUAL else None)
         )
     description = payload.description or (
-        "" if payload.ticket_type == TicketType.MANUAL else subject
+        "" if payload.ticket_type in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT) else subject
     )
     account_no = None
     snapshot_id = None
@@ -350,6 +359,10 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         caller_phone=payload.caller_phone,
         city=payload.city,
         caller_full_name=payload.caller_full_name,
+        correct_account_no=payload.correct_account_no,
+        erroneous_account_no=payload.erroneous_account_no,
+        payment_occurred_at=payload.payment_occurred_at,
+        payment_amount=payload.payment_amount,
         status=TicketStatus.OPEN,
         priority=payload.priority,
         created_by=actor_id,
@@ -437,13 +450,19 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
     category = db.get(TicketCategory, ticket.category_id) if ticket.category_id else None
     if ticket.category_id is not None and category is None:
         raise ApiError(409, "request_id_conflict", "Ticket category is unavailable")
-    expected_subject = (
-        payload.subject or ("Ручное обращение" if ticket.ticket_type == TicketType.MANUAL else None)
-        if category is None
-        else payload.subject or ticket.category_name
-    )
+    if category is None:
+        expected_subject = (
+            "Ошибочный платёж"
+            if ticket.ticket_type == TicketType.ERRONEOUS_PAYMENT
+            else payload.subject
+            or ("Ручное обращение" if ticket.ticket_type == TicketType.MANUAL else None)
+        )
+    else:
+        expected_subject = payload.subject or ticket.category_name
     expected_description = payload.description or (
-        "" if ticket.ticket_type == TicketType.MANUAL else expected_subject
+        ""
+        if ticket.ticket_type in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT)
+        else expected_subject
     )
     if (
         ticket.ticket_type != payload.ticket_type
@@ -458,6 +477,10 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         or ticket.caller_phone != payload.caller_phone
         or ticket.city != payload.city
         or ticket.caller_full_name != payload.caller_full_name
+        or ticket.correct_account_no != payload.correct_account_no
+        or ticket.erroneous_account_no != payload.erroneous_account_no
+        or ticket.payment_occurred_at != payload.payment_occurred_at
+        or ticket.payment_amount != payload.payment_amount
         or ticket.priority != payload.priority
     ):
         raise ApiError(409, "request_id_conflict", "Request ID was used for different content")

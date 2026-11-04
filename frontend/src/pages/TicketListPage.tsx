@@ -11,7 +11,7 @@ import { formatDate, priorityLabel, statusLabel, ticketTitle, typeLabel } from '
 import type { TicketFilters, TicketPriority, TicketStatus, TicketType } from '../features/tickets/types'
 
 const statuses: TicketStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']
-const types: TicketType[] = ['SUBSCRIBER_LINKED', 'MANUAL', 'INTERNAL']
+const types: TicketType[] = ['SUBSCRIBER_LINKED', 'MANUAL', 'INTERNAL', 'ERRONEOUS_PAYMENT']
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
 type Queue = 'all' | 'waiting' | 'mine' | 'callback'
 
