@@ -309,6 +309,9 @@ code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .subscriber-overview > :last-child { grid-column: 1 / -1; }
 .subscriber-overview__summary { display: grid; gap: 5px; margin-top: 14px; font-size: 12px; }
 .subscriber-overview__summary span, .subscriber-limitation { color: var(--muted); }
+.subscriber-service-groups { display: grid; gap: 16px; margin-top: 15px; }
+.subscriber-service-groups > div > h3 { margin: 0 0 8px; color: #b7c9d0; font-size: 12px; }
+.subscriber-service-groups .service-list { margin-top: 0; }
 .subscriber-access { display: grid; gap: 0; margin-top: 10px; }
 .subscriber-access > div { display: flex; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
 .subscriber-access span { color: var(--muted); }

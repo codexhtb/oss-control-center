@@ -6,7 +6,7 @@ import { formatDate, statusLabel, ticketTitle } from '../features/tickets/presen
 import { ticketApi } from '../features/tickets/ticket-api'
 import { MonitoringReport } from '../features/tickets/MonitoringReport'
 import { SubscriberOnuCard } from '../features/tickets/OnuCard'
-import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow } from '../features/tickets/types'
+import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow, SubscriberService } from '../features/tickets/types'
 import { configuredIpv4, formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import type { MeResponse } from '../shared/api/types'
 import { errorText } from '../shared/api/client'
@@ -26,6 +26,10 @@ function Origin({ meta }: { meta?: FieldOrigin }) {
 
 function Fact({ label, value, meta }: { label: string; value: string | number | null | undefined; meta?: FieldOrigin }) {
   return <div className="subscriber-fact"><span>{label}</span><strong>{value === null || value === undefined || value === '' ? 'UNKNOWN' : value}</strong><Origin meta={meta} /></div>
+}
+
+function ServiceRow({ service }: { service: SubscriberService }) {
+  return <article className="service-row"><div><span className="eyebrow">ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span><h3>{service.name || 'Услуга без названия'}</h3><span>Тариф: {service.tariff_name || 'не определён'} <Origin meta={service.field_meta.tariff_name} /></span></div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>
 }
 
 function ConnectionBlock({ connection, service, lookupId, canCheck }: { connection: SubscriberConnectionCard; service: string; lookupId: string; canCheck: boolean }) {
@@ -73,6 +77,9 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
   const createUrl = `/tickets/new?lookup=${encodeURIComponent(card.lookup_id)}`
   const firstConnection = card.connections[0]
   const firstService = card.services[0]
+  const connectedServiceIds = new Set(card.connections.map((connection) => connection.service_id).filter(Boolean))
+  const servicesWithConnection = card.services.filter((service) => connectedServiceIds.has(service.service_id))
+  const otherServices = card.services.filter((service) => !connectedServiceIds.has(service.service_id))
   const tabs: Array<{ id: typeof tab; label: string }> = [
     { id: 'overview', label: 'Обзор' }, { id: 'services', label: 'Услуги' },
     ...(canReadFinance ? [{ id: 'payments' as const, label: 'Платежи' }] : []),
@@ -110,7 +117,10 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
       </section>
     </div>}
     {tab === 'services' && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Услуги в источнике</h2><span className="subscriber-section-note">Снимок на дату источника</span></div>
-      {card.services.length ? <div className="service-list">{card.services.map((service) => <article key={service.service_id} className="service-row"><div><span className="eyebrow">ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span><h3>{service.name || 'Услуга без названия'}</h3><span>Тариф: {service.tariff_name || 'не определён'} <Origin meta={service.field_meta.tariff_name} /></span></div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>)}</div> : <p className="muted">Сведения об услугах отсутствуют или недоступны</p>}
+      {card.services.length ? <div className="subscriber-service-groups">
+        {servicesWithConnection.length > 0 && <div><h3>Со связанным подключением</h3><div className="service-list">{servicesWithConnection.map((service) => <ServiceRow key={service.service_id} service={service} />)}</div></div>}
+        {otherServices.length > 0 && <div><h3>Остальные связи услуг</h3><div className="service-list">{otherServices.map((service) => <ServiceRow key={service.service_id} service={service} />)}</div></div>}
+      </div> : <p className="muted">Сведения об услугах отсутствуют или недоступны</p>}
       <p className="subscriber-limitation">Стоимость, период списания и полная история услуг не показаны: методика расчёта и полнота истории NetUP пока не подтверждены.</p>
     </section>}
     {tab === 'payments' && canReadFinance && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Платежи и начисления</h2></div>

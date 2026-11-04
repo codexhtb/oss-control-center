@@ -121,6 +121,8 @@ it('keeps multiple services and detailed IP rows accessible without exposing unv
   expect(await screen.findByText('Всего услуг: 2')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
   expect(screen.getByText('Внешний IP')).toBeInTheDocument()
+  expect(screen.getByText('Со связанным подключением')).toBeInTheDocument()
+  expect(screen.getByText('Остальные связи услуг')).toBeInTheDocument()
   expect(screen.getAllByText(/Тариф: Синтетический тариф/)).toHaveLength(2)
   fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
   expect(screen.getByText(/суммы, валюта и итоги пока недоступны/)).toBeInTheDocument()
