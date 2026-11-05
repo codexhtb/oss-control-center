@@ -6,6 +6,7 @@ import { formatDate, statusLabel, ticketTitle } from '../features/tickets/presen
 import { ticketApi } from '../features/tickets/ticket-api'
 import { MonitoringReport } from '../features/tickets/MonitoringReport'
 import { SubscriberOnuCard } from '../features/tickets/OnuCard'
+import { SubscriberFinance } from '../features/tickets/SubscriberFinance'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow, SubscriberService } from '../features/tickets/types'
 import { configuredIpv4, formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import type { MeResponse } from '../shared/api/types'
@@ -19,14 +20,14 @@ const qualityLabel: Record<Exclude<DataQuality, 'KNOWN'>, string> = {
 }
 
 function Origin({ meta }: { meta?: FieldOrigin }) {
-  if (!meta) return <span className="origin-chip origin-chip--unknown">Неизвестно</span>
-  if (meta.quality === 'KNOWN') return <span className="origin-dot origin-dot--known" role="img" aria-label={`${meta.source} · ${formatDate(meta.observed_at)}`} title={`${meta.source} · ${formatDate(meta.observed_at)}`} />
-  if (meta.quality === 'STALE') return <span className="origin-dot origin-dot--stale" role="img" aria-label={`Устарело · ${meta.source} · ${formatDate(meta.observed_at)}`} title={`Устарело · ${meta.source} · ${formatDate(meta.observed_at)}`} />
+  if (!meta || meta.quality === 'KNOWN') return null
+  if (meta.quality === 'STALE') return <span className="origin-chip origin-chip--stale" title={`${meta.source} · ${formatDate(meta.observed_at)}`}>Устарело</span>
   return <span className={`origin-chip origin-chip--${meta.quality.toLowerCase()}`} title={`${meta.source} · ${formatDate(meta.observed_at)}`}>{qualityLabel[meta.quality]}</span>
 }
 
 function Fact({ label, value, meta }: { label: string; value: string | number | null | undefined; meta?: FieldOrigin }) {
-  return <div className="subscriber-fact"><span>{label}</span><strong>{value === null || value === undefined || value === '' ? 'UNKNOWN' : value}</strong><Origin meta={meta} /></div>
+  const missing = value === null || value === undefined || value === ''
+  return <div className="subscriber-fact"><span>{label}</span><strong title={missing ? 'Нет подтверждённых данных' : undefined}>{missing ? meta?.quality === 'UNAVAILABLE' ? 'Источник недоступен' : '—' : value}</strong>{(!missing || meta?.quality === 'CONFLICT' || meta?.quality === 'STALE') && <Origin meta={meta} />}</div>
 }
 
 function reliable(meta?: FieldOrigin) {
@@ -52,7 +53,8 @@ function systemBlockConfirmed(value?: number | null) {
 }
 
 function ServiceRow({ service }: { service: SubscriberService }) {
-  return <article className="service-row"><div><span className="eyebrow">ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span><h3>{service.name || 'Услуга без названия'}</h3><span>Тариф: {service.tariff_name || 'не определён'} <Origin meta={service.field_meta.tariff_name} /></span></div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>
+  const distinctTariff = service.tariff_name && service.tariff_name.trim().toLocaleLowerCase() !== service.name?.trim().toLocaleLowerCase()
+  return <article className="service-row"><div><span className="eyebrow">ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span><h3>{service.name || 'Услуга без названия'}</h3>{distinctTariff && <span>Тариф: {service.tariff_name} <Origin meta={service.field_meta.tariff_name} /></span>}</div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>
 }
 
 function ConnectionBlock({ connection, service, lookupId, canCheck }: { connection: SubscriberConnectionCard; service: string; lookupId: string; canCheck: boolean }) {
@@ -75,9 +77,9 @@ function ConnectionBlock({ connection, service, lookupId, canCheck }: { connecti
           <td>{row.row_id}</td>
           <td>{row.configured_ipv4 && row.configured_prefix_length !== null && row.configured_prefix_length !== undefined ? <>{row.configured_ipv4}/{row.configured_prefix_length} <Origin meta={row.field_meta.configured_ipv4} /></> : row.address_assignment === 'AUTO_POOL' ? '[Авто]' : 'IP не определён'}</td>
           <td>{row.dhcp_pool_id ? <>Пул {row.dhcp_pool_id} <Origin meta={row.field_meta.dhcp_pool_id} /></> : 'Пул не задан'}</td>
-          <td>{row.device || 'UNKNOWN'} <Origin meta={row.field_meta.device} /></td>
-          <td>{row.port_id || 'UNKNOWN'} <Origin meta={row.field_meta.port_id} /></td>
-          <td>{row.vlan_id || 'UNKNOWN'} <Origin meta={row.field_meta.vlan_id} /></td>
+          <td>{row.device || '—'} {row.device && <Origin meta={row.field_meta.device} />}</td>
+          <td>{row.port_id || '—'} {row.port_id && <Origin meta={row.field_meta.port_id} />}</td>
+          <td>{row.vlan_id || '—'} {row.vlan_id && <Origin meta={row.field_meta.vlan_id} />}</td>
         </tr>)}
       </tbody></table></div>
     </div>)}</details>
@@ -137,14 +139,14 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
       </section>
       {canReadFinance && <section className="subscriber-panel subscriber-finance" aria-label="Финансы абонента"><div className="subscriber-section-title"><h2>Финансы</h2>{financial && <span className="subscriber-section-note">ЛС {financial.account_id}</span>}</div>
         {financial ? <><div className="subscriber-finance__values">
-          <div className={balance !== null && balance < 0 ? 'subscriber-finance__value subscriber-finance__value--debt' : 'subscriber-finance__value'}><span>{balance !== null && balance < 0 ? 'Текущий баланс · задолженность' : 'Текущий баланс'}</span><strong>{money(financial.balance, verifiedCurrency) ?? 'UNKNOWN'}</strong><Origin meta={financial.field_meta.balance} /></div>
-          <div className="subscriber-finance__value"><span>Кредитный лимит</span><strong>{money(financial.credit, verifiedCurrency) ?? 'UNKNOWN'}</strong><Origin meta={financial.field_meta.credit} /></div>
+          <div className={balance !== null && balance < 0 ? 'subscriber-finance__value subscriber-finance__value--debt' : 'subscriber-finance__value'}><span>{balance !== null && balance < 0 ? 'Текущий баланс · задолженность' : 'Текущий баланс'}</span><strong>{money(financial.balance, verifiedCurrency) ?? 'Не удалось определить'}</strong>{financial.balance !== null && <Origin meta={financial.field_meta.balance} />}</div>
+          <div className="subscriber-finance__value"><span>Кредитный лимит</span><strong>{money(financial.credit, verifiedCurrency) ?? 'Не удалось определить'}</strong>{financial.credit !== null && <Origin meta={financial.field_meta.credit} />}</div>
           <div className="subscriber-finance__value subscriber-finance__value--available"><span>Остаток с учётом кредита</span><strong>{money(available, verifiedCurrency) ?? 'Не удалось рассчитать'}</strong>{available !== null && <Origin meta={financial.field_meta.balance} />}</div>
         </div>{!verifiedCurrency && <p className="subscriber-limitation">Валюта источника не подтверждена. Значения показаны без обозначения валюты.</p>}</> : <p className="muted">Финансовые данные источника недоступны</p>}
       </section>}
       <section className="subscriber-panel"><div className="subscriber-section-title"><h2>Состояние доступа</h2></div>
         <div className={`subscriber-access subscriber-access--${systemBlocked ? 'blocked' : intStatus === 1 ? 'on' : intStatus === 0 ? 'off' : 'unknown'}`}>
-          <strong>{internetBillingStatus(intStatus)} <Origin meta={billingAccount?.field_meta.int_status} /></strong>
+          <strong>{internetBillingStatus(intStatus)} {intStatus !== null && <Origin meta={billingAccount?.field_meta.int_status} />}</strong>
           {accessReason && <span>{accessReason} <Origin meta={billingAccount?.field_meta.is_blocked} /></span>}
         </div>
         <details className="subscriber-technical"><summary>Данные NetUP и качество источника</summary><div className="subscriber-facts"><Fact label="int_status" value={billingAccount?.int_status} meta={billingAccount?.field_meta.int_status} /><Fact label="is_blocked" value={billingAccount?.is_blocked} meta={billingAccount?.field_meta.is_blocked} /></div></details>
@@ -160,13 +162,11 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
         {servicesWithConnection.length > 0 && <div><h3>Со связанным подключением</h3><div className="service-list">{servicesWithConnection.map((service) => <ServiceRow key={service.service_id} service={service} />)}</div></div>}
         {otherServices.length > 0 && <div><h3>Остальные связи услуг</h3><div className="service-list">{otherServices.map((service) => <ServiceRow key={service.service_id} service={service} />)}</div></div>}
       </div> : <p className="muted">Сведения об услугах отсутствуют или недоступны</p>}
-      <p className="subscriber-limitation">Стоимость, период списания и полная история услуг не показаны: методика расчёта и полнота истории NetUP пока не подтверждены.</p>
+      <p className="subscriber-limitation">Текущая стоимость услуг и полный срок их действия здесь не показаны. Фактические начисления доступны во вкладке «Платежи».</p>
     </section>}
-    {tab === 'payments' && canReadFinance && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Платежи и начисления</h2></div>
-      <p className="subscriber-limitation">История операций, суммы, валюта и итоги пока недоступны: значения и классификация операций лабораторной NetUP не подтверждены. Отсутствие записей здесь не означает отсутствие платежей.</p>
-    </section>}
+    {tab === 'payments' && canReadFinance && <SubscriberFinance lookupId={card.lookup_id} showTechnical={session.user.role !== 'operator'} />}
     {tab === 'connections' && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Подключения</h2><span className="subscriber-section-note">Диагностика и измерение ONU имеют собственное время наблюдения</span></div>
-      {card.connections.length ? <div className="connection-list">{card.connections.map((connection) => <ConnectionBlock key={connection.connection_snapshot_id} connection={connection} service={serviceNames.get(connection.service_id || '') || 'UNKNOWN'} lookupId={card.lookup_id} canCheck={session.permissions.includes('diagnostics.run')} />)}</div> : <p className="muted">Данные о подключении неизвестны</p>}
+      {card.connections.length ? <div className="connection-list">{card.connections.map((connection) => <ConnectionBlock key={connection.connection_snapshot_id} connection={connection} service={serviceNames.get(connection.service_id || '') || 'Услуга не установлена'} lookupId={card.lookup_id} canCheck={session.permissions.includes('diagnostics.run')} />)}</div> : <p className="muted">Данные о подключении неизвестны</p>}
     </section>}
     {tab === 'tickets' && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>История обращений</h2><span className="subscriber-section-note">Связанные заявки по этому абоненту</span></div>
       {history.isPending ? <p role="status" className="muted">Загружаем обращения…</p> : history.isError ? <Notice tone="error">{errorText(history.error)}</Notice> : history.data?.items.length ? <><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Номер</th><th>Тема</th><th>Статус</th><th>Исполнитель</th><th>Создана</th></tr></thead><tbody>{history.data.items.map((ticket) => <tr key={ticket.id}><td><Link to={`/tickets/${ticket.id}`}>#{ticket.number}</Link></td><td>{ticketTitle(ticket.subject)}</td><td>{statusLabel[ticket.status]}</td><td>{ticket.assigned_engineer_name || 'Не назначен'}</td><td>{formatDate(ticket.created_at)}</td></tr>)}</tbody></table></div><div className="subscriber-pagination"><Button variant="quiet" disabled={historyPage <= 1} onClick={() => setHistoryPage(historyPage - 1)}>Назад</Button><span>{historyPage} / {Math.ceil(history.data.total / history.data.size)}</span><Button variant="quiet" disabled={historyPage * history.data.size >= history.data.total} onClick={() => setHistoryPage(historyPage + 1)}>Далее</Button></div></> : <p className="muted">Связанных обращений пока нет</p>}

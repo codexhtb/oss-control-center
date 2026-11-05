@@ -1,6 +1,7 @@
 """Subscriber 360 routes; mock by default, NetUP only by explicit configuration."""
 
-from typing import Annotated
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response
@@ -11,8 +12,14 @@ from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.modules.billing.mock import MockBillingProvider
 from app.modules.billing.netup.config import NetupConfig
+from app.modules.billing.netup.finance import load_finance
 from app.modules.billing.netup.provider import NetUPBillingProvider
-from app.modules.billing.provider import BillingProvider, UnavailableBillingProvider
+from app.modules.billing.netup.repository import parse_account_no
+from app.modules.billing.provider import (
+    BillingInvalidAccount,
+    BillingProvider,
+    UnavailableBillingProvider,
+)
 from app.modules.billing.schemas import LookupRequest, SubscriberCard
 from app.modules.billing.service import create_lookup, stored_card
 from app.modules.identity.access import has_permission
@@ -58,6 +65,67 @@ def can_read_lookup(identity: CurrentIdentityDep, db: SessionDep) -> AuthContext
 
 LookupDep = Annotated[AuthContext, Depends(can_lookup)]
 LookupReadDep = Annotated[AuthContext, Depends(can_read_lookup)]
+
+
+@router.get("/{lookup_id}/finance")
+def finance_history(
+    lookup_id: UUID,
+    response: Response,
+    identity: LookupReadDep,
+    db: SessionDep,
+    start: datetime,
+    end: datetime,
+    kind: Literal["payments", "charges", "credit"] = "payments",
+    page: int = 1,
+    size: int = 30,
+) -> dict:
+    if not has_permission(db, identity.user, Permission.SUBSCRIBER_FINANCE_READ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    snapshot = db.get(SubscriberSnapshot, lookup_id)
+    if snapshot is None or snapshot.requested_by != identity.user.id:
+        raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
+    if snapshot.source != "NETUP" or get_settings().billing_provider != "NETUP":
+        raise ApiError(503, "finance_unavailable", "Financial history is unavailable")
+    if (
+        start.tzinfo is None
+        or end.tzinfo is None
+        or start >= end
+        or end - start > timedelta(days=366)
+        or end > datetime.now(UTC) + timedelta(days=1)
+        or page < 1
+        or page > 1000
+        or size < 1
+        or size > 50
+    ):
+        raise ApiError(422, "invalid_finance_range", "Invalid financial history range")
+    try:
+        account_id = parse_account_no(snapshot.account_no)
+    except BillingInvalidAccount:
+        raise ApiError(422, "account_format_unsupported", "Unsupported account format") from None
+    currency = None
+    for item in snapshot.financial_accounts:
+        if item.get("account_id") == snapshot.account_no:
+            meta = item.get("field_meta", {}).get("currency", {})
+            if meta.get("quality") in ("KNOWN", "STALE"):
+                currency = item.get("currency")
+            break
+    # Do not hold a PostgreSQL transaction or pooled connection during external I/O.
+    db.rollback()
+    try:
+        result = load_finance(
+            NetupConfig.from_env(app_env=get_settings().app_env),
+            account_id,
+            start.astimezone(UTC),
+            end.astimezone(UTC),
+            kind,
+            page,
+            size,
+            currency,
+        )
+    except Exception:
+        raise ApiError(503, "finance_unavailable", "Financial history is unavailable") from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("", response_model=SubscriberCard)

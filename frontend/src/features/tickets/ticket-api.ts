@@ -1,6 +1,6 @@
 import { apiRequest } from '../../shared/api/client'
 import type {
-  ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard,
+  ActiveTickets, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard, SubscriberFinanceKind, SubscriberFinancePage,
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
   ResolutionReason,
   FieldWorkHandoff,
@@ -50,6 +50,8 @@ export const ticketApi = {
     }),
   getLookup: (lookupId: string, signal?: AbortSignal) =>
     apiRequest<SubscriberCard>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}`, { signal }),
+  subscriberFinance: (lookupId: string, start: string, end: string, kind: SubscriberFinanceKind, page: number, signal?: AbortSignal) =>
+    apiRequest<SubscriberFinancePage>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/finance`, { start, end, kind, page, size: 30 }), { signal }),
   subscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<Ticket>>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/tickets`, { page, size: 10 }), { signal }),
   activeSubscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>

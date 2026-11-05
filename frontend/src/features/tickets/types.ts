@@ -149,6 +149,20 @@ export interface SubscriberConnectionCard {
   ip_groups: SubscriberIpGroup[]
   field_meta: Record<string, FieldOrigin>
 }
+export type SubscriberFinanceKind = 'payments' | 'charges' | 'credit'
+
+export interface SubscriberFinancePage {
+  summary: { cash: string; charges: string; credit: string; adjustments: string; unclassified_negative: string }
+  currency: string | null
+  items: Array<{
+    id: number; at: string; amount: string; currency: string | null; type: string
+    service?: string | null; method?: string | null; canceled?: boolean
+    transaction_amount?: string; transaction_currency?: string | null; expires_at?: string | null
+    details: Record<string, number | null>
+  }>
+  total: number; page: number; size: number; start: string; end: string
+}
+
 export interface SubscriberCard {
   lookup_id: string
   source: string

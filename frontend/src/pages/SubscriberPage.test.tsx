@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ticketApi } from '../features/tickets/ticket-api'
@@ -8,7 +9,7 @@ import type { MeResponse } from '../shared/api/types'
 import { SubscriberPage } from './SubscriberPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({
-  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
+  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
 }))
 
 const timestamp = '2026-01-01T00:00:00Z'
@@ -65,6 +66,11 @@ beforeEach(() => {
   vi.mocked(ticketApi.lookup).mockReset()
   vi.mocked(ticketApi.getLookup).mockReset().mockResolvedValue(card)
   vi.mocked(ticketApi.subscriberTickets).mockReset().mockResolvedValue({ items: [], page: 1, size: 10, total: 0 })
+  vi.mocked(ticketApi.subscriberFinance).mockReset().mockResolvedValue({
+    summary: { cash: '20350.00', charges: '21350.00', credit: '10100.07', adjustments: '0.00', unclassified_negative: '0.00' },
+    currency: 'RUR', items: [{ id: 1, at: timestamp, amount: '1250.01', currency: 'RUR', type: 'cash', method: 'Терминал', canceled: false, details: { method_id: 1 } }],
+    total: 1, page: 1, size: 30, start: timestamp, end: timestamp,
+  })
   vi.mocked(ticketApi.checkSubscriber).mockReset()
   vi.mocked(ticketApi.subscriberOnu).mockReset().mockResolvedValue({
     source: 'BDCOM', retrieved_at: timestamp,
@@ -179,7 +185,7 @@ it('keeps unknown blocking data out of the main summary', async () => {
   expect(screen.queryByText('Системная блокировка')).not.toBeInTheDocument()
 })
 
-it('keeps source details accessible without repeated confirmed labels', async () => {
+it('shows source time once without confirmed dots or repeated labels', async () => {
   vi.mocked(ticketApi.getLookup).mockResolvedValue({
     ...card,
     subscriber: { ...card.subscriber, field_meta: { ...card.subscriber.field_meta,
@@ -188,7 +194,8 @@ it('keeps source details accessible without repeated confirmed labels', async ()
   renderPage('operator')
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
   expect(screen.queryByText('Подтверждено источником')).not.toBeInTheDocument()
-  expect(screen.getByRole('img', { name: /^NETUP ·/ })).toBeInTheDocument()
+  expect(screen.queryByRole('img', { name: /^NETUP ·/ })).not.toBeInTheDocument()
+  expect(screen.getByText(/Данные источника:/)).toBeInTheDocument()
 })
 
 it('hides finance from engineer and searches without account number in browser URL', async () => {
@@ -245,7 +252,9 @@ it('keeps multiple services and detailed IP rows accessible', async () => {
   expect(screen.getByText('Остальные связи услуг')).toBeInTheDocument()
   expect(screen.getAllByText(/Тариф: Синтетический тариф/)).toHaveLength(2)
   fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
-  expect(screen.getByText(/суммы, валюта и итоги пока недоступны/)).toBeInTheDocument()
+  expect(await screen.findByText(/20.350,00 RUR/)).toBeInTheDocument()
+  expect(screen.getByText(/10.100,07 RUR/)).toBeInTheDocument()
+  expect(screen.getByText('Терминал')).toBeInTheDocument()
   expect(screen.queryByText('10.5')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Подключения' }))
   expect(screen.getByText('IP-группы и исходные записи')).toBeInTheDocument()
@@ -254,4 +263,113 @@ it('keeps multiple services and detailed IP rows accessible', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Обращения' }))
   expect(screen.getByText('Связанных обращений пока нет')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Создать обращение' })).toHaveAttribute('href', `/tickets/new?lookup=${card.lookup_id}`)
+})
+
+it('loads finance only after opening the tab and applies server filters', async () => {
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  expect(ticketApi.subscriberFinance).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
+    card.lookup_id, expect.any(String), expect.any(String), 'payments', 1, expect.anything(),
+  ))
+  fireEvent.change(screen.getByLabelText('Операции'), { target: { value: 'credit' } })
+  await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
+    card.lookup_id, expect.any(String), expect.any(String), 'credit', 1, expect.anything(),
+  ))
+  fireEvent.change(screen.getByLabelText('Период'), { target: { value: 'custom' } })
+  fireEvent.change(screen.getByLabelText('С даты'), { target: { value: '2026-01-01' } })
+  fireEvent.change(screen.getByLabelText('По дату'), { target: { value: '2026-01-31' } })
+  await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
+    card.lookup_id, new Date('2026-01-01T00:00:00').toISOString(),
+    new Date('2026-02-01T00:00:00').toISOString(), 'credit', 1, expect.anything(),
+  ))
+})
+
+it('shows a finance error and does not invent zero values', async () => {
+  vi.mocked(ticketApi.subscriberFinance).mockRejectedValue(new Error('История временно недоступна'))
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  expect(await screen.findByText(/Не удалось связаться с сервером/)).toBeInTheDocument()
+  expect(screen.queryByText(/Денежные поступления/)).not.toBeInTheDocument()
+})
+
+it('paginates financial history on the server', async () => {
+  vi.mocked(ticketApi.subscriberFinance).mockImplementation(async (_id, start, end, _kind, page) => ({
+    summary: { cash: '1.00', charges: '0.00', credit: '0.00', adjustments: '0.00', unclassified_negative: '0.00' },
+    currency: 'RUR', items: [{ id: page, at: timestamp, amount: '1.00', currency: 'RUR', type: 'cash', method: 'Терминал', details: { method_id: 1 } }],
+    total: 31, page, size: 30, start, end,
+  }))
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  expect(await screen.findByText('1 / 2')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+  expect(await screen.findByText('2 / 2')).toBeInTheDocument()
+  expect(ticketApi.subscriberFinance).toHaveBeenLastCalledWith(
+    card.lookup_id, expect.any(String), expect.any(String), 'payments', 2, expect.anything(),
+  )
+})
+
+it('keeps credit totals separate and expands row details with keyboard', async () => {
+  vi.mocked(ticketApi.subscriberFinance).mockImplementation(async (_id, start, end, kind) => ({
+    summary: { cash: '20350.00', charges: '21350.00', credit: '10100.07', adjustments: '0.00', unclassified_negative: '0.00' },
+    currency: 'RUR', items: kind === 'credit' ? [{ id: 7, at: timestamp, amount: '1000.01', currency: 'RUR', type: 'credit', method: 'Credit', transaction_amount: '1000.01', transaction_currency: 'RUR', details: { method_id: 7 } }] : [],
+    total: kind === 'credit' ? 1 : 0, page: 1, size: 30, start, end,
+  }))
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  fireEvent.change(screen.getByLabelText('Операции'), { target: { value: 'credit' } })
+  expect(await screen.findByText('Изменение кредитного лимита')).toBeInTheDocument()
+  expect(screen.getByText('Итоги за выбранный период')).toBeInTheDocument()
+  expect(screen.getByText('Фильтр операций влияет только на список')).toBeInTheDocument()
+  expect(screen.getByText(/20.350,00 RUR/)).toBeInTheDocument()
+  expect(screen.getByText(/10.100,07 RUR/)).toBeInTheDocument()
+  expect(screen.queryByRole('columnheader', { name: 'Подробнее' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('cell', { name: 'Credit' })).not.toBeInTheDocument()
+  const toggle = screen.getByRole('button', { name: /Подробности операции/ })
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  const details = document.getElementById(toggle.getAttribute('aria-controls')!)!
+  expect(details).not.toBeVisible()
+  toggle.focus()
+  await userEvent.setup().keyboard('{Enter}')
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  expect(details).toBeVisible()
+  expect(screen.getByText('Метод NetUP: Credit')).toBeVisible()
+  await userEvent.setup().keyboard('{Enter}')
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+})
+
+it('shows cancellation clearly and retains the time caveat in a compact disclosure', async () => {
+  vi.mocked(ticketApi.subscriberFinance).mockResolvedValue({
+    summary: { cash: '0.00', charges: '0.00', credit: '0.00', adjustments: '0.00', unclassified_negative: '0.00' },
+    currency: 'RUR', items: [{ id: 8, at: timestamp, amount: '-500.00', currency: 'RUR', type: 'canceled', method: 'Сторно', canceled: true, details: { cancel_id: 7 } }],
+    total: 1, page: 1, size: 30, start: timestamp, end: timestamp,
+  })
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  expect(await screen.findByText('Отмена / сторно')).toBeInTheDocument()
+  expect(screen.getByText('-500,00 RUR')).toHaveClass('subscriber-finance-canceled')
+  fireEvent.click(screen.getByText('Отмена / сторно'))
+  expect(screen.getByText('Отменена или сторнирована')).toBeVisible()
+  const summary = screen.getByText('О времени операций')
+  expect(summary).toBeVisible()
+  expect(screen.getByText(/Время биллинга пока не подтверждено/)).not.toBeVisible()
+  fireEvent.click(summary)
+  expect(screen.getByText(/Время биллинга пока не подтверждено/)).toBeVisible()
+})
+
+it('shows an empty finance list without losing the period totals', async () => {
+  vi.mocked(ticketApi.subscriberFinance).mockResolvedValue({
+    summary: { cash: '5.00', charges: '0.00', credit: '0.00', adjustments: '0.00', unclassified_negative: '0.00' },
+    currency: 'RUR', items: [], total: 0, page: 1, size: 30, start: timestamp, end: timestamp,
+  })
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
+  expect(await screen.findByText('За выбранный период операций этого типа нет.')).toBeInTheDocument()
+  expect(screen.getByText('5,00 RUR')).toBeInTheDocument()
 })
