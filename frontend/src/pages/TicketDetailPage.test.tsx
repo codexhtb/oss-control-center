@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ticketApi } from '../features/tickets/ticket-api'
+import { settingsApi } from '../features/tickets/settings-api'
 import type { Page, TicketDetail } from '../features/tickets/types'
 import type { MeResponse } from '../shared/api/types'
 import { TicketDetailPage } from './TicketDetailPage'
@@ -15,6 +16,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   fieldWorkMessages: vi.fn(), verifyFieldWork: vi.fn(),
   addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
+vi.mock('../features/tickets/settings-api', () => ({ settingsApi: { reasons: vi.fn(), templates: vi.fn() } }))
 
 const ticketId = '00000000-0000-4000-8000-000000000010'
 const base: TicketDetail = {
@@ -49,6 +51,14 @@ function renderDetail(role: 'operator' | 'engineer', customSession?: MeResponse)
 
 beforeEach(() => {
   for (const fn of Object.values(ticketApi)) vi.mocked(fn).mockReset()
+  vi.mocked(settingsApi.reasons).mockReset()
+  vi.mocked(settingsApi.templates).mockReset()
+  vi.mocked(settingsApi.reasons).mockResolvedValue([
+    { code: 'NOT_ESTABLISHED', name: 'Причина не установлена', sort_order: 90, is_active: true, version: 1, updated_at: base.created_at },
+    { code: 'NETWORK_FAULT', name: 'Неисправность сети', sort_order: 40, is_active: true, version: 1, updated_at: base.created_at },
+    { code: 'CUSTOMER_EQUIPMENT', name: 'Оборудование абонента', sort_order: 20, is_active: true, version: 1, updated_at: base.created_at },
+  ])
+  vi.mocked(settingsApi.templates).mockResolvedValue([])
   vi.mocked(ticketApi.get).mockResolvedValue(base)
   vi.mocked(ticketApi.comments).mockResolvedValue(empty)
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
@@ -91,6 +101,45 @@ it('keeps the decision revision form collapsed until requested', async () => {
   expect(screen.queryByRole('textbox', { name: 'Новая версия решения' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Уточнить решение' }))
   expect(screen.getByRole('textbox', { name: 'Новая версия решения' })).toBeInTheDocument()
+})
+
+it('inserts a decision template as editable text without resolving the ticket', async () => {
+  const engineer = session('engineer')
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: engineer.user.id })
+  vi.mocked(settingsApi.templates).mockResolvedValue([{
+    id: 'template-1', name: 'Проверка линии', body: '<script>literal</script>', purpose: 'decision',
+    sort_order: 0, is_active: true, version: 1, created_at: base.created_at, updated_at: base.created_at,
+  }])
+  renderDetail('engineer')
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Шаблон решения' }), { target: { value: 'template-1' } })
+  expect(screen.getByRole('textbox', { name: 'Решение инженера' })).toHaveValue('<script>literal</script>')
+  expect(document.querySelector('script')).toBeNull()
+  expect(ticketApi.resolve).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Решение инженера' }), { target: { value: 'Проверено вручную' } })
+  expect(screen.getByRole('textbox', { name: 'Решение инженера' })).toHaveValue('Проверено вручную')
+})
+
+it('inserts a comment template without saving the comment', async () => {
+  vi.mocked(settingsApi.templates).mockResolvedValue([{
+    id: 'template-2', name: 'Типовой ответ', body: 'Проверка продолжается', purpose: 'comment',
+    sort_order: 0, is_active: true, version: 1, created_at: base.created_at, updated_at: base.created_at,
+  }])
+  renderDetail('operator')
+  fireEvent.click(await screen.findByRole('tab', { name: 'История' }))
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Шаблон комментария' }), { target: { value: 'template-2' } })
+  expect(screen.getByRole('textbox', { name: 'Новый комментарий' })).toHaveValue('Проверка продолжается')
+  expect(ticketApi.addComment).not.toHaveBeenCalled()
+})
+
+it('shows the historical reason label rather than the renamed catalog label', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'RESOLVED', resolved_decision_id: 'decision' })
+  vi.mocked(ticketApi.decision).mockResolvedValue({
+    id: 'decision', ticket_id: ticketId, engineer_id: session('engineer').user.id,
+    decision_text: 'Синтетический вердикт', reason: 'NETWORK_FAULT', reason_name: 'Прежнее название',
+    performed_actions: null, created_at: base.created_at,
+  })
+  renderDetail('operator')
+  expect(await screen.findByText('Прежнее название')).toBeInTheDocument()
 })
 
 it('lets only the assigned engineer release an active ticket', async () => {

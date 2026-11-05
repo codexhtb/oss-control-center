@@ -47,6 +47,7 @@ from app.modules.tickets.schemas import (
     RecordCallback,
     TicketDetail,
 )
+from app.modules.tickets.settings_models import DecisionReasonCatalog
 from app.modules.tickets.status import ResolutionReason, TicketStatus, TicketType
 
 
@@ -912,6 +913,17 @@ def confirm_monitoring_check(
     return item
 
 
+def _decision_reason_name(db: Session, reason: ResolutionReason) -> str:
+    # A shared row lock serializes new decisions against disabling the reason.
+    item = db.scalar(
+        select(DecisionReasonCatalog).where(DecisionReasonCatalog.code == reason.value)
+        .with_for_update(read=True)
+    )
+    if item is None or not item.is_active:
+        raise ApiError(409, "reason_unavailable", "Decision reason is no longer available")
+    return item.name
+
+
 def add_decision(
     db: Session, actor_id: UUID, ticket_id: UUID, payload: AddDecision
 ) -> TicketResolution:
@@ -921,11 +933,14 @@ def add_decision(
         raise ApiError(409, "invalid_transition", "Start ticket before recording a decision")
     if ticket.assigned_engineer_id != actor_id and actor.role != Role.ADMIN:
         raise ApiError(403, "forbidden", "Only the assigned engineer can record a verdict")
+    reason = payload.reason or ResolutionReason.NOT_ESTABLISHED
+    reason_name = _decision_reason_name(db, reason)
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,
         decision_text=payload.decision_text,
-        reason=(payload.reason or ResolutionReason.NOT_ESTABLISHED).value,
+        reason=reason.value,
+        reason_name=reason_name,
         performed_actions=payload.performed_actions,
     )
     db.add(item)
@@ -951,11 +966,14 @@ def resolve_ticket(
         raise ApiError(403, "forbidden", "Only the assigned engineer can resolve this ticket")
     if not payload.decision_text.strip():
         raise ApiError(422, "empty_decision", "Engineer verdict is required")
+    reason = payload.reason or ResolutionReason.NOT_ESTABLISHED
+    reason_name = _decision_reason_name(db, reason)
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,
         decision_text=payload.decision_text.strip(),
-        reason=(payload.reason or ResolutionReason.NOT_ESTABLISHED).value,
+        reason=reason.value,
+        reason_name=reason_name,
         performed_actions=payload.performed_actions,
     )
     db.add(item)

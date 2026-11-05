@@ -46,6 +46,7 @@ from app.modules.tickets.models import (
     TicketEvent,
     TicketResolution,
 )
+from app.modules.tickets.reason_labels import LEGACY_REASON_NAMES
 from app.modules.tickets.schemas import (
     AddComment,
     AddDecision,
@@ -357,6 +358,11 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                     if item.resolved_decision_id in current_decisions
                     and current_decisions[item.resolved_decision_id].reason is not None
                     else None
+                ),
+                "resolution_reason_name": (
+                    current_decisions[item.resolved_decision_id].reason_name
+                    or LEGACY_REASON_NAMES.get(current_decisions[item.resolved_decision_id].reason)
+                    if item.resolved_decision_id in current_decisions else None
                 ),
                 "subscriber_name": subscribers.get(item.subscriber_snapshot_id, (None, None))[0],
                 "account_no": subscribers.get(item.subscriber_snapshot_id, (None, item.account_no))[

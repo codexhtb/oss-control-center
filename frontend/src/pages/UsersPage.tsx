@@ -14,6 +14,7 @@ type Page<T> = { items: T[]; page: number; size: number; total: number }
 type AuditRow = { id: string; actor_name: string | null; target_name: string | null; action: string; outcome: string; details: Record<string, unknown> | null; occurred_at: string }
 
 const permissionGroups: { title: string; values: { key: Permission; label: string }[] }[] = [
+  { title: 'Настройки Service Desk', values: [{ key: 'settings.manage', label: 'Управление причинами решений и шаблонами (администратор)' }] },
   { title: 'Чат', values: [{ key: 'chat.messages.delete', label: 'Удаление сообщений (администратор)' }] },
   { title: 'Пользователи', values: [
     { key: 'users.read', label: 'Просмотр сотрудников' }, { key: 'users.manage', label: 'Управление сотрудниками' },

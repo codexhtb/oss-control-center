@@ -387,6 +387,12 @@ Phase 5.1 не добавляет таблиц или столбцов: точн
 `ticket_created`; `audit_events` получает факт создания без текста причины.
 `CLOSED` и soft-deleted обращения остаются в истории, но не в активной проверке.
 
+## Admin Control Center Phase 2 (`0036_service_desk_settings`)
+
+`decision_reason_catalog(code PK, name, sort_order, is_active, version, created_at, updated_at)` содержит только существующие коды `ResolutionReason`. `code` неизменяем; решение ссылается на него через FK с `RESTRICT`. Новые версии решения сохраняют `ticket_decisions.reason_name` как снимок названия; старые строки не меняются из-за триггера неизменности и отображаются по зафиксированному словарю исходных названий.
+
+`ticket_text_templates(id UUID PK, name, body, purpose, sort_order, is_active, version, created_by, created_at, updated_at)` хранит обычный текст. Назначение ограничено `decision`, `comment`, `callback`; удаление API не предусмотрено. Записи настроек версионируются для `If-Match`, а изменения вместе с аудитом совершаются в одной транзакции. Ограничение `app_user_permissions` расширено на `settings.manage` без выдачи этого права кому-либо при миграции.
+
 1. Создание заявки одновременно записывает `tickets`, `ticket_history` и `audit_events` либо не записывает ничего.
 2. Комментарий, ручное наблюдение, решение и закрытие сопровождаются историей и аудитом в той же транзакции.
 3. `closed_by` — активный инженер OSS; `closed_at` и ссылка на решение обязательны для `CLOSED`. Закрытая заявка в Phase 1 не редактируется без отдельного будущего правила переоткрытия.

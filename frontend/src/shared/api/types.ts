@@ -26,6 +26,7 @@ export type Permission =
   | 'users.manage'
   | 'users.read'
   | 'chat.messages.delete'
+  | 'settings.manage'
 
 export interface User {
   id: string

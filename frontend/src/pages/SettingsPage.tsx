@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import type { MeResponse } from '../shared/api/types'
 import { readDefaultQueue, saveDefaultQueue, type TicketQueue } from '../features/tickets/queue-preference'
 import { Notice } from '../shared/ui/Notice'
+import { ReasonManager, TemplateManager } from '../features/tickets/SettingsCatalogs'
 
 export function SettingsPage({ session }: { session: MeResponse }) {
   const canManage = session.permissions.includes('users.manage')
+  const canManageSettings = session.user.role === 'admin' && session.permissions.includes('settings.manage')
   const canReadAllTickets = session.permissions.includes('tickets.read.all')
+  const [params] = useSearchParams()
   const [defaultQueue, setDefaultQueue] = useState(() => readDefaultQueue(session.user.id))
   const [saveFailed, setSaveFailed] = useState(false)
 
@@ -19,14 +22,19 @@ export function SettingsPage({ session }: { session: MeResponse }) {
 
   return <div className="page settings-page">
     <div className="page-heading"><div><h1>Настройки</h1></div></div>
-    {canManage && <section className="detail-panel settings-section" aria-label="Управление Service Desk">
+    {(canManage || canManageSettings) && <section className="detail-panel settings-section" aria-label="Управление Service Desk">
       <h2>Управление Service Desk</h2>
       <div className="settings-links">
         {canManage && <Link to="/users?section=categories"><strong>Темы обращений</strong><span>Названия, порядок и доступность для новых заявок</span></Link>}
+        {canManageSettings && <Link to="/settings?section=reasons"><strong>Причины решений</strong><span>Названия, порядок и доступность для новых решений</span></Link>}
+        {canManageSettings && <Link to="/settings?section=templates"><strong>Текстовые шаблоны</strong><span>Решения, комментарии и контрольные звонки</span></Link>}
         {canManage && <Link to="/users?section=employees"><strong>Сотрудники и разрешения</strong><span>Учётные записи и персональный доступ</span></Link>}
         {canManage && <Link to="/users?section=audit"><strong>История действий</strong><span>Административные изменения</span></Link>}
       </div>
     </section>}
+    {canManageSettings && params.get('section') === 'reasons' && <ReasonManager />}
+    {canManageSettings && params.get('section') === 'templates' && <TemplateManager />}
+    {!canManageSettings && ['reasons', 'templates'].includes(params.get('section') || '') && <Notice tone="error">Нет разрешения управлять настройками Service Desk.</Notice>}
     {canReadAllTickets && <section className="detail-panel settings-section" aria-label="Личные настройки">
       <h2>Личные настройки</h2>
       <label className="field"><span>Очередь при открытии списка заявок</span>

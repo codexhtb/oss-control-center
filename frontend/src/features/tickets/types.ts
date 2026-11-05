@@ -58,6 +58,7 @@ export interface Ticket {
   field_report_pending?: boolean
   resolution_preview?: string | null
   resolution_reason?: ResolutionReason | null
+  resolution_reason_name?: string | null
 }
 
 export interface SubscriberConnection {
@@ -349,6 +350,7 @@ export interface Decision {
   engineer_name?: string | null
   decision_text: string
   reason: ResolutionReason | null
+  reason_name?: string | null
   performed_actions: string | null
   created_at: string
 }

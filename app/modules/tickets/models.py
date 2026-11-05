@@ -387,6 +387,7 @@ class TicketResolution(Base):
     )
     decision_text: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str | None] = mapped_column(String(32))
+    reason_name: Mapped[str | None] = mapped_column(String(160))
     performed_actions: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

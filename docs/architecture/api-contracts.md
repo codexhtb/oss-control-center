@@ -327,3 +327,11 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 # Назначение исполнителя
 
 `GET /api/v1/tickets/assignable-engineers` возвращает активных сотрудников, которым персонально доступны `tickets.read.all`, `tickets.start` и `tickets.resolve`, независимо от названия роли. Это же условие проверяет `POST /api/v1/tickets/{id}/assignment`. `POST /claim` и `POST /release` требуют `tickets.start` и `tickets.resolve`; дополнительно сохраняются проверка чтения конкретной заявки, `If-Match`, статуса и текущего исполнителя. Форма и ответы API сохраняют прежние имена для совместимости.
+
+## Admin Control Center Phase 2
+
+`GET /api/v1/settings/reasons` возвращает активные причины сотруднику с `tickets.resolve`; `include_inactive=true` доступен только администратору с `settings.manage`. `PATCH /api/v1/settings/reasons/{code}` меняет только имя, порядок и активность; код неизменяем. Причина `NOT_ESTABLISHED` остаётся активной для старых клиентов.
+
+`GET /api/v1/settings/templates?purpose=decision|comment|callback` возвращает активные шаблоны сотруднику с соответствующим разрешением `tickets.resolve`, `tickets.comment` или `tickets.callback`. Администратор с `settings.manage` может читать все назначения, включая отключённые, создавать `POST /api/v1/settings/templates` и менять `PATCH /api/v1/settings/templates/{id}`. Сервер принимает только типизированный текст и метаданные, без исполняемых команд.
+
+Все мутации требуют действующей сессии, CSRF/Origin и права `settings.manage` у администратора. PATCH требует `If-Match` с версией записи (`428` при отсутствии, `409` при конфликте). В ответах нет кэширования. К существующим ответам решений добавлено nullable `reason_name`, а к элементам списка заявок — nullable `resolution_reason_name`; исходный машинный `reason` не меняется. Старые решения получают первоначальное название кода при чтении.

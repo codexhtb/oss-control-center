@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.billing.provider import Contact
+from app.modules.tickets.reason_labels import LEGACY_REASON_NAMES
 from app.modules.tickets.status import ResolutionReason, TicketPriority, TicketStatus, TicketType
 
 
@@ -360,6 +361,7 @@ class TicketListView(TicketView):
     field_report_pending: bool = False
     resolution_preview: str | None = None
     resolution_reason: ResolutionReason | None = None
+    resolution_reason_name: str | None = None
 
 
 class TicketDetail(TicketView):
@@ -412,8 +414,15 @@ class DecisionView(BaseModel):
     engineer_name: str | None = None
     decision_text: str
     reason: ResolutionReason | None
+    reason_name: str | None = None
     performed_actions: str | None
     created_at: datetime
+
+    @model_validator(mode="after")
+    def historical_reason_name(self) -> "DecisionView":
+        if self.reason_name is None and self.reason is not None:
+            self.reason_name = LEGACY_REASON_NAMES.get(self.reason.value)
+        return self
 
 
 class CallbackView(BaseModel):
