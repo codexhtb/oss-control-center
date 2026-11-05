@@ -17,9 +17,9 @@ const worker = {
 
 const admin = { ...worker, id: '00000000-0000-4000-8000-000000000001', role: 'admin' as const }
 
-function renderPage(currentUser: User = admin) {
+function renderPage(currentUser: User = admin, initial = '/users') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter><UsersPage currentUser={currentUser} /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initial]}><UsersPage currentUser={currentUser} /></MemoryRouter></QueryClientProvider>)
 }
 
 beforeEach(() => {
@@ -31,6 +31,12 @@ beforeEach(() => {
     if (path === '/api/v1/users') return { ...worker, temporary_password: null }
     return worker
   })
+})
+
+it('opens the existing category editor from an administrative deep link', async () => {
+  renderPage(admin, '/users?section=categories')
+  expect(await screen.findByRole('button', { name: 'Темы обращений' })).toHaveAttribute('aria-current', 'page')
+  expect(apiRequest).toHaveBeenCalledWith('/api/v1/ticket-categories?include_inactive=true', expect.anything())
 })
 
 it('creates a user with an administrator-supplied one-character password', async () => {

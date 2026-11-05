@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { apiRequest, errorText } from '../shared/api/client'
 import type { Permission, Role, User } from '../shared/api/types'
 import { Button } from '../shared/ui/Button'
@@ -83,7 +83,10 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [message, setMessage] = useState('')
-  const [section, setSection] = useState<'employees' | 'categories' | 'audit'>('employees')
+  const [sectionParams, setSectionParams] = useSearchParams()
+  const section = ['employees', 'categories', 'audit'].includes(sectionParams.get('section') || '')
+    ? sectionParams.get('section') as 'employees' | 'categories' | 'audit' : 'employees'
+  const setSection = (next: 'employees' | 'categories' | 'audit') => setSectionParams({ section: next })
   const [editorTab, setEditorTab] = useState<'main' | 'permissions' | 'security'>('main')
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')

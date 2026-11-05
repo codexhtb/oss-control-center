@@ -37,9 +37,38 @@ function renderList(initial = '/tickets') {
 }
 
 beforeEach(() => {
+  window.localStorage.clear()
   vi.mocked(ticketApi.list).mockReset()
   vi.mocked(ticketApi.engineers).mockReset()
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
+})
+
+it('uses the personal queue only for a plain visit and keeps explicit links authoritative', async () => {
+  window.localStorage.setItem(`oss.ticket.default-queue.${session.user.id}`, 'callback')
+  vi.mocked(ticketApi.list).mockResolvedValue({ items: [], page: 1, size: 20, total: 0 })
+  const view = renderList('/tickets')
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    expect.objectContaining({ callback_queue: true, size: 20 }), expect.anything(),
+  ))
+  view.unmount()
+  vi.mocked(ticketApi.list).mockClear()
+  renderList('/tickets?q=номер')
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    expect.objectContaining({ q: 'номер', size: 20 }), expect.anything(),
+  ))
+  expect(vi.mocked(ticketApi.list).mock.calls.some(([filters]) => filters.callback_queue && filters.size === 20)).toBe(false)
+})
+
+it('does not apply a stored work queue without permission to read all tickets', async () => {
+  window.localStorage.setItem(`oss.ticket.default-queue.${session.user.id}`, 'mine')
+  vi.mocked(ticketApi.list).mockResolvedValue({ items: [], page: 1, size: 20, total: 0 })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/tickets']}>
+    <TicketListPage session={{ ...session, permissions: ['tickets.read.own'] }} />
+  </MemoryRouter></QueryClientProvider>)
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    { page: 1, size: 20 }, expect.anything(),
+  ))
 })
 
 it('shows the report attention indicator only while confirmation is pending', async () => {

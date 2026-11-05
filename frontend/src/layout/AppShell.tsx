@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, LayoutGrid, LogOut, MessageCircle, PanelLeftClose, Search, Ticket, Trash2, Users } from 'lucide-react'
+import { ArrowRight, LayoutGrid, LogOut, MessageCircle, PanelLeftClose, Search, Settings, Ticket, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import type { MeResponse, Role } from '../shared/api/types'
@@ -53,7 +53,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
           {(session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own')) && <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Ticket size={18} /> <span>Заявки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           {session.permissions.includes('subscribers.read') && <NavLink to="/subscribers" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Search size={18} /> <span>Абоненты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><MessageCircle size={18} /> <span>Чат</span>{!!chat.data?.unread_count && <span className="chat-nav-count" aria-label={`Непрочитанных: ${chat.data.unread_count}`}>{chat.data.unread_count > 99 ? '99+' : chat.data.unread_count}</span>}</NavLink>
-          {session.permissions.includes('users.manage') && <NavLink to="/users" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Users size={18} /> <span>Пользователи</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
+          {(session.permissions.includes('users.manage') || session.permissions.includes('tickets.read.all')) && <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Settings size={18} /> <span>Настройки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           {session.permissions.includes('tickets.read.all') && (session.permissions.includes('tickets.restore') || session.permissions.includes('tickets.purge')) && <NavLink to="/trash" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Trash2 size={18} /> <span>Корзина</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
         </nav>
         <div className="sidebar__spacer" />

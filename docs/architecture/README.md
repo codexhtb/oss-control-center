@@ -5,6 +5,7 @@
 - [Процесс AS-IS / TO-BE](process.md)
 - [Доменная модель](domain-model.md) и [модель данных / ERD](data-model.md)
 - [Service Desk workflow](service-desk-workflow.md)
+- [Admin Control Center: аудит настраиваемости и первый безопасный этап](admin-control-center.md)
 - [Общий чат сотрудников (Phase 1)](staff-chat.md)
 - [Системная архитектура](system-architecture.md)
 - [API contracts](api-contracts.md) и [RBAC matrix](rbac.md)

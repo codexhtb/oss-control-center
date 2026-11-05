@@ -9,11 +9,11 @@ import { Button } from '../shared/ui/Button'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { formatDate, priorityLabel, resolutionReasonLabel, statusLabel, ticketTitle, typeLabel } from '../features/tickets/presentation'
 import type { TicketFilters, TicketPriority, TicketStatus, TicketType } from '../features/tickets/types'
+import { readDefaultQueue, type TicketQueue } from '../features/tickets/queue-preference'
 
 const statuses: TicketStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']
 const types: TicketType[] = ['SUBSCRIBER_LINKED', 'MANUAL', 'INTERNAL', 'ERRONEOUS_PAYMENT']
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
-type Queue = 'all' | 'waiting' | 'mine' | 'callback'
 
 function workAge(value: string): string {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000))
@@ -39,6 +39,11 @@ function localDayBoundary(value: string, followingDay = false): string {
 
 export function TicketListPage({ session }: { session: MeResponse }) {
   const [params, setParams] = useSearchParams()
+  useEffect(() => {
+    if (params.size || !session.permissions.includes('tickets.read.all')) return
+    const saved = readDefaultQueue(session.user.id)
+    if (saved !== 'all') setParams({ queue: saved }, { replace: true })
+  }, [params, session.user.id, session.permissions, setParams])
   const urlQuery = params.get('q') || ''
   const urlCategory = params.get('category') || ''
   const [searchText, setSearchText] = useState(urlQuery)
@@ -71,7 +76,8 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   }, [categoryText, urlCategory, setParams])
   const canReadEngineers = session.permissions.some((permission) => ['tickets.read.all', 'tickets.read.own', 'tickets.assign'].includes(permission))
   const showQueues = session.permissions.includes('tickets.read.all')
-  const queue: Queue = showQueues && ['waiting', 'mine', 'callback'].includes(params.get('queue') || '') ? params.get('queue') as Queue : 'all'
+  const queue: TicketQueue = showQueues && params.size === 0 ? readDefaultQueue(session.user.id)
+    : showQueues && ['waiting', 'mine', 'callback'].includes(params.get('queue') || '') ? params.get('queue') as TicketQueue : 'all'
   const page = Math.max(1, Number(params.get('page')) || 1)
   const filters: TicketFilters = { page, size: 20 }
   const status = params.get('status')
@@ -170,11 +176,10 @@ export function TicketListPage({ session }: { session: MeResponse }) {
     })
   }
 
-  function setQueue(value: Queue) {
+  function setQueue(value: TicketQueue) {
     setParams((current) => {
       const next = new URLSearchParams(current)
-      if (value === 'all') next.delete('queue')
-      else next.set('queue', value)
+      next.set('queue', value)
       next.delete('page')
       next.delete('assignee')
       next.delete('unassigned')
@@ -196,7 +201,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   function resetFilters() {
     setSearchText('')
     setCategoryText('')
-    setParams(new URLSearchParams())
+    setParams(new URLSearchParams('queue=all'))
   }
 
   return (
