@@ -1205,7 +1205,7 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
     engineer = seed_user(ticket_engine, "engineer", Role.ENGINEER)
     inactive = seed_user(ticket_engine, "inactive", Role.ENGINEER)
-    seed_user(ticket_engine, "admin", Role.ADMIN)
+    admin = seed_user(ticket_engine, "admin", Role.ADMIN)
     with Session(ticket_engine) as db:
         db.get(User, inactive.id).is_active = False
         db.commit()
@@ -1213,9 +1213,9 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     login(ticket_client, operator.login)
     public_engineers = ticket_client.get("/api/v1/tickets/assignable-engineers")
     assert public_engineers.status_code == 200
-    assert public_engineers.json()["items"] == [
-        {"id": str(engineer.id), "display_name": engineer.display_name}
-    ]
+    assert {item["id"] for item in public_engineers.json()["items"]} == {
+        str(engineer.id), str(admin.id)
+    }
     created = []
     for kind in ("MANUAL", "INTERNAL"):
         response = ticket_client.post(
@@ -1259,9 +1259,9 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     login(ticket_client, engineer.login)
     engineers = ticket_client.get("/api/v1/tickets/assignable-engineers", params={"size": 1})
     assert engineers.status_code == 200
-    assert engineers.json()["total"] == 1
+    assert engineers.json()["total"] == 2
     assert engineers.json()["items"] == [
-        {"id": str(engineer.id), "display_name": engineer.display_name}
+        {"id": str(admin.id), "display_name": admin.display_name}
     ]
     assigned = ticket_client.post(
         f"/api/v1/tickets/{created[0]['id']}/assignment",
@@ -2539,6 +2539,44 @@ def test_engineer_claim_race_release_and_queues(
     assert events == ["ticket_created", "engineer_claimed", "engineer_released", "engineer_claimed"]
 
 
+def test_multi_duty_operator_can_claim_and_resolve_only_with_both_grants(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    worker = seed_user(ticket_engine, "multi_duty_worker", Role.OPERATOR)
+    dispatcher = seed_user(ticket_engine, "multi_duty_dispatcher", Role.ENGINEER)
+    grant_ticket_permission(ticket_engine, worker, Permission.TICKET_START)
+    login(ticket_client, worker.login)
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic multi-duty work")
+    path = f"/api/v1/tickets/{ticket['id']}"
+    headers = {**csrf(ticket_client), "If-Match": '"1"'}
+    assert ticket_client.post(path + "/claim", headers=headers).status_code == 403
+    candidates = ticket_client.get("/api/v1/tickets/assignable-engineers")
+    assert str(worker.id) not in {item["id"] for item in candidates.json()["items"]}
+
+    grant_ticket_permission(ticket_engine, worker, Permission.TICKET_DECISION)
+    candidates = ticket_client.get("/api/v1/tickets/assignable-engineers")
+    assert str(worker.id) in {item["id"] for item in candidates.json()["items"]}
+    claimed = ticket_client.post(path + "/claim", headers=headers)
+    assert claimed.status_code == 200, claimed.text
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{claimed.json()["version"]}"'},
+        json={"decision_text": "Synthetic issue resolved", "reason": "NOT_ESTABLISHED"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["status"] == "RESOLVED"
+
+    second = make_manual_ticket(ticket_client, subject="Synthetic assigned multi-duty work")
+    login(ticket_client, dispatcher.login)
+    assigned = ticket_client.post(
+        f"/api/v1/tickets/{second['id']}/assignment",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"engineer_id": str(worker.id)},
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["assigned_engineer_id"] == str(worker.id)
+
+
 def test_claim_permissions_closed_deleted_and_admin_reassignment(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:
@@ -2560,7 +2598,7 @@ def test_claim_permissions_closed_deleted_and_admin_reassignment(
     def headers(version: int) -> dict[str, str]:
         return {**csrf(ticket_client), "If-Match": f'"{version}"'}
 
-    for actor in (denied, admin):
+    for actor in (denied,):
         login(ticket_client, actor.login)
         assert ticket_client.post(path + "/claim", headers=headers(1)).status_code == 403
     login(ticket_client, first.login)
@@ -2865,6 +2903,8 @@ def test_callback_queue_repeated_calls_and_second_engineer_cycle(
     decision_one = resolved.json()["resolved_decision_id"]
     queue = ticket_client.get("/api/v1/tickets", params={"callback_queue": True}).json()
     assert queue["total"] == 1 and queue["items"][0]["id"] == created.json()["id"]
+    assert queue["items"][0]["resolution_preview"] == "First synthetic fix"
+    assert queue["items"][0]["resolved_decision_id"] == decision_one
     assert (
         ticket_client.post(
             path + "/close",
@@ -2874,6 +2914,9 @@ def test_callback_queue_repeated_calls_and_second_engineer_cycle(
         == "callback_required"
     )
     login(ticket_client, caller.login)
+    current = ticket_client.get(path + f"/decisions/{decision_one}")
+    assert current.status_code == 200 and current.json()["decision_text"] == "First synthetic fix"
+    assert ticket_client.get(path + f"/decisions/{uuid4()}").status_code == 404
     request_id = str(uuid4())
     no_answer = {"client_request_id": request_id, "outcome": "NO_ANSWER"}
     headers = {**csrf(ticket_client), "If-Match": f'"{resolved.json()["version"]}"'}
@@ -2927,7 +2970,14 @@ def test_callback_queue_repeated_calls_and_second_engineer_cycle(
         json={"decision_text": "Second synthetic fix", "performed_actions": "Second check"},
     )
     assert second.status_code == 200 and second.json()["resolved_decision_id"] != decision_one
+    second_queue = ticket_client.get("/api/v1/tickets", params={"callback_queue": True}).json()
+    assert second_queue["items"][0]["resolution_preview"] == "Second synthetic fix"
     login(ticket_client, caller.login)
+    new_decision_id = second.json()["resolved_decision_id"]
+    assert (
+        ticket_client.get(path + f"/decisions/{new_decision_id}").json()["decision_text"]
+        == "Second synthetic fix"
+    )
     confirmed = ticket_client.post(
         path + "/callbacks",
         headers={**csrf(ticket_client), "If-Match": f'"{second.json()["version"]}"'},
@@ -2938,6 +2988,8 @@ def test_callback_queue_repeated_calls_and_second_engineer_cycle(
         },
     )
     assert confirmed.status_code == 200 and confirmed.json()["status"] == "CLOSED", confirmed.text
+    assert confirmed.json()["closed_decision_id"] == second.json()["resolved_decision_id"]
+    assert ticket_client.get(path + f"/decisions/{new_decision_id}").status_code == 200
     assert confirmed.json()["closed_by"] == str(caller.id)
     assert (
         ticket_client.get("/api/v1/tickets", params={"callback_queue": True}).json()["total"] == 0

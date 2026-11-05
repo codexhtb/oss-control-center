@@ -269,9 +269,13 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
             BillingAccount(
                 account_id=str(item.account_id),
                 is_primary=item.is_primary,
+                int_status=item.int_status,
+                is_blocked=item.is_blocked,
                 field_meta={
                     "account_id": origin(when, DataQuality.KNOWN),
                     "is_primary": origin(when, DataQuality.KNOWN),
+                    "int_status": field(item.int_status, when),
+                    "is_blocked": field(item.is_blocked, when),
                 },
             )
             for item in raw.accounts
@@ -281,10 +285,14 @@ def normalize_netup(raw: NetupSubscriber) -> Subscriber360:
                 account_id=str(item.account_id),
                 balance=Decimal(str(item.balance)) if item.balance is not None else None,
                 credit=Decimal(str(item.credit)) if item.credit is not None else None,
+                currency_code=raw.currency_code,
+                currency=bounded(raw.currency, 16),
                 account_blocked=bool(item.is_blocked) if item.is_blocked is not None else None,
                 field_meta={
                     "balance": field(item.balance, when),
                     "credit": field(item.credit, when),
+                    "currency_code": field(raw.currency_code, when),
+                    "currency": field(raw.currency, when),
                     "account_blocked": origin(
                         when,
                         DataQuality.KNOWN if item.is_blocked is not None else DataQuality.UNKNOWN,

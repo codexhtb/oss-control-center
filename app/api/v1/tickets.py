@@ -7,7 +7,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
@@ -33,7 +33,7 @@ from app.modules.field_dispatch.service import (
     verify_handoff,
 )
 from app.modules.identity.access import has_permission
-from app.modules.identity.models import User
+from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import (
@@ -92,7 +92,7 @@ from app.modules.tickets.service import (
     start_ticket,
     ticket_detail,
 )
-from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
+from app.modules.tickets.status import ResolutionReason, TicketPriority, TicketStatus, TicketType
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 PageNumber = Annotated[int, Query(ge=1)]
@@ -319,6 +319,13 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                       TicketCallback.id.desc())
         ).all()
     }
+    decision_ids = {item.resolved_decision_id for item in items if item.resolved_decision_id}
+    current_decisions = (
+        {row.id: row for row in db.scalars(
+            select(TicketResolution).where(TicketResolution.id.in_(decision_ids))
+        )}
+        if decision_ids else {}
+    )
     pending_report_ids = set(
         db.scalars(
             select(FieldWorkHandoff.ticket_id).where(
@@ -341,6 +348,16 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                     latest_callbacks[item.id].occurred_at if item.id in latest_callbacks else None
                 ),
                 "field_report_pending": item.id in pending_report_ids,
+                "resolution_preview": (
+                    current_decisions[item.resolved_decision_id].decision_text[:180]
+                    if item.resolved_decision_id in current_decisions else None
+                ),
+                "resolution_reason": (
+                    ResolutionReason(current_decisions[item.resolved_decision_id].reason)
+                    if item.resolved_decision_id in current_decisions
+                    and current_decisions[item.resolved_decision_id].reason is not None
+                    else None
+                ),
                 "subscriber_name": subscribers.get(item.subscriber_snapshot_id, (None, None))[0],
                 "account_no": subscribers.get(item.subscriber_snapshot_id, (None, item.account_no))[
                     1
@@ -488,7 +505,27 @@ def assignable_engineers(
     page: PageNumber = 1,
     size: PageSize = 20,
 ):
-    conditions = (User.is_active.is_(True), User.role == Role.ENGINEER)
+    def granted(permission: Permission):
+        return exists(select(UserPermission.user_id).where(
+            UserPermission.user_id == User.id,
+            UserPermission.permission == permission,
+        ))
+
+    conditions = (
+        User.is_active.is_(True),
+        or_(
+            and_(
+                User.permissions_customized.is_(False),
+                User.role.in_((Role.ENGINEER, Role.ADMIN)),
+            ),
+            and_(
+                User.permissions_customized.is_(True),
+                granted(Permission.TICKET_READ),
+                granted(Permission.TICKET_START),
+                granted(Permission.TICKET_DECISION),
+            ),
+        ),
+    )
     total = db.scalar(select(func.count()).select_from(User).where(*conditions)) or 0
     rows = (
         db.execute(
@@ -826,6 +863,15 @@ def decisions(
 ):
     _readable(db, identity, ticket_id)
     return _page(db, TicketResolution, ticket_id, page, size, TicketResolution.created_at)
+
+
+@router.get("/{ticket_id}/decisions/{decision_id}", response_model=DecisionView)
+def decision_by_id(ticket_id: UUID, decision_id: UUID, identity: ReadDep, db: SessionDep):
+    _readable(db, identity, ticket_id)
+    item = db.get(TicketResolution, decision_id)
+    if item is None or item.ticket_id != ticket_id:
+        raise ApiError(404, "decision_not_found", "Decision not found")
+    return {**item.__dict__, "engineer_name": _names(db, [item.engineer_id]).get(item.engineer_id)}
 
 
 @router.post("/{ticket_id}/close", response_model=TicketView)

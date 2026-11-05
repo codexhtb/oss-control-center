@@ -177,6 +177,7 @@ lookupByAccount(account_no: string) -> Subscriber360 | NotFound | Unavailable
 | `POST /tickets/{ticket_id}/field-work-handoffs/{handoff_id}/verify` | `tickets.field_work` + CSRF | — | Идемпотентно подтверждает только `REPORTED`; не меняет статус заявки или решение |
 | `POST /tickets/{ticket_id}/comments` | Оператор, инженер | `{body}` | `201` комментарий, история и аудит; закрытая заявка в Phase 1 не изменяется |
 | `GET /tickets/{ticket_id}/comments`, `/manual-diagnostics`, `/decisions` | Оператор, инженер | `page`, `size` | Страницы сохранённых записей |
+| `GET /tickets/{ticket_id}/decisions/{decision_id}` | Право чтения данной заявки | — | Одна версия решения по точному ID с именем инженера; чужая заявка или чужой ID возвращают `404`. Для текущей версии использовать `resolved_decision_id`, для закрытой — `closed_decision_id`; пагинация истории не влияет на результат |
 | `POST /tickets/{ticket_id}/manual-diagnostics` | Инженер | `{finding, observed_at, connection_snapshot_id?}` | `201` snapshot с `source_kind=MANUAL`, история и аудит; требуется `IN_PROGRESS` |
 | `POST /subscriber-lookups/{lookup_id}/diagnostics/check` | Инженер, автор lookup | `{connection_snapshot_id}` | Preview без записи в заявку |
 | `POST /tickets/{ticket_id}/diagnostics/check` | Инженер | `If-Match` | Preview и `check_id`, действующий 15 минут |
@@ -320,3 +321,6 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 Выбранные услуга и подключение должны относиться к запрошенному ЛС и друг
 к другу. Полная спецификация —
 [`provider-api-contract.md`](../netup/provider-api-contract.md).
+# Назначение исполнителя
+
+`GET /api/v1/tickets/assignable-engineers` возвращает активных сотрудников, которым персонально доступны `tickets.read.all`, `tickets.start` и `tickets.resolve`, независимо от названия роли. Это же условие проверяет `POST /api/v1/tickets/{id}/assignment`. `POST /claim` и `POST /release` требуют `tickets.start` и `tickets.resolve`; дополнительно сохраняются проверка чтения конкретной заявки, `If-Match`, статуса и текущего исполнителя. Форма и ответы API сохраняют прежние имена для совместимости.

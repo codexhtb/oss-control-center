@@ -9,7 +9,7 @@ import { TicketDetailPage } from './TicketDetailPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
-  decisions: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
+  decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
   fieldWorkMessages: vi.fn(), verifyFieldWork: vi.fn(),
@@ -54,6 +54,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
   vi.mocked(ticketApi.diagnostics).mockResolvedValue(empty)
   vi.mocked(ticketApi.decisions).mockResolvedValue(empty)
+  vi.mocked(ticketApi.decision).mockImplementation(async (_id, decisionId) => ({ id: decisionId, ticket_id: ticketId, engineer_id: session('engineer').user.id, engineer_name: 'Инженер теста', decision_text: 'Синтетический вердикт', reason: 'NETWORK_FAULT', performed_actions: null, created_at: base.created_at }))
   vi.mocked(ticketApi.callbacks).mockResolvedValue(empty)
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
   vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff: null })
@@ -72,6 +73,24 @@ it('shows the saved ticket and sends the current version when an engineer starts
   expect(screen.getByText(/Заявка без привязки к абоненту/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /Взять в работу/ }))
   await waitFor(() => expect(ticketApi.claim).toHaveBeenCalledWith(ticketId, 3))
+})
+
+it('lets an operator with work and decision grants claim a ticket', async () => {
+  const operator = session('operator')
+  vi.mocked(ticketApi.claim).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: operator.user.id, version: 4 })
+  renderDetail('operator', { ...operator, permissions: [...operator.permissions, 'tickets.start', 'tickets.resolve'] })
+  fireEvent.click(await screen.findByRole('button', { name: /Взять в работу/ }))
+  await waitFor(() => expect(ticketApi.claim).toHaveBeenCalledWith(ticketId, 3))
+})
+
+it('keeps the decision revision form collapsed until requested', async () => {
+  const engineer = session('engineer')
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'RESOLVED', resolved_decision_id: 'decision', assigned_engineer_id: engineer.user.id })
+  renderDetail('engineer')
+  expect(await screen.findByText('Синтетический вердикт')).toBeInTheDocument()
+  expect(screen.queryByRole('textbox', { name: 'Новая версия решения' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Уточнить решение' }))
+  expect(screen.getByRole('textbox', { name: 'Новая версия решения' })).toBeInTheDocument()
 })
 
 it('lets only the assigned engineer release an active ticket', async () => {
@@ -534,7 +553,7 @@ it('records a verdict in the action panel before offering a separate closure', a
     decision_text: 'Результат', reason: 'CUSTOMER_EQUIPMENT' as const, performed_actions: null, created_at: base.created_at }
   vi.mocked(ticketApi.resolve).mockImplementation(async () => {
     vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'RESOLVED', assigned_engineer_id: session('engineer').user.id, version: 4, resolved_by: session('engineer').user.id, resolved_at: base.created_at, resolved_decision_id: decision.id })
-    vi.mocked(ticketApi.decisions).mockResolvedValue({ ...empty, items: [decision], total: 1 })
+    vi.mocked(ticketApi.decision).mockResolvedValue(decision)
     return { ...base, status: 'RESOLVED', version: 4, resolved_decision_id: decision.id }
   })
   vi.mocked(ticketApi.close).mockResolvedValue({ ...base, status: 'CLOSED', version: 5 })
@@ -548,7 +567,7 @@ it('records a verdict in the action panel before offering a separate closure', a
   fireEvent.click(panel.getByRole('button', { name: 'Решено' }))
   await waitFor(() => expect(ticketApi.resolve).toHaveBeenCalledWith(ticketId, 'Результат', 'CUSTOMER_EQUIPMENT', 3))
   expect(screen.queryByRole('textbox', { name: 'Выполненные действия' })).not.toBeInTheDocument()
-  expect(await panel.findByText(/Готова к закрытию без обзвона/)).toBeInTheDocument()
+  expect(await panel.findByText(/Следующий шаг — закрытие без обзвона/)).toBeInTheDocument()
   expect(panel.queryByRole('button', { name: 'Освободить заявку' })).not.toBeInTheDocument()
   fireEvent.click(await panel.findByText('Закрыть без обзвона'))
   fireEvent.change(panel.getByRole('textbox', { name: 'Причина закрытия без звонка' }), { target: { value: 'Внутренняя задача' } })
@@ -570,13 +589,46 @@ it('shows a resolved verdict without active engineer actions to a ticket editor'
   })
   renderDetail('operator', { ...session('operator'), permissions: ['tickets.read.all', 'tickets.edit.all'] })
   const panel = within(await screen.findByRole('tabpanel', { name: 'Работа с заявкой' }))
-  expect(await panel.findByText(/Готова к закрытию без обзвона/)).toBeInTheDocument()
+  expect(await panel.findByText(/Следующий шаг — закрытие без обзвона/)).toBeInTheDocument()
+  expect(await panel.findByText('Синтетический вердикт')).toBeInTheDocument()
+  expect(ticketApi.decision).toHaveBeenCalledWith(ticketId, 'verdict-id', expect.anything())
   fireEvent.click(screen.getByRole('tab', { name: 'История' }))
   expect(await screen.findByText('Синтетический вердикт')).toBeInTheDocument()
   expect(screen.getByText(/Инженер теста · Причина не указана/)).toBeInTheDocument()
   expect(screen.getByText(/Ранее указанные действия: Проверка/)).toBeInTheDocument()
   expect(panel.queryByRole('button', { name: /Взять в работу|Освободить заявку|Решено/ })).not.toBeInTheDocument()
   expect(screen.queryByRole('textbox', { name: 'Решение инженера' })).not.toBeInTheDocument()
+})
+
+it('shows the current decision to a reader even when the history page has other versions', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'RESOLVED', resolved_decision_id: 'new-decision', resolved_at: base.created_at })
+  vi.mocked(ticketApi.decisions).mockResolvedValue({ ...empty, total: 21, items: [{
+    id: 'old-decision', ticket_id: ticketId, engineer_id: 'engineer-id',
+    decision_text: 'Старая версия', reason: null, performed_actions: null, created_at: base.created_at,
+  }] })
+  vi.mocked(ticketApi.decision).mockResolvedValue({
+    id: 'new-decision', ticket_id: ticketId, engineer_id: 'engineer-id', engineer_name: 'Другой инженер',
+    decision_text: 'Новая актуальная версия', reason: 'NETWORK_FAULT', performed_actions: null, created_at: base.created_at,
+  })
+  renderDetail('operator')
+  const panel = within(await screen.findByRole('tabpanel', { name: 'Работа с заявкой' }))
+  expect(await panel.findByText('Новая актуальная версия')).toBeInTheDocument()
+  expect(panel.getByText(/Другой инженер/)).toBeInTheDocument()
+  expect(panel.queryByText('Старая версия')).not.toBeInTheDocument()
+  expect(ticketApi.decisions).not.toHaveBeenCalled()
+  expect(panel.queryByRole('textbox', { name: 'Уточнить решение' })).not.toBeInTheDocument()
+})
+
+it('shows the closing decision on a closed ticket', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'CLOSED', closed_decision_id: 'closing-decision', closed_at: base.created_at })
+  vi.mocked(ticketApi.decision).mockResolvedValue({
+    id: 'closing-decision', ticket_id: ticketId, engineer_id: 'engineer-id', engineer_name: 'Инженер закрытия',
+    decision_text: 'Работа завершена', reason: 'CUSTOMER_EQUIPMENT', performed_actions: null, created_at: base.created_at,
+  })
+  renderDetail('engineer')
+  expect(await screen.findByText('Работа завершена')).toBeInTheDocument()
+  expect(ticketApi.decision).toHaveBeenCalledWith(ticketId, 'closing-decision', expect.anything())
+  expect(screen.queryByRole('heading', { name: 'Завершение заявки' })).not.toBeInTheDocument()
 })
 
 it('records a callback outcome only with an individual grant and preserves phones separately', async () => {
@@ -588,17 +640,20 @@ it('records a callback outcome only with an individual grant and preserves phone
       phone: '+000 subscriber', contacts: [], actual_address: null,
       fetched_at: base.created_at, source: 'MOCK', services: [], connections: [] },
   })
-  vi.mocked(ticketApi.decisions).mockResolvedValue({ ...empty, total: 1, items: [{
+  vi.mocked(ticketApi.decision).mockResolvedValue({
     id: 'verdict-id', ticket_id: ticketId, engineer_id: 'engineer-id',
     decision_text: 'Проверка завершена', reason: 'NETWORK_FAULT', performed_actions: null,
     created_at: base.created_at,
-  }] })
+  })
   vi.mocked(ticketApi.recordCallback).mockResolvedValue({ ...base, status: 'RESOLVED' })
   const staff = session('operator')
   renderDetail('operator', { ...staff, permissions: [...staff.permissions, 'tickets.callback'] })
-  expect(await screen.findByText('Звонящий: +000 caller')).toBeInTheDocument()
-  expect(screen.getByText('Контакт NetUP: +000 subscriber')).toBeInTheDocument()
-  expect(await screen.findByText('Вердикт: Проверка завершена')).toBeInTheDocument()
+  expect(await screen.findByText('+000 caller')).toBeInTheDocument()
+  expect(screen.getAllByText('+000 caller')).toHaveLength(1)
+  expect(screen.getByText('Дополнительный контакт: +000 subscriber')).toBeInTheDocument()
+  expect(await screen.findByText('Проверка завершена')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Контрольный звонок' })).toBeInTheDocument()
+  expect(screen.queryByRole('textbox', { name: 'Уточнить решение' })).not.toBeInTheDocument()
   fireEvent.change(screen.getByRole('textbox', { name: 'Комментарий обзвона' }), {
     target: { value: 'Синтетическая проблема осталась' },
   })

@@ -29,6 +29,28 @@ function Fact({ label, value, meta }: { label: string; value: string | number | 
   return <div className="subscriber-fact"><span>{label}</span><strong>{value === null || value === undefined || value === '' ? 'UNKNOWN' : value}</strong><Origin meta={meta} /></div>
 }
 
+function reliable(meta?: FieldOrigin) {
+  return meta?.quality === 'KNOWN' || meta?.quality === 'STALE'
+}
+
+function money(value: string | null, currency?: string | null) {
+  if (value === null) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  const formatted = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(parsed)
+  return currency ? `${formatted} ${currency}` : formatted
+}
+
+function internetBillingStatus(value?: number | null) {
+  if (value === 1) return 'Интернет включён в NetUP'
+  if (value === 0) return 'Интернет отключён в NetUP'
+  return 'Не удалось определить'
+}
+
+function systemBlockConfirmed(value?: number | null) {
+  return value === 256 || value === 768 || value === 1280 || value === 1792
+}
+
 function ServiceRow({ service }: { service: SubscriberService }) {
   return <article className="service-row"><div><span className="eyebrow">ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span><h3>{service.name || 'Услуга без названия'}</h3><span>Тариф: {service.tariff_name || 'не определён'} <Origin meta={service.field_meta.tariff_name} /></span></div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>
 }
@@ -75,9 +97,19 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
   const sourceDate = subscriber.field_meta.billing_account?.observed_at || card.fetched_at
   const canCreate = session.permissions.includes('tickets.create')
   const canReadFinance = session.permissions.includes('subscribers.finance.read')
+  const billingAccount = card.accounts.find((account) => account.account_id === subscriber.billing_account)
+  const intStatus = reliable(billingAccount?.field_meta.int_status) ? billingAccount?.int_status : null
+  const blockingCode = reliable(billingAccount?.field_meta.is_blocked) ? billingAccount?.is_blocked : null
+  const systemBlocked = systemBlockConfirmed(blockingCode)
+  const accessReason = systemBlocked ? 'Системная блокировка' : intStatus === 0 ? 'Причина отключения не установлена' : blockingCode === 16 || blockingCode === 48 ? 'Тип блокировки не определён' : null
+  const financial = card.financial_accounts.find((account) => account.account_id === subscriber.billing_account)
+  const verifiedCurrency = financial?.currency && reliable(financial.field_meta.currency) ? financial.currency : null
+  const balance = financial?.balance === null || financial?.balance === undefined ? null : Number(financial.balance)
+  const credit = financial?.credit === null || financial?.credit === undefined ? null : Number(financial.credit)
+  const available = financial && balance !== null && credit !== null && Number.isFinite(balance) && Number.isFinite(credit) && reliable(financial.field_meta.balance) && reliable(financial.field_meta.credit)
+    ? String(balance + credit) : null
   const createUrl = `/tickets/new?lookup=${encodeURIComponent(card.lookup_id)}`
   const firstConnection = card.connections[0]
-  const firstService = card.services[0]
   const connectedServiceIds = new Set(card.connections.map((connection) => connection.service_id).filter(Boolean))
   const servicesWithConnection = card.services.filter((service) => connectedServiceIds.has(service.service_id))
   const otherServices = card.services.filter((service) => !connectedServiceIds.has(service.service_id))
@@ -97,24 +129,30 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
     )}</nav>
     {tab === 'overview' && <div className="subscriber-overview">
       <section className="subscriber-panel"><div className="subscriber-section-title"><h2>Контакты и адрес</h2><Origin meta={subscriber.field_meta.full_name} /></div>
-        <div className="subscriber-facts"><Fact label="Адрес NetUP" value={formatSubscriberAddress(subscriber.actual_address, subscriber.house_number)} meta={subscriber.field_meta.actual_address} /><Fact label="E-mail" value={subscriber.email} meta={subscriber.field_meta.email} /></div>
+        <div className="subscriber-facts"><Fact label="Адрес NetUP" value={formatSubscriberAddress(subscriber.actual_address, subscriber.house_number)} meta={subscriber.field_meta.actual_address} />{subscriber.email && <Fact label="E-mail" value={subscriber.email} meta={subscriber.field_meta.email} />}</div>
         {subscriber.contacts.length ? <div className="contact-list">{subscriber.contacts.map((contact, index) => <div key={`${contact.type}-${index}`}><span>{({ mobile: 'Мобильный', work: 'Рабочий', home: 'Домашний' })[contact.type]}</span><strong>{contact.value}</strong><Origin meta={{ source: card.source as 'MOCK' | 'NETUP', observed_at: contact.observed_at, quality: contact.quality }} /></div>)}</div> : <p className="muted">Контактные номера неизвестны</p>}
         <details className="subscriber-technical"><summary>Идентификаторы и договоры</summary>
           <div className="subscriber-facts"><Fact label="ID абонента" value={subscriber.subscriber_id} meta={subscriber.field_meta.subscriber_id} /><Fact label="Счета" value={card.accounts.map((account) => account.account_id).join(', ')} /><Fact label="Договоры" value={card.contracts.map((contract) => contract.label || contract.contract_id).join(', ')} meta={subscriber.field_meta.contracts} /></div>
         </details>
       </section>
+      {canReadFinance && <section className="subscriber-panel subscriber-finance" aria-label="Финансы абонента"><div className="subscriber-section-title"><h2>Финансы</h2>{financial && <span className="subscriber-section-note">ЛС {financial.account_id}</span>}</div>
+        {financial ? <><div className="subscriber-finance__values">
+          <div className={balance !== null && balance < 0 ? 'subscriber-finance__value subscriber-finance__value--debt' : 'subscriber-finance__value'}><span>{balance !== null && balance < 0 ? 'Текущий баланс · задолженность' : 'Текущий баланс'}</span><strong>{money(financial.balance, verifiedCurrency) ?? 'UNKNOWN'}</strong><Origin meta={financial.field_meta.balance} /></div>
+          <div className="subscriber-finance__value"><span>Кредитный лимит</span><strong>{money(financial.credit, verifiedCurrency) ?? 'UNKNOWN'}</strong><Origin meta={financial.field_meta.credit} /></div>
+          <div className="subscriber-finance__value subscriber-finance__value--available"><span>Остаток с учётом кредита</span><strong>{money(available, verifiedCurrency) ?? 'Не удалось рассчитать'}</strong>{available !== null && <Origin meta={financial.field_meta.balance} />}</div>
+        </div>{!verifiedCurrency && <p className="subscriber-limitation">Валюта источника не подтверждена. Значения показаны без обозначения валюты.</p>}</> : <p className="muted">Финансовые данные источника недоступны</p>}
+      </section>}
       <section className="subscriber-panel"><div className="subscriber-section-title"><h2>Состояние доступа</h2></div>
-        <div className="subscriber-access">
-          {['Интернет', 'Системная блокировка', 'Административная блокировка', 'Пользовательская блокировка'].map((label) =>
-            <div key={label}><span>{label}</span><strong>Не удалось определить</strong></div>,
-          )}
+        <div className={`subscriber-access subscriber-access--${systemBlocked ? 'blocked' : intStatus === 1 ? 'on' : intStatus === 0 ? 'off' : 'unknown'}`}>
+          <strong>{internetBillingStatus(intStatus)} <Origin meta={billingAccount?.field_meta.int_status} /></strong>
+          {accessReason && <span>{accessReason} <Origin meta={billingAccount?.field_meta.is_blocked} /></span>}
         </div>
-        <p className="subscriber-limitation">Коды источника пока не имеют подтверждённой семантики. Фактическая доступность сети проверяется отдельно.</p>
-        <div className="subscriber-overview__summary"><strong>{firstService?.name || 'Услуги не определены'}</strong><span>{firstService?.tariff_name || 'Тариф не определён'}</span>{card.services.length > 1 && <span>Всего услуг: {card.services.length}</span>}</div>
+        <details className="subscriber-technical"><summary>Данные NetUP и качество источника</summary><div className="subscriber-facts"><Fact label="int_status" value={billingAccount?.int_status} meta={billingAccount?.field_meta.int_status} /><Fact label="is_blocked" value={billingAccount?.is_blocked} meta={billingAccount?.field_meta.is_blocked} /></div></details>
+        <p className="subscriber-limitation">Статус биллинга не является фактическим состоянием линии или оборудования. Сетевая доступность проверяется отдельно.</p>
       </section>
       <section className="subscriber-panel"><div className="subscriber-section-title"><h2>Техническая сводка</h2></div>
-        {firstConnection ? <div className="subscriber-facts subscriber-facts--three"><Fact label="Устройство" value={firstConnection.device} meta={firstConnection.field_meta.device} /><Fact label="Порт" value={firstConnection.port} meta={firstConnection.field_meta.port} /><Fact label="VLAN" value={firstConnection.vlan} meta={firstConnection.field_meta.vlan} /><Fact label="ONU" value={firstConnection.onu_id} meta={firstConnection.field_meta.onu_id} /><Fact label="IPv4 NetUP" value={configuredIpv4(firstConnection.ip_groups.flatMap((group) => group.rows)).join(', ') || 'Не определён'} /></div> : <p className="muted">Подключение неизвестно</p>}
-        {card.connections.length > 1 && <p className="muted">Подключений: {card.connections.length}. Подробности во вкладке «Подключения».</p>}
+        {firstConnection ? <div className="subscriber-facts subscriber-facts--three"><Fact label="Устройство" value={firstConnection.device} meta={firstConnection.field_meta.device} /><Fact label="Порт" value={firstConnection.port} meta={firstConnection.field_meta.port} /><Fact label="VLAN" value={firstConnection.vlan} meta={firstConnection.field_meta.vlan} /></div> : <p className="muted">Подключение неизвестно</p>}
+        {!!card.connections.length && <p className="muted">Подключений: {card.connections.length}. ONU, IP и измерения — во вкладке «Подключения».</p>}
       </section>
     </div>}
     {tab === 'services' && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Услуги в источнике</h2><span className="subscriber-section-note">Снимок на дату источника</span></div>

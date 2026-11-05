@@ -27,8 +27,8 @@ const card: SubscriberCard = {
     email: null, actual_address: 'г. Тест, ул. Примерная', house_number: '20',
     field_meta: { billing_account: stale, full_name: stale, actual_address: stale, house_number: stale, email: unknown, subscriber_id: stale, contracts: unknown },
   },
-  accounts: [{ account_id: 'synthetic-account', is_primary: true, field_meta: { account_id: stale } }],
-  financial_accounts: [{ account_id: 'synthetic-account', balance: '10.5', credit: '0', account_blocked: false, field_meta: { balance: stale, credit: stale, account_blocked: stale } }],
+  accounts: [{ account_id: 'synthetic-account', is_primary: true, int_status: 1, is_blocked: 0, field_meta: { account_id: stale, int_status: stale, is_blocked: stale } }],
+  financial_accounts: [{ account_id: 'synthetic-account', balance: '-1000', credit: '1000.01', currency_code: 810, currency: 'RUR', account_blocked: false, field_meta: { balance: stale, credit: stale, currency_code: stale, currency: stale, account_blocked: stale } }],
   contracts: [],
   services: [{ service_id: 'synthetic-service', name: 'Синтетическая услуга', account_id: 'synthetic-account', tariff_name: 'Синтетический тариф', billing_active: true, billing_blocked: false, field_meta: { tariff_name: stale, billing_active: stale } }],
   connections: [{
@@ -76,15 +76,107 @@ beforeEach(() => {
 it('shows a compact overview and preserves source time, contacts and linked action', async () => {
   renderPage('operator')
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
-  expect(screen.getByText('Синтетический тариф')).toBeInTheDocument()
+  expect(screen.queryByText('Синтетический тариф')).not.toBeInTheDocument()
   expect(screen.getByText('synthetic-phone-a')).toBeInTheDocument()
   expect(screen.getByText('synthetic-phone-b')).toBeInTheDocument()
-  expect(screen.getByText('192.0.2.10/32')).toBeInTheDocument()
+  expect(screen.getByText(/Подключений: 1/)).toBeInTheDocument()
   expect(screen.getByText('г. Тест, ул. Примерная, д. 20')).toBeInTheDocument()
-  expect(screen.getAllByText('Не удалось определить')).toHaveLength(4)
-  expect(screen.queryByText('10.5')).not.toBeInTheDocument()
+  expect(screen.getByText('Интернет включён в NetUP')).toBeInTheDocument()
+  expect(screen.queryByText(/Блокировка счёта|Системная блокировка не обнаружена/)).not.toBeInTheDocument()
+  expect(screen.getByText('Текущий баланс · задолженность')).toBeInTheDocument()
+  expect(screen.getByText('-1 000,00 RUR')).toBeInTheDocument()
+  expect(screen.getByText('1 000,01 RUR')).toBeInTheDocument()
+  expect(screen.getByText('0,01 RUR')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Создать заявку/ })).toHaveAttribute('href', `/tickets/new?lookup=${card.lookup_id}`)
   expect(ticketApi.subscriberTickets).toHaveBeenCalledWith(card.lookup_id, 1, expect.any(AbortSignal))
+})
+
+it.each([
+  [0, null],
+  [16, 'Тип блокировки не определён'],
+  [48, 'Тип блокировки не определён'],
+  [256, 'Системная блокировка'],
+  [768, 'Системная блокировка'],
+  [1280, 'Системная блокировка'],
+  [1792, 'Системная блокировка'],
+] as const)('shows confirmed blocking code %s without inventing its class', async (isBlocked, expected) => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    accounts: [{ ...card.accounts[0]!, is_blocked: isBlocked }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText('Интернет включён в NetUP')).toBeInTheDocument()
+  if (expected) expect(screen.getByText(expected)).toBeInTheDocument()
+  else expect(screen.queryByText(/блокировка|Причина отключения/i)).not.toBeInTheDocument()
+  expect(screen.queryByText('Административная блокировка')).not.toBeInTheDocument()
+  expect(screen.queryByText('Пользовательская блокировка')).not.toBeInTheDocument()
+})
+
+it.each([
+  [1, stale, 'Интернет включён в NetUP'],
+  [0, stale, 'Интернет отключён в NetUP'],
+  [null, unknown, 'Не удалось определить'],
+  [1, unknown, 'Не удалось определить'],
+] as const)('shows billing internet status %s according to source quality', async (intStatus, meta, expected) => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    accounts: [{
+      ...card.accounts[0]!, int_status: intStatus,
+      field_meta: { ...card.accounts[0]!.field_meta, int_status: meta },
+    }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText(expected)).toBeInTheDocument()
+})
+
+it('does not attribute disabled internet with code 0 to a system block', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    accounts: [{ ...card.accounts[0]!, int_status: 0, is_blocked: 0 }],
+    financial_accounts: [{ ...card.financial_accounts[0]!, balance: '700' }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText('Интернет отключён в NetUP')).toBeInTheDocument()
+  expect(screen.getByText('Причина отключения не установлена')).toBeInTheDocument()
+  expect(screen.queryByText('Системная блокировка')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByText('Данные NetUP и качество источника'))
+  expect(screen.getByText('int_status')).toBeInTheDocument()
+  expect(screen.getByText('is_blocked')).toBeInTheDocument()
+  expect(screen.getByText('700,00 RUR')).toBeInTheDocument()
+})
+
+it('names a system block only when its NetUP code confirms it', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    accounts: [{ ...card.accounts[0]!, int_status: 0, is_blocked: 256 }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText('Интернет отключён в NetUP')).toBeInTheDocument()
+  expect(screen.getByText('Системная блокировка')).toBeInTheDocument()
+  expect(screen.queryByText('Причина отключения не установлена')).not.toBeInTheDocument()
+})
+
+it('shows an unknown cause for disabled internet with unclassified codes', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    accounts: [{ ...card.accounts[0]!, int_status: 0, is_blocked: 48 }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText('Причина отключения не установлена')).toBeInTheDocument()
+  expect(screen.queryByText('Системная блокировка')).not.toBeInTheDocument()
+})
+
+it('keeps unknown blocking data out of the main summary', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    accounts: [{
+      ...card.accounts[0]!, is_blocked: null,
+      field_meta: { ...card.accounts[0]!.field_meta, is_blocked: unknown },
+    }],
+  })
+  renderPage('operator')
+  expect(await screen.findByText('Интернет включён в NetUP')).toBeInTheDocument()
+  expect(screen.queryByText('Системная блокировка')).not.toBeInTheDocument()
 })
 
 it('keeps source details accessible without repeated confirmed labels', async () => {
@@ -107,7 +199,22 @@ it('hides finance from engineer and searches without account number in browser U
   await waitFor(() => expect(ticketApi.lookup).toHaveBeenCalledWith('synthetic-account', expect.anything()))
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Платежи' })).not.toBeInTheDocument()
-  expect(screen.queryByText('10.5')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Финансы абонента')).not.toBeInTheDocument()
+})
+
+it('does not invent currency or calculate an unreliable available balance', async () => {
+  vi.mocked(ticketApi.getLookup).mockResolvedValue({
+    ...card,
+    financial_accounts: [{
+      ...card.financial_accounts[0]!, currency_code: null, currency: null,
+      field_meta: { ...card.financial_accounts[0]!.field_meta, credit: unknown, currency: unknown },
+    }],
+  })
+  renderPage('operator')
+  expect(await screen.findByLabelText('Финансы абонента')).toBeInTheDocument()
+  expect(screen.getByText('Валюта источника не подтверждена. Значения показаны без обозначения валюты.')).toBeInTheDocument()
+  expect(screen.getByText('Не удалось рассчитать')).toBeInTheDocument()
+  expect(screen.queryByText(/RUR/)).not.toBeInTheDocument()
 })
 
 it('runs monitoring only for engineer and shows unavailable data without a made-up state', async () => {
@@ -124,13 +231,14 @@ it('runs monitoring only for engineer and shows unavailable data without a made-
   expect(await screen.findByText('Нет подтверждённого сопоставления с мониторингом.')).toBeInTheDocument()
 })
 
-it('keeps multiple services and detailed IP rows accessible without exposing unverified money', async () => {
+it('keeps multiple services and detailed IP rows accessible', async () => {
   vi.mocked(ticketApi.getLookup).mockResolvedValue({
     ...card,
     services: [...card.services, { ...card.services[0]!, service_id: 'extra-service', name: 'Внешний IP' }],
   })
   renderPage('operator')
-  expect(await screen.findByText('Всего услуг: 2')).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  expect(screen.queryByText('Всего услуг: 2')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
   expect(screen.getByText('Внешний IP')).toBeInTheDocument()
   expect(screen.getByText('Со связанным подключением')).toBeInTheDocument()

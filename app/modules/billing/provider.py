@@ -43,6 +43,8 @@ class FinancialAccount(BaseModel):
     account_id: str = Field(min_length=1, max_length=100)
     balance: Decimal | None = None
     credit: Decimal | None = None
+    currency_code: int | None = None
+    currency: str | None = Field(default=None, max_length=16)
     account_blocked: bool | None = None
     field_meta: dict[str, FieldOrigin] = Field(default_factory=dict)
 
@@ -52,6 +54,8 @@ class BillingAccount(BaseModel):
 
     account_id: str = Field(min_length=1, max_length=100)
     is_primary: bool
+    int_status: int | None = None
+    is_blocked: int | None = None
     field_meta: dict[str, FieldOrigin] = Field(default_factory=dict)
 
 

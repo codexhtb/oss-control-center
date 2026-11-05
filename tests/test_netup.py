@@ -186,7 +186,9 @@ def test_tariff_and_finance_remain_separate_billing_observations() -> None:
     raw = NetupSubscriber(
         **{
             **raw.__dict__,
-            "accounts": (NetupAccount(202, True, 12.5, 1.0, 1),),
+            "currency_code": 810,
+            "currency": "RUR",
+            "accounts": (NetupAccount(202, True, 12.5, 1.0, 256, 1),),
             "services": (
                 NetupService(
                     301,
@@ -205,9 +207,56 @@ def test_tariff_and_finance_remain_separate_billing_observations() -> None:
     assert card.services[0].billing_active is True
     assert card.services[0].billing_blocked is False
     assert card.financial_accounts[0].balance == 12.5
+    assert card.financial_accounts[0].currency_code == 810
+    assert card.financial_accounts[0].currency == "RUR"
+    assert card.financial_accounts[0].field_meta["currency"].source == "NETUP"
     assert card.financial_accounts[0].account_blocked is True
+    assert card.accounts[0].int_status == 1
+    assert card.accounts[0].is_blocked == 256
+    assert card.accounts[0].field_meta["int_status"].quality == DataQuality.KNOWN
+    assert card.accounts[0].field_meta["is_blocked"].quality == DataQuality.KNOWN
+    serialized_account = card.model_dump(mode="json")["accounts"][0]
+    assert serialized_account["int_status"] == 1
+    assert serialized_account["is_blocked"] == 256
     assert card.connections[0].access_type == AccessType.UNKNOWN
     assert card.financial_accounts[0].field_meta["balance"].source == "NETUP"
+
+
+@pytest.mark.parametrize("is_blocked", [0, 16, 48, 256, 768, 1280, 1792])
+def test_normalizer_preserves_raw_account_blocking_code(is_blocked: int) -> None:
+    raw = synthetic_subscriber()
+    raw = NetupSubscriber(
+        **{
+            **raw.__dict__,
+            "accounts": (NetupAccount(202, True, is_blocked=is_blocked),),
+            "services": (),
+        }
+    )
+
+    account = normalize_netup(raw).accounts[0]
+    assert account.is_blocked == is_blocked
+    assert account.field_meta["is_blocked"].quality == DataQuality.KNOWN
+
+
+@pytest.mark.parametrize(
+    ("int_status", "quality"),
+    [(0, DataQuality.KNOWN), (1, DataQuality.KNOWN), (None, DataQuality.UNKNOWN)],
+)
+def test_normalizer_preserves_billing_internet_status(
+    int_status: int | None, quality: DataQuality
+) -> None:
+    raw = synthetic_subscriber()
+    raw = NetupSubscriber(
+        **{
+            **raw.__dict__,
+            "accounts": (NetupAccount(202, True, int_status=int_status),),
+            "services": (),
+        }
+    )
+
+    account = normalize_netup(raw).accounts[0]
+    assert account.int_status == int_status
+    assert account.field_meta["int_status"].quality == quality
 
 
 def test_multiple_topologies_remain_conflict_without_losing_rows() -> None:
@@ -433,8 +482,8 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
                 ]
             elif sql.startswith("SELECT DISTINCT a.id,a.balance"):
                 self.rows = [
-                    {"id": 202, "balance": 12.5, "credit": 0.0, "is_blocked": 1},
-                    {"id": 203, "balance": 0.0, "credit": 0.0, "is_blocked": 0},
+                    {"id": 202, "balance": 12.5, "credit": 0.0, "is_blocked": 256, "int_status": 1},
+                    {"id": 203, "balance": 0.0, "credit": 0.0, "is_blocked": 0, "int_status": 0},
                 ]
             elif sql.startswith("SELECT sl.id"):
                 assert params[1:3] == (202, 203)
@@ -509,6 +558,8 @@ def test_repository_loads_multiple_accounts_links_and_group_rows(
     raw = NetupRepository(lambda: connection).lookup_by_account("202")
     assert raw is not None
     assert len(raw.accounts) == 2 and len(raw.services) == 3
+    assert raw.accounts[0].int_status == 1 and raw.accounts[0].is_blocked == 256
+    assert raw.accounts[1].int_status == 0 and raw.accounts[1].is_blocked == 0
     assert raw.services[2].service_type == 99 and not raw.services[2].groups
     assert len(raw.services[0].groups) == 1
     assert len(raw.services[0].groups[0].rows) == 2

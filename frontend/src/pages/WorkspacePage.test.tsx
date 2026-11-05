@@ -34,7 +34,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.recentEvents).mockResolvedValue({ items: [], page: 1, size: 8, total: 0 })
 })
 
-it('takes dashboard totals and recent events from ServiceDesk API', async () => {
+it('shows task queues for a multi-duty employee without recent events', async () => {
   vi.mocked(ticketApi.list).mockImplementation(async (filters) => ({
     items: [], page: 1, size: filters.size, total: filters.unassigned ? 2 : filters.status === 'OPEN' ? 4 : 1,
   }))
@@ -43,10 +43,12 @@ it('takes dashboard totals and recent events from ServiceDesk API', async () => 
     ticket_number: 12, event_type: 'ticket_created', actor_id: null, ticket_version: 1,
     occurred_at: '2026-01-01T00:00:00Z',
   }], page: 1, size: 8, total: 1 })
-  renderWorkspace(user)
-  expect(await screen.findByText('Заявка создана')).toBeInTheDocument()
+  renderWorkspace({ ...user, permissions: [...user.permissions, 'tickets.start', 'tickets.resolve', 'tickets.callback', 'tickets.create'] })
   await waitFor(() => expect(document.querySelector('a.metric-card--accent')).toHaveTextContent('2'))
   expect(ticketApi.list).toHaveBeenCalledWith(expect.objectContaining({ unassigned: true }), expect.anything())
+  expect(screen.getByRole('link', { name: /ОЖИДАЮТ ОБЗВОНА/ })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /НОВОЕ ОБРАЩЕНИЕ/ })).toBeInTheDocument()
+  expect(ticketApi.recentEvents).not.toHaveBeenCalled()
 })
 
 it('does not request ServiceDesk information for technical admin', async () => {

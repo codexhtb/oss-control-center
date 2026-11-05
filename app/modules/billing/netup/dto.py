@@ -11,6 +11,7 @@ class NetupAccount:
     balance: float | None = None
     credit: float | None = None
     is_blocked: int | None = None
+    int_status: int | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -69,3 +70,5 @@ class NetupSubscriber:
     fetched_at: datetime
     source_as_of: datetime | None = None
     building: str | None = None
+    currency_code: int | None = None
+    currency: str | None = None

@@ -56,6 +56,8 @@ export interface Ticket {
   last_callback_outcome?: 'CONFIRMED' | 'STILL_BROKEN' | 'NO_ANSWER' | null
   last_callback_at?: string | null
   field_report_pending?: boolean
+  resolution_preview?: string | null
+  resolution_reason?: ResolutionReason | null
 }
 
 export interface SubscriberConnection {
@@ -165,8 +167,8 @@ export interface SubscriberCard {
     subscriber_id: string | null
     field_meta: Record<string, FieldOrigin>
   }
-  accounts: Array<{ account_id: string; is_primary: boolean; field_meta: Record<string, FieldOrigin> }>
-  financial_accounts: Array<{ account_id: string; balance: string | null; credit: string | null; account_blocked: boolean | null; field_meta: Record<string, FieldOrigin> }>
+  accounts: Array<{ account_id: string; is_primary: boolean; int_status?: number | null; is_blocked?: number | null; field_meta: Record<string, FieldOrigin> }>
+  financial_accounts: Array<{ account_id: string; balance: string | null; credit: string | null; currency_code?: number | null; currency?: string | null; account_blocked: boolean | null; field_meta: Record<string, FieldOrigin> }>
   contracts: Array<{ contract_id: string; label: string | null; field_meta: Record<string, FieldOrigin> }>
   services: SubscriberService[]
   connections: SubscriberConnectionCard[]

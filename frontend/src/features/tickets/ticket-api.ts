@@ -78,6 +78,8 @@ export const ticketApi = {
     apiRequest<Page<Diagnostic>>(withQuery(`${ticketPath(id)}/manual-diagnostics`, { page, size: 20 }), { signal }),
   decisions: (id: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<Decision>>(withQuery(`${ticketPath(id)}/decisions`, { page, size: 20 }), { signal }),
+  decision: (id: string, decisionId: string, signal?: AbortSignal) =>
+    apiRequest<Decision>(`${ticketPath(id)}/decisions/${encodeURIComponent(decisionId)}`, { signal }),
   callbacks: (id: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<TicketCallback>>(withQuery(`${ticketPath(id)}/callbacks`, { page, size: 20 }), { signal }),
   recordCallback: (id: string, outcome: CallbackOutcome, comment: string | null, version: number, requestId: string) =>

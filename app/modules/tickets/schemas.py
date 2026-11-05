@@ -358,6 +358,8 @@ class TicketListView(TicketView):
     last_callback_outcome: str | None = None
     last_callback_at: datetime | None = None
     field_report_pending: bool = False
+    resolution_preview: str | None = None
+    resolution_reason: ResolutionReason | None = None
 
 
 class TicketDetail(TicketView):

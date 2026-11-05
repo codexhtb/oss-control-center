@@ -18,6 +18,10 @@ const callbackLabels: Record<CallbackOutcome, string> = {
 }
 
 type TicketTab = 'work' | 'diagnostics' | 'subscriber' | 'history'
+const phoneKey = (phone: string) => {
+  const digits = phone.replace(/\D/g, '')
+  return digits.length >= 5 ? digits : phone.trim().toLowerCase()
+}
 const ticketTabs: { id: TicketTab; label: string }[] = [
   { id: 'work', label: 'Работа с заявкой' },
   { id: 'diagnostics', label: 'Диагностика' },
@@ -63,6 +67,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const callbackRequest = useRef({ id: crypto.randomUUID(), outcome: '' })
   const [comment, setComment] = useState('')
   const [decisionText, setDecisionText] = useState('')
+  const [revisingDecision, setRevisingDecision] = useState(false)
   const [decisionReason, setDecisionReason] = useState<ResolutionReason>('NOT_ESTABLISHED')
   const [fieldReason, setFieldReason] = useState('')
   const [visitAddress, setVisitAddress] = useState('')
@@ -84,7 +89,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   }
   const canAssign = session.permissions.includes('tickets.assign')
   const canStart = session.permissions.includes('tickets.start')
-  const canClaim = canStart && session.user.role === 'engineer'
+  const canClaim = canStart && session.permissions.includes('tickets.resolve')
   const canReadDiagnostics = session.permissions.includes('diagnostics.read')
   const canDecide = session.permissions.includes('tickets.resolve')
   const canClose = session.permissions.includes('tickets.close')
@@ -96,10 +101,14 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const related = !!id && ticketQuery.isSuccess
   const resolved = ticketQuery.data?.status === 'RESOLVED'
   const linked = ticketQuery.data?.ticket_type === 'SUBSCRIBER_LINKED'
+  const currentDecisionId = ticketQuery.data?.status === 'CLOSED'
+    ? ticketQuery.data.closed_decision_id || ticketQuery.data.resolved_decision_id
+    : ticketQuery.data?.resolved_decision_id
   const comments = useQuery({ queryKey: ['ticket-comments', id, commentPage], queryFn: ({ signal }) => ticketApi.comments(id, commentPage, signal), enabled: related })
   const history = useQuery({ queryKey: ['ticket-history', id, historyPage], queryFn: ({ signal }) => ticketApi.history(id, historyPage, signal), enabled: related && activeTab === 'history' })
   const diagnostics = useQuery({ queryKey: ['ticket-diagnostics', id, diagnosticPage], queryFn: ({ signal }) => ticketApi.diagnostics(id, diagnosticPage, signal), enabled: related && canReadDiagnostics && activeTab === 'diagnostics' })
-  const decisions = useQuery({ queryKey: ['ticket-decisions', id, decisionPage], queryFn: ({ signal }) => ticketApi.decisions(id, decisionPage, signal), enabled: related && (activeTab === 'history' || (resolved && linked && activeTab === 'work')) })
+  const decisions = useQuery({ queryKey: ['ticket-decisions', id, decisionPage], queryFn: ({ signal }) => ticketApi.decisions(id, decisionPage, signal), enabled: related && activeTab === 'history' })
+  const currentDecision = useQuery({ queryKey: ['ticket-decisions', id, 'current', currentDecisionId], queryFn: ({ signal }) => ticketApi.decision(id, currentDecisionId!, signal), enabled: related && activeTab === 'work' && !!currentDecisionId })
   const callbacks = useQuery({ queryKey: ['ticket-callbacks', id, callbackPage], queryFn: ({ signal }) => ticketApi.callbacks(id, callbackPage, signal), enabled: related && linked && (activeTab === 'history' || (resolved && activeTab === 'work')) })
   const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
   const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork })
@@ -161,6 +170,16 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   if (ticketQuery.isPending) return <div className="desk-state" role="status">Открываем заявку…</div>
   if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to={listDestination}><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{errorText(ticketQuery.error)}</Notice></div>
   const ticket = ticketQuery.data
+  const primaryPhone = ticket.caller_phone || ticket.subscriber?.phone || null
+  const additionalPhones = [
+    ticket.subscriber?.phone,
+    ...(ticket.subscriber?.contacts?.map((contact) => contact.value) || []),
+  ]
+    .filter((phone): phone is string => !!phone)
+    .filter((phone, index, phones) =>
+      phoneKey(phone) !== phoneKey(primaryPhone || '') &&
+      phones.findIndex((item) => phoneKey(item) === phoneKey(phone)) === index,
+    )
   const canEdit = ticket.status !== 'CLOSED' && (session.permissions.includes('tickets.edit.all') || (session.permissions.includes('tickets.edit.own') && ticket.created_by === session.user.id))
   const canDelete = session.permissions.includes('tickets.delete.all') || (session.permissions.includes('tickets.delete.own') && ticket.created_by === session.user.id)
   const open = ticket.status !== 'CLOSED'
@@ -214,6 +233,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
       await ticketApi.addDecision(id, decisionText.trim(), decisionReason)
     }, () => {
       setDecisionText('')
+      setRevisingDecision(false)
       setDecisionPage(Math.ceil(((decisions.data?.total || 0) + 1) / 20))
     })
   }
@@ -243,7 +263,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
           </> : <>
           <div><dt>{ticket.ticket_type === 'MANUAL' ? 'Обратившийся' : 'Абонент'}</dt><dd>{ticket.ticket_type === 'MANUAL' ? ticket.caller_full_name || 'Не указан' : ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
           <div><dt>Лицевой счёт</dt><dd>{ticket.account_no || '—'}</dd></div>
-          <div><dt>Телефон</dt><dd>{ticket.caller_phone || ticket.subscriber?.phone || '—'}</dd></div>
+          <div><dt>Телефон</dt><dd>{primaryPhone || '—'}</dd></div>
           <div><dt>Город</dt><dd>{ticket.city || '—'}</dd></div>
           <div><dt>Адрес</dt><dd>{formatSubscriberAddress(ticket.subscriber?.actual_address, ticket.subscriber?.house_number) || '—'}</dd></div>
           <div><dt>Категория</dt><dd>{ticket.category_name || '—'}</dd></div>
@@ -268,7 +288,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               <div><dt>Исполнитель</dt><dd>{ticket.assigned_engineer_id ? assignedName || 'Имя не указано' : 'Не назначен'}</dd></div>
               <div><dt>Обновлена</dt><dd><time dateTime={ticket.updated_at}>{formatDate(ticket.updated_at)}</time></dd></div>
             </dl>
-            {ticket.status === 'RESOLVED' && <p className="rail-note">{ticket.ticket_type === 'SUBSCRIBER_LINKED' ? 'Ожидает подтверждения абонента. ' : 'Готова к закрытию без обзвона. '}Инженерное решение сохранено{ticket.resolved_at ? ` ${formatDate(ticket.resolved_at)}` : ''}.</p>}
+            {ticket.status === 'RESOLVED' && <p className="rail-note">{ticket.ticket_type === 'SUBSCRIBER_LINKED' ? 'Решение инженера сохранено. Следующий шаг — контрольный звонок.' : 'Решение инженера сохранено. Следующий шаг — закрытие без обзвона.'}</p>}
           <div className="ticket-work-toolbar">
               {activeWork && canClaim && ticket.assigned_engineer_id === null && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('claim', () => ticketApi.claim(id, ticket.version))}>Взять в работу <ArrowRight size={15} /></Button>}
               {activeWork && canClaim && ticket.assigned_engineer_id === session.user.id && <Button variant="secondary" disabled={!!busy} onClick={() => void runAction('release', () => ticketApi.release(id, ticket.version))}>Освободить заявку</Button>}
@@ -283,12 +303,13 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         </section>
         <div className="ticket-work-grid">
           <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Решение инженера</h2></div>
+            {currentDecisionId && (currentDecision.isPending ? <p className="muted">Загружаем актуальное решение…</p> : currentDecision.isError ? <Notice tone="error">Не удалось загрузить актуальное решение: {errorText(currentDecision.error)}</Notice> : currentDecision.data && <article className="ticket-current-decision" aria-label="Актуальное решение инженера"><div><strong>{currentDecision.data.reason ? resolutionReasonLabel[currentDecision.data.reason] : 'Причина не указана в исторической записи'}</strong><span>{currentDecision.data.engineer_name || ticket.resolved_by_name || 'Инженер'} · <time dateTime={currentDecision.data.created_at}>{formatDate(currentDecision.data.created_at)}</time></span></div><p>{currentDecision.data.decision_text}</p></article>)}
               {inProgress && canWriteVerdict && <form className="ticket-action-form" onSubmit={submitResolve}><label className="field"><span>Причина решения</span><select aria-label="Причина решения" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value as ResolutionReason)}>{Object.entries(resolutionReasonLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Решение инженера</span><textarea ref={decisionInput} aria-label="Решение инженера" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} required /></label><Button type="submit" variant="primary" disabled={!decisionText.trim() || !!busy}>Решено</Button></form>}
-            {canWriteVerdict && ticket.status === 'RESOLVED' && <form className="inline-form" onSubmit={submitDecision}><label className="field"><span>Причина решения</span><select aria-label="Причина решения" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value as ResolutionReason)}>{Object.entries(resolutionReasonLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Уточнить решение</span><textarea aria-label="Уточнить решение" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} /></label><Button type="submit" disabled={!decisionText.trim() || !!busy}>Сохранить новую версию</Button></form>}
+            {canWriteVerdict && ticket.status === 'RESOLVED' && <><Button variant="quiet" onClick={() => setRevisingDecision(!revisingDecision)} aria-expanded={revisingDecision}>Уточнить решение</Button>{revisingDecision && <form className="inline-form" onSubmit={submitDecision}><label className="field"><span>Причина решения</span><select aria-label="Причина решения" value={decisionReason} onChange={(event) => setDecisionReason(event.target.value as ResolutionReason)}>{Object.entries(resolutionReasonLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field"><span>Новая версия решения</span><textarea aria-label="Новая версия решения" value={decisionText} maxLength={10000} rows={3} onChange={(event) => setDecisionText(event.target.value)} required /></label><Button type="submit" disabled={!decisionText.trim() || !!busy}>Сохранить новую версию</Button></form>}</>}
             {ticket.status === 'OPEN' && <p className="empty-facts">Решение доступно после начала работы.</p>}
             {inProgress && !canWriteVerdict && <p className="empty-facts">Решение вводит назначенный инженер.</p>}
-            {ticket.status === 'CLOSED' && <p className="empty-facts">Решение сохранено в истории заявки.</p>}
-            {ticket.status === 'RESOLVED' && !canWriteVerdict && <p className="empty-facts">Решение сохранено. История версий — во вкладке «История».</p>}
+            {ticket.status === 'CLOSED' && !currentDecisionId && <p className="empty-facts">Для этой исторической заявки версия решения не сохранена.</p>}
+            {ticket.status === 'CLOSED' && <p className="rail-note">Заявка закрыта {ticket.closed_at ? formatDate(ticket.closed_at) : ''}.</p>}
           </section>
               {(inProgress || !!fieldHandoff.data?.handoff) && canFieldWork && <section className="detail-panel ticket-work-panel ticket-work-panel--field"><div className="detail-panel__heading"><h2>Выездные работы</h2></div><div className="ticket-action-form">
                 {inProgress && <><label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={2000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label>
@@ -326,15 +347,13 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                 </div>}
               </div></section>}
         </div>
-        {(ticket.status === 'RESOLVED' || ticket.status === 'CLOSED') && <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Завершение заявки</h2></div>
-          {ticket.status === 'RESOLVED' && ticket.ticket_type === 'SUBSCRIBER_LINKED' && <div className="subscriber-summary"><strong>{ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Абонент не указан'}</strong><span>ЛС {ticket.account_no}</span><span>Звонящий: {ticket.caller_phone || 'Номер не указан'}</span>{ticket.subscriber?.phone && <span>Контакт NetUP: {ticket.subscriber.phone}</span>}{ticket.subscriber?.contacts?.map((contact, index) => <span key={`${contact.value}-${index}`}>Дополнительный контакт ({contact.type}, {contact.source}): {contact.value}</span>)}<span>Решил: {ticket.resolved_by_name || 'Инженер'} · {ticket.resolved_at ? formatDate(ticket.resolved_at) : 'время не указано'}</span>{decisions.data?.items.find((item) => item.id === ticket.resolved_decision_id) && <p>Вердикт: {decisions.data.items.find((item) => item.id === ticket.resolved_decision_id)?.decision_text}</p>}</div>}
+        {ticket.status === 'RESOLVED' && <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>{ticket.ticket_type === 'SUBSCRIBER_LINKED' ? 'Контрольный звонок' : 'Закрытие заявки'}</h2><span>Следующий шаг после решения инженера</span></div>
+          {ticket.ticket_type === 'SUBSCRIBER_LINKED' && additionalPhones.length > 0 && <div className="subscriber-summary">{additionalPhones.map((phone) => <span key={phoneKey(phone)}>Дополнительный контакт: {phone}</span>)}</div>}
               {ticket.status === 'RESOLVED' && ticket.ticket_type === 'SUBSCRIBER_LINKED' && canCallback && <div className="ticket-action-form"><strong>Результат звонка</strong><label className="field"><span>Комментарий (обязателен, если проблема осталась)</span><textarea aria-label="Комментарий обзвона" value={callbackComment} maxLength={2000} rows={2} onChange={(event) => setCallbackComment(event.target.value)} /></label><div className="ticket-callback-actions"><Button variant="primary" disabled={!!busy} onClick={() => submitCallback('CONFIRMED')}>Проблема устранена</Button><Button disabled={!!busy || !callbackComment.trim()} onClick={() => submitCallback('STILL_BROKEN')}>Проблема осталась</Button><Button variant="quiet" disabled={!!busy} onClick={() => submitCallback('NO_ANSWER')}>Не дозвонилась</Button></div></div>}
               {ticket.status === 'RESOLVED' && ticket.ticket_type !== 'SUBSCRIBER_LINKED' && canClose && <div className="ticket-action-form"><strong>Закрыть без обзвона</strong><label className="field"><span>Причина закрытия без звонка</span><textarea aria-label="Причина закрытия без звонка" value={closeReason} maxLength={1000} rows={2} onChange={(event) => setCloseReason(event.target.value)} /></label><Button disabled={!!busy || !closeReason.trim()} onClick={() => void runAction('close', () => ticketApi.close(id, ticket.resolved_decision_id!, ticket.version, closeReason.trim()))}>Закрыть заявку</Button></div>}
-            {ticket.status === 'CLOSED' && <p className="rail-note">Закрыта {ticket.closed_at ? formatDate(ticket.closed_at) : ''}. История доступна для просмотра.</p>}
         </section>}
 
         <section className="detail-panel"><div className="detail-panel__heading"><h2>Описание</h2><span>Создана {formatDate(ticket.created_at)}</span></div>
-            {(ticket.category_name || ticket.caller_phone) && <div className="subscriber-summary">{ticket.category_name && <span>Категория при создании: <strong>{ticket.category_name}</strong></span>}{ticket.caller_phone && <span>Телефон входящего звонка: <strong>{ticket.caller_phone}</strong></span>}</div>}
             {editing ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void runAction('edit', () => ticketApi.edit(id, ticket.version, editSubject.trim(), editDescription.trim()), () => setEditing(false)) }}>
               {ticket.ticket_type !== 'ERRONEOUS_PAYMENT' && <label className="field"><span>Тема</span><input value={editSubject} maxLength={160} onChange={(event) => setEditSubject(event.target.value)} required /></label>}
               <label className="field"><span>{ticket.ticket_type === 'ERRONEOUS_PAYMENT' ? 'Комментарий' : 'Описание'}{(ticket.ticket_type === 'MANUAL' || ticket.ticket_type === 'ERRONEOUS_PAYMENT') && ' (необязательно)'}</span><textarea value={editDescription} maxLength={10000} rows={5} onChange={(event) => setEditDescription(event.target.value)} required={ticket.ticket_type !== 'MANUAL' && ticket.ticket_type !== 'ERRONEOUS_PAYMENT'} /></label>

@@ -75,6 +75,7 @@ it('loads the callback queue from the server and shows call history summary', as
       subscriber_name: 'Синтетический абонент', account_no: '0001499',
       caller_phone: '+000 000', category_name: 'Нет интернета',
       resolved_at: ticket.created_at, resolved_by_name: 'Инженер теста',
+      resolution_reason: 'NETWORK_FAULT', resolution_preview: 'Заменён повреждённый участок',
       callback_count: 2, last_callback_outcome: 'NO_ANSWER',
       last_callback_at: ticket.created_at,
     }] : [], page: filters.page, size: filters.size,
@@ -86,9 +87,11 @@ it('loads the callback queue from the server and shows call history summary', as
     expect.objectContaining({ callback_queue: true, q: 'линия', size: 20 }),
     expect.anything(),
   ))
-  expect(await screen.findByText('2 попыток')).toBeInTheDocument()
+  expect(await screen.findByText('Попыток: 2')).toBeInTheDocument()
   expect(screen.getByText('Звонящий: +000 000')).toBeInTheDocument()
   expect(screen.getByText('Инженер теста')).toBeInTheDocument()
+  expect(screen.getByText('Заменён повреждённый участок')).toBeInTheDocument()
+  expect(screen.getByText(/Ожидает \d+ д/)).toBeInTheDocument()
 })
 
 it('shows verified work duration without exposing an assignee UUID', async () => {

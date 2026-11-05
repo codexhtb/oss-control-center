@@ -120,7 +120,10 @@ class NetupRepository:
         users = select(
             cursor,
             "SELECT id,basic_account,full_name,is_juridical,mobile_telephone,"
-            "work_telephone,home_telephone,email,actual_address,building "
+            "work_telephone,home_telephone,email,actual_address,building,binded_currency_code,"
+            "(SELECT currency_brief_name FROM currency_list "
+            "WHERE id=users.binded_currency_code AND is_deleted=0 LIMIT 1) "
+            "AS currency_brief_name "
             "FROM users WHERE id=%s AND is_deleted=0",
             (user_id,),
             deadline,
@@ -130,7 +133,8 @@ class NetupRepository:
         user = users[0]
         account_rows = select(
             cursor,
-            "SELECT DISTINCT a.id,a.balance,a.credit,a.is_blocked FROM users_accounts ua "
+            "SELECT DISTINCT a.id,a.balance,a.credit,a.is_blocked,a.int_status "
+            "FROM users_accounts ua "
             "JOIN accounts a ON a.id=ua.account_id AND a.is_deleted=0 "
             "WHERE ua.uid=%s AND ua.is_deleted=0 ORDER BY a.id LIMIT 51",
             (user_id,),
@@ -145,6 +149,7 @@ class NetupRepository:
                 row["balance"],
                 row["credit"],
                 row["is_blocked"],
+                row["int_status"],
             )
             for row in account_rows
         )
@@ -317,4 +322,6 @@ class NetupRepository:
             fetched_at=datetime.now(UTC),
             source_as_of=self._lab_as_of_utc,
             building=user["building"],
+            currency_code=user.get("binded_currency_code"),
+            currency=user.get("currency_brief_name"),
         )

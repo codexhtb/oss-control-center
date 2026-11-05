@@ -698,8 +698,15 @@ def assign_engineer(
     engineer = db.execute(
         select(User).where(User.id == engineer_id).with_for_update()
     ).scalar_one_or_none()
-    if engineer is None or not engineer.is_active or engineer.role != Role.ENGINEER:
-        raise ApiError(422, "invalid_engineer", "Assignee must be an active engineer")
+    if engineer is None or not engineer.is_active or not all(
+        has_permission(db, engineer, permission)
+        for permission in (
+            Permission.TICKET_READ,
+            Permission.TICKET_START,
+            Permission.TICKET_DECISION,
+        )
+    ):
+        raise ApiError(422, "invalid_engineer", "Assignee must be allowed to work on tickets")
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
     if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
@@ -726,8 +733,8 @@ def claim_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | No
     if version is None:
         raise ApiError(428, "version_required", "If-Match ticket version is required")
     actor = _actor(db, actor_id, Permission.TICKET_START)
-    if actor.role != Role.ENGINEER:
-        raise ApiError(403, "forbidden", "Only an engineer can claim a ticket")
+    if not has_permission(db, actor, Permission.TICKET_DECISION):
+        raise ApiError(403, "forbidden", "Permission denied")
     ticket = _ticket(db, ticket_id, lock=True)
     if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
         raise ApiError(409, "invalid_transition", "Only active work can be claimed")
@@ -755,8 +762,8 @@ def claim_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | No
 
 def release_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | None) -> Ticket:
     actor = _actor(db, actor_id, Permission.TICKET_START)
-    if actor.role != Role.ENGINEER:
-        raise ApiError(403, "forbidden", "Only an engineer can release a ticket")
+    if not has_permission(db, actor, Permission.TICKET_DECISION):
+        raise ApiError(403, "forbidden", "Permission denied")
     ticket = _ticket(db, ticket_id, lock=True)
     _version(ticket, version)
     if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
