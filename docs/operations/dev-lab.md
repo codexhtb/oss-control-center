@@ -81,13 +81,17 @@ read-only mount файла, не как переменная со значени
 эксплуатации нужен TLS или защищённый канал. PostgreSQL не публикуется.
 Подтверждённые соответствия оборудования и портов вносятся в защищённый
 реестр отдельно; пустой реестр означает `UNKNOWN`, даже если LibreNMS API
-доступен. Владелец утвердил только уникальные точные совпадения имён; генератор
-`dev/build_monitoring_mappings.py` использует read-only `SELECT` к NetUP Lab и
-`GET /api/v0/devices` к LibreNMS, не выводит имена, IP и IDs и никогда не
-сопоставляет порты. Для повторной генерации нужен пустой защищённый файл и
-явный флаг `--approve-unique-exact-sysname`; текущий реестр перезаписывать
-нельзя без отдельной сверки. При смене файла Compose API надо пересоздать,
-поскольку bind mount держит исходный inode. Icinga2 не подключена.
+доступен. Генератор `dev/build_monitoring_mappings.py` использует read-only
+`SELECT` к NetUP Lab и `GET /api/v0/devices` к LibreNMS; он не выводит имена,
+IP и IDs и никогда не сопоставляет порты. Автоматически создаются только
+уникальные точные совпадения имён. При повторной генерации передавайте
+`--preserve-approved-from`: утверждённые пары `manual_verified` сохраняются
+лишь при уникальном совпадении management IP в обоих источниках. При
+расхождении генератор останавливается для ручной проверки. Текущий реестр
+нельзя заменять без сравнения всех пар. При замене файла через atomic rename
+Compose API надо пересоздать: bind mount держит исходный inode. Icinga2 не
+подключена. Разбор регрессии двух имён — в
+[отчёте о сопоставлении](../research/netup-librenms-mapping-regression.md).
 
 BDCOM ONU reader включён только в изолированном dev API через
 [`compose.bdcom.dev.yaml`](../../compose.bdcom.dev.yaml). Он читает две
@@ -111,6 +115,7 @@ APP_ENV=dev NETUP_LAB_ALLOW_PLAINTEXT=true \
   MONITORING_ALLOW_HTTP_DEV=true \
   .venv/bin/python -m dev.build_monitoring_mappings \
   --approve-unique-exact-sysname \
+  --preserve-approved-from .dev-secrets/monitoring-mappings.json \
   --output .dev-secrets/monitoring-mappings.next.json
 ```
 

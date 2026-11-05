@@ -1,6 +1,7 @@
 """Synthetic monitoring contract tests; no real OSS identifiers or credentials."""
 
 from datetime import UTC, datetime, timedelta
+from ipaddress import IPv4Address
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,7 +16,7 @@ from app.modules.diagnostics.config import (
 )
 from app.modules.diagnostics.correlation import CorrelationEngine
 from app.modules.diagnostics.http import SourceUnavailable
-from app.modules.diagnostics.mapping import unique_exact_mappings
+from app.modules.diagnostics.mapping import preserve_verified_mappings, unique_exact_mappings
 from app.modules.diagnostics.providers import IcingaProvider, LibreNMSProvider
 
 
@@ -97,7 +98,9 @@ def test_monitoring_does_not_depend_on_connection_technology(access_type: str) -
     assert report.device_match == DataQuality.KNOWN
     assert report.interface_match == DataQuality.KNOWN
     assert {item.measured_object for item in report.observations} == {
-        "device:42", "interface:99:ifOperStatus", "interface:99:ifAdminStatus"
+        "device:42",
+        "interface:99:ifOperStatus",
+        "interface:99:ifAdminStatus",
     }
 
 
@@ -231,6 +234,46 @@ def test_unique_exact_name_mapping_rejects_case_changes_and_duplicates() -> None
     assert registry.devices[0].librenms_device_id == 42
     assert registry.devices[0].match_basis == "unique_exact_sysname"
     assert registry.devices[0].ports == []
+
+
+def test_regeneration_preserves_explicit_mappings_only_with_unique_matching_management_ip() -> None:
+    netup = [
+        {"id": 7, "name": "synthetic-exact", "ip": int(IPv4Address("192.0.2.7"))},
+        {"id": 8, "name": "synthetic-old-name", "ip": int(IPv4Address("192.0.2.8"))},
+        {"id": 9, "name": "SYNTHETIC-CASE", "ip": int(IPv4Address("192.0.2.9"))},
+    ]
+    libre = [
+        {"device_id": 42, "sysName": "synthetic-exact", "hostname": "192.0.2.7"},
+        {"device_id": 43, "sysName": "synthetic-new-name", "hostname": "192.0.2.8"},
+        {"device_id": 44, "sysName": "synthetic-case", "hostname": "192.0.2.9"},
+    ]
+    approved = MappingRegistry(
+        devices=[
+            DeviceMapping(netup_switch_id="8", librenms_device_id=43),
+            DeviceMapping(netup_switch_id="9", librenms_device_id=44),
+        ]
+    )
+    exact = unique_exact_mappings(netup, libre)
+    merged = preserve_verified_mappings(exact, approved, netup, libre)
+    assert [(item.netup_switch_id, item.librenms_device_id) for item in merged.devices] == [
+        ("7", 42),
+        ("8", 43),
+        ("9", 44),
+    ]
+    assert [item.match_basis for item in merged.devices] == [
+        "unique_exact_sysname",
+        "manual_verified",
+        "manual_verified",
+    ]
+
+    drifted = [dict(row) for row in libre]
+    drifted[1]["hostname"] = "192.0.2.200"
+    with pytest.raises(ValueError, match="manual inventory review"):
+        preserve_verified_mappings(exact, approved, netup, drifted)
+
+    duplicated = [*libre, {"device_id": 45, "sysName": "synthetic-other", "hostname": "192.0.2.8"}]
+    with pytest.raises(ValueError, match="manual inventory review"):
+        preserve_verified_mappings(exact, approved, netup, duplicated)
 
 
 def test_historical_netup_mapping_is_stale_without_downgrading_live_observation() -> None:

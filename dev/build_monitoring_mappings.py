@@ -13,12 +13,13 @@ from pathlib import Path
 from app.modules.billing.netup.config import NetupConfig
 from app.modules.diagnostics.config import MappingRegistry, MonitoringConfig, protected_text
 from app.modules.diagnostics.http import JsonTransport
-from app.modules.diagnostics.mapping import unique_exact_mappings
+from app.modules.diagnostics.mapping import preserve_verified_mappings, unique_exact_mappings
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--approve-unique-exact-sysname", action="store_true")
+    parser.add_argument("--preserve-approved-from", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not args.approve_unique_exact_sysname:
@@ -42,7 +43,7 @@ def main() -> None:
     with netup.connect() as db:
         with db.cursor() as cursor:
             cursor.execute(
-                "SELECT id, name FROM switches WHERE is_deleted=0 "
+                "SELECT id, name, ip FROM switches WHERE is_deleted=0 "
                 "AND name IS NOT NULL AND name<>'' LIMIT 10001"
             )
             netup_rows = list(cursor.fetchall())
@@ -66,6 +67,9 @@ def main() -> None:
     registry = unique_exact_mappings(netup_rows, libre_rows)
     if not registry.devices:
         raise RuntimeError("no unique exact device names match")
+    if args.preserve_approved_from is not None:
+        approved = MappingRegistry.from_file(str(args.preserve_approved_from))
+        registry = preserve_verified_mappings(registry, approved, netup_rows, libre_rows)
 
     descriptor, temporary = tempfile.mkstemp(prefix=".monitoring-mappings-", dir=output.parent)
     try:
@@ -78,7 +82,12 @@ def main() -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    print(f"unique_exact_device_mappings={len(registry.devices)}; port_mappings=0")
+    exact_count = sum(item.match_basis == "unique_exact_sysname" for item in registry.devices)
+    manual_count = sum(item.match_basis == "manual_verified" for item in registry.devices)
+    print(
+        f"unique_exact_device_mappings={exact_count}; "
+        f"preserved_manual={manual_count}; port_mappings=0"
+    )
 
 
 if __name__ == "__main__":
