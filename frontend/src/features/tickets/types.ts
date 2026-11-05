@@ -151,6 +151,20 @@ export interface SubscriberConnectionCard {
 }
 export type SubscriberFinanceKind = 'payments' | 'charges' | 'credit'
 
+export interface ConfiguredService {
+  link_id: number; service_id: number; name: string | null
+  type: 'periodic' | 'ip_traffic' | 'unknown'
+  role: 'main_tariff' | 'additional'
+  status: 'active' | 'blocked' | 'planned' | 'ended' | 'unknown'
+  configured_cost: string | null; currency: string | null; period: string | null
+  starts_at: string | null; ends_at: string | null; can_filter_charges: boolean
+}
+export interface ConfiguredServicesPage { items: ConfiguredService[]; source: string; as_of: string | null }
+export interface TariffHistoryPage {
+  items: Array<{ name: string | null; starts_at: string | null; ends_at: string | null; configured_cost: null; source: string }>
+  available: boolean; truncated?: boolean; reason: string | null
+}
+
 export interface SubscriberFinancePage {
   summary: { cash: string; charges: string; credit: string; adjustments: string; unclassified_negative: string }
   currency: string | null

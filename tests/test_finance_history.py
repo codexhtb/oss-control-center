@@ -98,6 +98,61 @@ def test_bounded_history_separates_cash_credit_charges_and_pages() -> None:
     assert connection.rolled_back and connection.closed
 
 
+def test_charge_filter_uses_account_and_service_link_in_both_queries() -> None:
+    statements = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def execute(self, sql, params=None):
+            statements.append((sql, params))
+
+        def fetchone(self):
+            sql = statements[-1][0]
+            if " cash," in sql:
+                return {"cash": 0, "credit": 0, "unclassified_negative": 0}
+            if " adjustments " in sql:
+                return {"charges": 100, "adjustments": 0}
+            return {"total": 0}
+
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    result = load_finance(
+        SimpleNamespace(connect=Connection, max_execution_ms=3000),
+        4951,
+        start,
+        start + timedelta(days=31),
+        "charges",
+        1,
+        20,
+        "RUR",
+        20627,
+    )
+    assert result["total"] == 0
+    assert result["summary"]["charges"] == "100.00"  # account-wide summary
+    count, rows = statements[-2:]
+    assert "account_id=%s" in count[0] and "slink_id=%s" in count[0]
+    assert "d.account_id=%s" in rows[0] and "slink_id=%s" in rows[0]
+    assert count[1][-2:] == (4951, 20627)
+    assert rows[1][-4:-2] == (4951, 20627)
+
+
 def test_finance_endpoint_requires_grant_and_owned_netup_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -108,6 +163,7 @@ def test_finance_endpoint_requires_grant_and_owned_netup_lookup(
         requested_by=actor_id,
         source="NETUP",
         account_no="4951",
+        subscriber_id="4941",
         financial_accounts=[
             {
                 "account_id": "4951",
@@ -166,7 +222,60 @@ def test_finance_endpoint_requires_grant_and_owned_netup_lookup(
     assert db.rolled_back
     assert response.headers["cache-control"] == "no-store"
 
+    with pytest.raises(ApiError) as invalid_service_filter:
+        billing.finance_history(
+            lookup_id, response, actor, db, start, end, kind="payments", service_link_id=20627
+        )
+    assert invalid_service_filter.value.status_code == 422
+    assert len(calls) == 1
+
     snapshot.source = "MOCK"
     with pytest.raises(ApiError) as unavailable:
         billing.finance_history(lookup_id, response, actor, db, start, end)
     assert unavailable.value.status_code == 503
+
+
+def test_services_endpoint_rejects_missing_finance_grant_and_foreign_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor_id, lookup_id = uuid4(), uuid4()
+    snapshot = SimpleNamespace(
+        requested_by=actor_id,
+        source="NETUP",
+        account_no="4951",
+        subscriber_id="4941",
+        financial_accounts=[],
+    )
+
+    class Db:
+        def get(self, *_):
+            return snapshot
+
+        def rollback(self):
+            pass
+
+    actor = SimpleNamespace(user=SimpleNamespace(id=actor_id))
+    monkeypatch.setattr(
+        billing, "get_settings", lambda: SimpleNamespace(billing_provider="NETUP", app_env="dev")
+    )
+    monkeypatch.setattr(billing.NetupConfig, "from_env", lambda **_: "replica")
+    calls = []
+    monkeypatch.setattr(
+        billing,
+        "load_services",
+        lambda *args: calls.append(args) or {"items": [], "source": "NETUP"},
+    )
+    monkeypatch.setattr(billing, "has_permission", lambda *_: False)
+    with pytest.raises(ApiError) as denied:
+        billing.configured_services(lookup_id, Response(), actor, Db())
+    assert denied.value.status_code == 403 and not calls
+    monkeypatch.setattr(billing, "has_permission", lambda *_: True)
+    snapshot.requested_by = uuid4()
+    with pytest.raises(ApiError) as foreign:
+        billing.configured_services(lookup_id, Response(), actor, Db())
+    assert foreign.value.status_code == 404 and not calls
+    snapshot.requested_by = actor_id
+    response = Response()
+    assert billing.configured_services(lookup_id, response, actor, Db())["items"] == []
+    assert calls[0] == ("replica", 4951, 4941, None)
+    assert response.headers["cache-control"] == "no-store"

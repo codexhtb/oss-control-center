@@ -42,25 +42,26 @@ function cash(value: string, currency: string | null) {
   return `${result}${currency ? ` ${currency}` : ''}`
 }
 
-export function SubscriberFinance({ lookupId, showTechnical }: { lookupId: string; showTechnical: boolean }) {
+export function SubscriberFinance({ lookupId, showTechnical, serviceLinkId = null, serviceName, onClearService }: { lookupId: string; showTechnical: boolean; serviceLinkId?: number | null; serviceName?: string; onClearService?: () => void }) {
   const [preset, setPreset] = useState('month')
   const [from, setFrom] = useState(dateInput(new Date(new Date().getFullYear(), new Date().getMonth(), 1)))
   const [to, setTo] = useState(dateInput(new Date()))
-  const [kind, setKind] = useState<SubscriberFinanceKind>('payments')
+  const [kind, setKind] = useState<SubscriberFinanceKind>(serviceLinkId ? 'charges' : 'payments')
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<string | null>(null)
   const period = range(preset, from, to)
   const query = useQuery({
-    queryKey: ['subscriber-finance', lookupId, period.start, period.end, kind, page],
-    queryFn: ({ signal }) => ticketApi.subscriberFinance(lookupId, period.start, period.end, kind, page, signal),
+    queryKey: ['subscriber-finance', lookupId, period.start, period.end, kind, page, serviceLinkId],
+    queryFn: ({ signal }) => ticketApi.subscriberFinance(lookupId, period.start, period.end, kind, page, signal, kind === 'charges' ? serviceLinkId : null),
     enabled: period.valid,
   })
   const data = query.data
   function changePreset(next: string) { setPreset(next); setPage(1); setExpanded(null) }
-  function changeKind(next: SubscriberFinanceKind) { setKind(next); setPage(1); setExpanded(null) }
+  function changeKind(next: SubscriberFinanceKind) { setKind(next); setPage(1); setExpanded(null); if (next !== 'charges') onClearService?.() }
   return <section className="subscriber-panel subscriber-panel--wide subscriber-finance-history">
     <div className="subscriber-section-title"><h2>Платежи и начисления</h2></div>
     <div className="subscriber-finance-filters">
+      {serviceLinkId && kind === 'charges' && <div className="subscriber-finance-service-filter"><span>Начисления услуги «{serviceName || 'без названия'}»</span><Button variant="quiet" onClick={onClearService}>Показать все</Button></div>}
       <label>Период <select value={preset} onChange={(event) => changePreset(event.target.value)}>
         <option value="month">Текущий месяц</option><option value="three">Последние 3 месяца</option>
         <option value="year">Последний год</option><option value="custom">Выбрать даты</option>

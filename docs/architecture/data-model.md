@@ -65,6 +65,13 @@ PostgreSQL — единственный source of truth для обращени�
 
 **Stage 3C:** ревизия `0010_subscriber_finance` добавляет `financial_accounts JSONB NOT NULL DEFAULT []` к immutable `subscriber_snapshots`; старые записи остаются без искусственно восстановленного баланса. `0011_subscriber_history_index` добавляет частичный индекс `(source, subscriber_id, id)` для истории связанных заявок по нескольким счетам. Данные тарифа и биллингового состояния услуги хранятся в уже существующем `services JSONB` с собственным `field_meta`. Финансовые наблюдения никогда не определяют `technical_state` и не выдаются инженеру через Subscriber 360. Заявки и их история остаются бессрочными.
 
+**Subscriber 360 Phase 3:** текущая конфигурация цен и тарифная история читаются
+по запросу из read-only NetUP и не копируются в PostgreSQL snapshot. ID
+экземпляра услуги — `service_links.id`; ID каталожной услуги —
+`services_data.id`. Фактическое начисление связывается по
+`discount_transactions_all.slink_id`, а не по названию услуги. Цена,
+расчётный период и фактическое начисление имеют независимую достоверность.
+
 **NetUP address/IP extension:** ревизия `0019_subscriber_address_ip` добавляет
 nullable `subscriber_snapshots.house_number` для исходного `users.building`.
 Старые snapshots остаются `NULL` и не переписываются. Настроенные IPv4 и

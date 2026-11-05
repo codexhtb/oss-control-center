@@ -15,6 +15,7 @@ from app.modules.billing.netup.config import NetupConfig
 from app.modules.billing.netup.finance import load_finance
 from app.modules.billing.netup.provider import NetUPBillingProvider
 from app.modules.billing.netup.repository import parse_account_no
+from app.modules.billing.netup.services import load_services, load_tariff_history
 from app.modules.billing.provider import (
     BillingInvalidAccount,
     BillingProvider,
@@ -67,6 +68,63 @@ LookupDep = Annotated[AuthContext, Depends(can_lookup)]
 LookupReadDep = Annotated[AuthContext, Depends(can_read_lookup)]
 
 
+def _service_source(
+    lookup_id: UUID, identity: AuthContext, db: SessionDep
+) -> tuple[int, int, str | None]:
+    if not has_permission(db, identity.user, Permission.SUBSCRIBER_FINANCE_READ):
+        raise ApiError(403, "forbidden", "Permission denied")
+    snapshot = db.get(SubscriberSnapshot, lookup_id)
+    if snapshot is None or snapshot.requested_by != identity.user.id:
+        raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
+    if snapshot.source != "NETUP" or get_settings().billing_provider != "NETUP":
+        raise ApiError(503, "services_unavailable", "NetUP services are unavailable")
+    try:
+        account_id = parse_account_no(snapshot.account_no)
+        user_id = parse_account_no(snapshot.subscriber_id or "")
+    except BillingInvalidAccount:
+        raise ApiError(422, "account_format_unsupported", "Unsupported account format") from None
+    currency = None
+    for item in snapshot.financial_accounts:
+        if item.get("account_id") == snapshot.account_no:
+            meta = item.get("field_meta", {}).get("currency", {})
+            if meta.get("quality") in ("KNOWN", "STALE"):
+                currency = item.get("currency")
+            break
+    return account_id, user_id, currency
+
+
+@router.get("/{lookup_id}/services")
+def configured_services(
+    lookup_id: UUID, response: Response, identity: LookupReadDep, db: SessionDep
+) -> dict:
+    account_id, user_id, currency = _service_source(lookup_id, identity, db)
+    db.rollback()
+    try:
+        result = load_services(
+            NetupConfig.from_env(app_env=get_settings().app_env), account_id, user_id, currency
+        )
+    except Exception:
+        raise ApiError(503, "services_unavailable", "NetUP services are unavailable") from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get("/{lookup_id}/tariff-history")
+def tariff_history(
+    lookup_id: UUID, response: Response, identity: LookupReadDep, db: SessionDep
+) -> dict:
+    account_id, _, _ = _service_source(lookup_id, identity, db)
+    db.rollback()
+    try:
+        result = load_tariff_history(
+            NetupConfig.from_env(app_env=get_settings().app_env), account_id
+        )
+    except Exception:
+        raise ApiError(503, "services_unavailable", "NetUP tariff history is unavailable") from None
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.get("/{lookup_id}/finance")
 def finance_history(
     lookup_id: UUID,
@@ -78,6 +136,7 @@ def finance_history(
     kind: Literal["payments", "charges", "credit"] = "payments",
     page: int = 1,
     size: int = 30,
+    service_link_id: int | None = None,
 ) -> dict:
     if not has_permission(db, identity.user, Permission.SUBSCRIBER_FINANCE_READ):
         raise ApiError(403, "forbidden", "Permission denied")
@@ -96,6 +155,7 @@ def finance_history(
         or page > 1000
         or size < 1
         or size > 50
+        or (service_link_id is not None and (service_link_id < 1 or kind != "charges"))
     ):
         raise ApiError(422, "invalid_finance_range", "Invalid financial history range")
     try:
@@ -121,6 +181,7 @@ def finance_history(
             page,
             size,
             currency,
+            service_link_id,
         )
     except Exception:
         raise ApiError(503, "finance_unavailable", "Financial history is unavailable") from None

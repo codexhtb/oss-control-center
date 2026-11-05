@@ -9,7 +9,7 @@ import type { MeResponse } from '../shared/api/types'
 import { SubscriberPage } from './SubscriberPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({
-  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
+  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), subscriberServices: vi.fn(), subscriberTariffHistory: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
 }))
 
 const timestamp = '2026-01-01T00:00:00Z'
@@ -70,6 +70,16 @@ beforeEach(() => {
     summary: { cash: '20350.00', charges: '21350.00', credit: '10100.07', adjustments: '0.00', unclassified_negative: '0.00' },
     currency: 'RUR', items: [{ id: 1, at: timestamp, amount: '1250.01', currency: 'RUR', type: 'cash', method: 'Терминал', canceled: false, details: { method_id: 1 } }],
     total: 1, page: 1, size: 30, start: timestamp, end: timestamp,
+  })
+  vi.mocked(ticketApi.subscriberServices).mockReset().mockResolvedValue({
+    source: 'NETUP', as_of: timestamp, items: [
+      { link_id: 1, service_id: 10, name: 'Единый', type: 'ip_traffic', role: 'main_tariff', status: 'active', configured_cost: '1400.00', currency: 'RUR', period: null, starts_at: timestamp, ends_at: null, can_filter_charges: true },
+      { link_id: 2, service_id: 20, name: 'Внешний IP', type: 'periodic', role: 'additional', status: 'active', configured_cost: '187.50', currency: 'RUR', period: null, starts_at: timestamp, ends_at: null, can_filter_charges: true },
+    ],
+  })
+  vi.mocked(ticketApi.subscriberTariffHistory).mockReset().mockResolvedValue({
+    available: true, truncated: false, reason: null,
+    items: [{ name: 'Единый(арх)', starts_at: timestamp, ends_at: timestamp, configured_cost: null, source: 'NETUP.tariffs_history' }],
   })
   vi.mocked(ticketApi.checkSubscriber).mockReset()
   vi.mocked(ticketApi.subscriberOnu).mockReset().mockResolvedValue({
@@ -239,18 +249,20 @@ it('runs monitoring only for engineer and shows unavailable data without a made-
 })
 
 it('keeps multiple services and detailed IP rows accessible', async () => {
-  vi.mocked(ticketApi.getLookup).mockResolvedValue({
-    ...card,
-    services: [...card.services, { ...card.services[0]!, service_id: 'extra-service', name: 'Внешний IP' }],
-  })
   renderPage('operator')
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
   expect(screen.queryByText('Всего услуг: 2')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
-  expect(screen.getByText('Внешний IP')).toBeInTheDocument()
-  expect(screen.getByText('Со связанным подключением')).toBeInTheDocument()
-  expect(screen.getByText('Остальные связи услуг')).toBeInTheDocument()
-  expect(screen.getAllByText(/Тариф: Синтетический тариф/)).toHaveLength(2)
+  expect(await screen.findByText('Внешний IP')).toBeInTheDocument()
+  expect(screen.getByText('Основной тариф')).toBeInTheDocument()
+  expect(screen.getByText('Дополнительные услуги')).toBeInTheDocument()
+  expect(screen.getByText('1 400,00 RUR')).toBeInTheDocument()
+  expect(screen.getByText('187,50 RUR')).toBeInTheDocument()
+  expect(screen.getAllByText('Расчётный период не подтверждён')).toHaveLength(2)
+  expect(screen.queryByText('Единый(арх)')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByText('История тарифов'))
+  expect(await screen.findByText('Единый(арх)')).toBeInTheDocument()
+  expect(screen.getByText('Не подтверждена')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
   expect(await screen.findByText(/20.350,00 RUR/)).toBeInTheDocument()
   expect(screen.getByText(/10.100,07 RUR/)).toBeInTheDocument()
@@ -265,24 +277,69 @@ it('keeps multiple services and detailed IP rows accessible', async () => {
   expect(screen.getByRole('link', { name: 'Создать обращение' })).toHaveAttribute('href', `/tickets/new?lookup=${card.lookup_id}`)
 })
 
+it('filters actual charges by selected service link without replacing configured price', async () => {
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
+  await screen.findByText('Внешний IP')
+  fireEvent.click(screen.getAllByRole('button', { name: 'Показать фактические начисления' })[1]!)
+  expect(screen.getByText('Начисления услуги «Внешний IP»')).toBeInTheDocument()
+  await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
+    card.lookup_id, expect.any(String), expect.any(String), 'charges', 1, expect.any(AbortSignal), 2,
+  ))
+  fireEvent.click(screen.getByRole('button', { name: 'Показать все' }))
+  await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
+    card.lookup_id, expect.any(String), expect.any(String), 'charges', 1, expect.any(AbortSignal), null,
+  ))
+})
+
+it('does not fetch configured costs or history without finance permission', async () => {
+  renderPage('engineer')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
+  expect(screen.getByText('Синтетическая услуга')).toBeInTheDocument()
+  expect(screen.queryByText('1 400,00 RUR')).not.toBeInTheDocument()
+  expect(ticketApi.subscriberServices).not.toHaveBeenCalled()
+  expect(ticketApi.subscriberTariffHistory).not.toHaveBeenCalled()
+})
+
+it('keeps source errors visible and does not invent a service price', async () => {
+  vi.mocked(ticketApi.subscriberServices).mockRejectedValue(new Error('NetUP unavailable'))
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
+  expect(await screen.findByText(/Не удалось получить услуги NetUP/)).toBeInTheDocument()
+  expect(screen.queryByText('1 400,00 RUR')).not.toBeInTheDocument()
+})
+
+it('shows an explicit unavailable history result without guessed prices', async () => {
+  vi.mocked(ticketApi.subscriberTariffHistory).mockResolvedValue({ available: false, reason: 'history_scan_too_large', items: [] })
+  renderPage('operator')
+  expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Услуги' }))
+  await screen.findByText('Внешний IP')
+  fireEvent.click(screen.getByText('История тарифов'))
+  expect(await screen.findByText(/Историю нельзя безопасно прочитать/)).toBeInTheDocument()
+})
+
 it('loads finance only after opening the tab and applies server filters', async () => {
   renderPage('operator')
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
   expect(ticketApi.subscriberFinance).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Платежи' }))
   await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
-    card.lookup_id, expect.any(String), expect.any(String), 'payments', 1, expect.anything(),
+    card.lookup_id, expect.any(String), expect.any(String), 'payments', 1, expect.anything(), null,
   ))
   fireEvent.change(screen.getByLabelText('Операции'), { target: { value: 'credit' } })
   await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
-    card.lookup_id, expect.any(String), expect.any(String), 'credit', 1, expect.anything(),
+    card.lookup_id, expect.any(String), expect.any(String), 'credit', 1, expect.anything(), null,
   ))
   fireEvent.change(screen.getByLabelText('Период'), { target: { value: 'custom' } })
   fireEvent.change(screen.getByLabelText('С даты'), { target: { value: '2026-01-01' } })
   fireEvent.change(screen.getByLabelText('По дату'), { target: { value: '2026-01-31' } })
   await waitFor(() => expect(ticketApi.subscriberFinance).toHaveBeenCalledWith(
     card.lookup_id, new Date('2026-01-01T00:00:00').toISOString(),
-    new Date('2026-02-01T00:00:00').toISOString(), 'credit', 1, expect.anything(),
+    new Date('2026-02-01T00:00:00').toISOString(), 'credit', 1, expect.anything(), null,
   ))
 })
 
@@ -308,7 +365,7 @@ it('paginates financial history on the server', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
   expect(await screen.findByText('2 / 2')).toBeInTheDocument()
   expect(ticketApi.subscriberFinance).toHaveBeenLastCalledWith(
-    card.lookup_id, expect.any(String), expect.any(String), 'payments', 2, expect.anything(),
+    card.lookup_id, expect.any(String), expect.any(String), 'payments', 2, expect.anything(), null,
   )
 })
 

@@ -7,6 +7,7 @@ import { ticketApi } from '../features/tickets/ticket-api'
 import { MonitoringReport } from '../features/tickets/MonitoringReport'
 import { SubscriberOnuCard } from '../features/tickets/OnuCard'
 import { SubscriberFinance } from '../features/tickets/SubscriberFinance'
+import { SubscriberServices } from '../features/tickets/SubscriberServices'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow, SubscriberService } from '../features/tickets/types'
 import { configuredIpv4, formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import type { MeResponse } from '../shared/api/types'
@@ -54,7 +55,7 @@ function systemBlockConfirmed(value?: number | null) {
 
 function ServiceRow({ service }: { service: SubscriberService }) {
   const distinctTariff = service.tariff_name && service.tariff_name.trim().toLocaleLowerCase() !== service.name?.trim().toLocaleLowerCase()
-  return <article className="service-row"><div><span className="eyebrow">ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span><h3>{service.name || 'Услуга без названия'}</h3>{distinctTariff && <span>Тариф: {service.tariff_name} <Origin meta={service.field_meta.tariff_name} /></span>}</div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>
+  return <article className="service-row"><div><h3>{service.name || 'Услуга без названия'}</h3>{distinctTariff && <span>Тариф: {service.tariff_name} <Origin meta={service.field_meta.tariff_name} /></span>}<details className="subscriber-technical"><summary>Технические данные</summary><span>ЛС {service.account_id || 'неизвестен'} · ID связи {service.service_id}</span></details></div><div className="service-row__state"><span>{service.billing_active === true ? 'Связь услуги действует в биллинге' : 'Состояние не определено'}</span><Origin meta={service.field_meta.billing_active} /><span>Блокировка услуги: {service.billing_blocked === null ? 'неизвестна' : service.billing_blocked ? 'да' : 'нет'}</span><Origin meta={service.field_meta.billing_blocked} /></div></article>
 }
 
 function ConnectionBlock({ connection, service, lookupId, canCheck }: { connection: SubscriberConnectionCard; service: string; lookupId: string; canCheck: boolean }) {
@@ -92,6 +93,7 @@ function ConnectionBlock({ connection, service, lookupId, canCheck }: { connecti
 
 function SubscriberDetails({ card, session }: { card: SubscriberCard; session: MeResponse }) {
   const [tab, setTab] = useState<'overview' | 'services' | 'payments' | 'connections' | 'tickets'>('overview')
+  const [selectedService, setSelectedService] = useState<{ id: number; name: string } | null>(null)
   const [historyPage, setHistoryPage] = useState(1)
   const history = useQuery({ queryKey: ['subscriber-tickets', card.lookup_id, historyPage], queryFn: ({ signal }) => ticketApi.subscriberTickets(card.lookup_id, historyPage, signal) })
   const subscriber = card.subscriber
@@ -157,14 +159,14 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
         {!!card.connections.length && <p className="muted">Подключений: {card.connections.length}. ONU, IP и измерения — во вкладке «Подключения».</p>}
       </section>
     </div>}
-    {tab === 'services' && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Услуги в источнике</h2><span className="subscriber-section-note">Снимок на дату источника</span></div>
+    {tab === 'services' && (canReadFinance && card.source === 'NETUP' ? <SubscriberServices lookupId={card.lookup_id} onCharges={(id, name) => { setSelectedService({ id, name }); setTab('payments') }} /> : <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Услуги в источнике</h2><span className="subscriber-section-note">Снимок на дату источника</span></div>
       {card.services.length ? <div className="subscriber-service-groups">
         {servicesWithConnection.length > 0 && <div><h3>Со связанным подключением</h3><div className="service-list">{servicesWithConnection.map((service) => <ServiceRow key={service.service_id} service={service} />)}</div></div>}
         {otherServices.length > 0 && <div><h3>Остальные связи услуг</h3><div className="service-list">{otherServices.map((service) => <ServiceRow key={service.service_id} service={service} />)}</div></div>}
       </div> : <p className="muted">Сведения об услугах отсутствуют или недоступны</p>}
       <p className="subscriber-limitation">Текущая стоимость услуг и полный срок их действия здесь не показаны. Фактические начисления доступны во вкладке «Платежи».</p>
-    </section>}
-    {tab === 'payments' && canReadFinance && <SubscriberFinance lookupId={card.lookup_id} showTechnical={session.user.role !== 'operator'} />}
+    </section>)}
+    {tab === 'payments' && canReadFinance && <SubscriberFinance lookupId={card.lookup_id} showTechnical={session.user.role !== 'operator'} serviceLinkId={selectedService?.id} serviceName={selectedService?.name} onClearService={() => setSelectedService(null)} />}
     {tab === 'connections' && <section className="subscriber-panel subscriber-panel--wide"><div className="subscriber-section-title"><h2>Подключения</h2><span className="subscriber-section-note">Диагностика и измерение ONU имеют собственное время наблюдения</span></div>
       {card.connections.length ? <div className="connection-list">{card.connections.map((connection) => <ConnectionBlock key={connection.connection_snapshot_id} connection={connection} service={serviceNames.get(connection.service_id || '') || 'Услуга не установлена'} lookupId={card.lookup_id} canCheck={session.permissions.includes('diagnostics.run')} />)}</div> : <p className="muted">Данные о подключении неизвестны</p>}
     </section>}

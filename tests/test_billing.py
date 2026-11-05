@@ -228,6 +228,62 @@ def test_finance_permission_and_subscriber_history_across_lookups(
     assert lookup(billing_client, "MOCK-ETH-001").status_code == 200
 
 
+def test_configured_services_require_finance_permission_and_owned_netup_lookup(
+    billing_engine: Engine, billing_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.v1 import billing as billing_routes
+
+    operator = seed_user(billing_engine, "service_operator", Role.OPERATOR)
+    seed_user(billing_engine, "service_engineer", Role.ENGINEER)
+    seed_user(billing_engine, "service_admin", Role.ADMIN)
+    login(billing_client, "service_operator")
+    with Session(billing_engine) as db:
+        now = datetime.now(UTC)
+        snapshot = SubscriberSnapshot(
+            account_no="4951",
+            source="NETUP",
+            subscriber_id="4941",
+            requested_by=operator.id,
+            fetched_at=now,
+            expires_at=now + timedelta(minutes=15),
+            contracts=[],
+            services=[],
+        )
+        db.add(snapshot)
+        db.flush()
+        lookup_id = str(snapshot.id)
+        db.commit()
+    monkeypatch.setenv("BILLING_PROVIDER", "NETUP")
+    get_settings.cache_clear()
+    monkeypatch.setattr(billing_routes.NetupConfig, "from_env", lambda **_: object())
+    calls = []
+
+    def services(_config, account_id, user_id, currency):
+        calls.append((account_id, user_id, currency))
+        return {"items": [], "source": "NETUP", "as_of": None}
+
+    monkeypatch.setattr(billing_routes, "load_services", services)
+    response = billing_client.get(f"/api/v1/subscriber-lookups/{lookup_id}/services")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert calls == [(4951, 4941, None)]
+    assert (
+        billing_client.post("/api/v1/auth/logout", headers=csrf(billing_client)).status_code == 200
+    )
+    login(billing_client, "service_engineer")
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{lookup_id}/services").status_code == 403
+    assert (
+        billing_client.get(f"/api/v1/subscriber-lookups/{lookup_id}/tariff-history").status_code
+        == 403
+    )
+    assert len(calls) == 1
+    assert (
+        billing_client.post("/api/v1/auth/logout", headers=csrf(billing_client)).status_code == 200
+    )
+    login(billing_client, "service_admin")
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{lookup_id}/services").status_code == 404
+
+
 def test_subscriber_history_includes_other_account_of_same_source(
     billing_engine: Engine, billing_client: TestClient
 ) -> None:

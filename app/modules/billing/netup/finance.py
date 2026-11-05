@@ -44,6 +44,7 @@ def load_finance(
     page: int,
     size: int,
     account_currency: str | None,
+    service_link_id: int | None = None,
 ) -> dict[str, Any]:
     """Read one bounded interval; one snapshot, indexed date scans and no N+1 reads."""
     if not _SLOTS.acquire(timeout=1):
@@ -83,11 +84,12 @@ def load_finance(
             )
             charges = cursor.fetchone()
             if kind == "charges":
+                filter_link = " AND slink_id=%s" if service_link_id is not None else ""
                 table, date, clause, args = (
                     "discount_transactions_all",
                     "discount_date",
-                    " AND charge_type IN (1,2,3,22,23)",
-                    charge_args,
+                    " AND charge_type IN (1,2,3,22,23)" + filter_link,
+                    (*charge_args, service_link_id) if service_link_id is not None else charge_args,
                 )
             else:
                 table, date = "payment_transactions", "actual_date"
@@ -103,7 +105,7 @@ def load_finance(
                     "FROM discount_transactions_all d "
                     "LEFT JOIN services_data sd ON sd.id=d.service_id "
                     "WHERE d.discount_date >= %s AND d.discount_date < %s "
-                    "AND d.account_id=%s AND d.charge_type IN (1,2,3,22,23) "
+                    f"AND d.account_id=%s{clause} "
                     "ORDER BY d.discount_date DESC,d.id DESC LIMIT %s OFFSET %s",
                     (*args, size, (page - 1) * size),
                 )
