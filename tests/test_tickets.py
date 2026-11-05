@@ -2827,6 +2827,73 @@ def test_resolved_verdict_permissions_history_and_queues(
     assert closed.status_code == 200 and closed.json()["status"] == "CLOSED"
 
 
+def test_decision_versions_require_assignee_for_in_progress_and_resolved(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    creator = seed_user(ticket_engine, "decision_creator", Role.OPERATOR)
+    owner = seed_user(ticket_engine, "decision_owner", Role.ENGINEER)
+    other = seed_user(ticket_engine, "decision_other", Role.ENGINEER)
+    admin = seed_user(ticket_engine, "decision_admin", Role.ADMIN)
+    login(ticket_client, creator.login)
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic decision scope")
+    path = f"/api/v1/tickets/{ticket['id']}"
+    login(ticket_client, owner.login)
+    claimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["assigned_engineer_id"] == str(owner.id)
+    version = claimed.json()["version"]
+
+    def counts() -> tuple[int, int, int, int]:
+        with Session(ticket_engine) as db:
+            ticket_id = UUID(ticket["id"])
+            return (
+                db.scalar(select(Ticket.version).where(Ticket.id == ticket_id)),
+                db.scalar(
+                    select(func.count()).select_from(TicketResolution).where(
+                        TicketResolution.ticket_id == ticket_id
+                    )
+                ),
+                db.scalar(
+                    select(func.count()).select_from(TicketEvent).where(
+                        TicketEvent.ticket_id == ticket_id
+                    )
+                ),
+                db.scalar(
+                    select(func.count()).select_from(TicketAudit).where(
+                        TicketAudit.ticket_id == ticket_id
+                    )
+                ),
+            )
+
+    payload = {"decision_text": "Synthetic repair", "reason": "CABLE_BREAK"}
+    login(ticket_client, other.login)
+    assert ticket_client.get("/api/v1/auth/me").json()["user"]["id"] == str(other.id)
+    before = counts()
+    denied = ticket_client.post(path + "/decisions", headers=csrf(ticket_client), json=payload)
+    assert denied.status_code == 403
+    assert counts() == before
+
+    login(ticket_client, owner.login)
+    allowed = ticket_client.post(path + "/decisions", headers=csrf(ticket_client), json=payload)
+    assert allowed.status_code == 201, allowed.text
+    assert counts()[1] == before[1] + 1
+    resolved = ticket_client.post(
+        path + "/resolve", headers={**csrf(ticket_client), "If-Match": f'"{version + 1}"'},
+        json=payload,
+    )
+    assert resolved.status_code == 200, resolved.text
+    login(ticket_client, other.login)
+    before = counts()
+    denied = ticket_client.post(path + "/decisions", headers=csrf(ticket_client), json=payload)
+    assert denied.status_code == 403
+    assert counts() == before
+    login(ticket_client, admin.login)
+    allowed = ticket_client.post(path + "/decisions", headers=csrf(ticket_client), json=payload)
+    assert allowed.status_code == 201
+
+
 def test_concurrent_resolution_records_only_one_verdict(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:

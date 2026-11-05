@@ -31,6 +31,28 @@ def test_settings_build_postgres_url_without_losing_special_characters() -> None
     assert "special-password" not in repr(settings)
 
 
+def test_additional_auth_origins_are_parsed_and_must_be_exact_https_origins() -> None:
+    values = {
+        "POSTGRES_USER": "oss",
+        "POSTGRES_PASSWORD": "test-only",
+        "AUTH_PUBLIC_ORIGIN": "https://oss.example.test",
+        "AUTH_ADDITIONAL_ORIGINS": (
+            "https://172.17.7.2:8443, https://178.217.74.174:8443, https://sd.oss-ab.net"
+        ),
+        "AUTH_HASH_KEY": "test-only-key-with-at-least-32-bytes",
+    }
+    settings = Settings.from_env(values)
+    assert settings.auth_additional_origins == (
+        "https://172.17.7.2:8443",
+        "https://178.217.74.174:8443",
+        "https://sd.oss-ab.net",
+    )
+    with pytest.raises(ValidationError):
+        Settings.from_env({**values, "AUTH_ADDITIONAL_ORIGINS": "https://oss.example.test/path"})
+    with pytest.raises(ValidationError):
+        Settings.from_env({**values, "AUTH_ADDITIONAL_ORIGINS": "http://178.217.74.174:8443"})
+
+
 @pytest.mark.parametrize("timeout", ["0", "6", "not-a-number"])
 def test_readiness_timeout_is_bounded(timeout: str) -> None:
     with pytest.raises(ValidationError):

@@ -919,12 +919,8 @@ def add_decision(
     ticket = _ticket(db, ticket_id, lock=True)
     if ticket.status not in (TicketStatus.IN_PROGRESS, TicketStatus.RESOLVED):
         raise ApiError(409, "invalid_transition", "Start ticket before recording a decision")
-    if (
-        ticket.status == TicketStatus.RESOLVED
-        and ticket.assigned_engineer_id != actor_id
-        and actor.role != Role.ADMIN
-    ):
-        raise ApiError(403, "forbidden", "Only the assigned engineer can revise the verdict")
+    if ticket.assigned_engineer_id != actor_id and actor.role != Role.ADMIN:
+        raise ApiError(403, "forbidden", "Only the assigned engineer can record a verdict")
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,

@@ -1,5 +1,6 @@
 """Identity API and database invariants against an isolated Compose PostgreSQL database."""
 
+import socket
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -22,6 +23,7 @@ from app.core.config import get_settings
 from app.db.session import get_session
 from app.main import create_app
 from app.modules.identity import bootstrap_admin
+from app.modules.identity import service as identity_service
 from app.modules.identity.crypto import hash_password, hash_token
 from app.modules.identity.models import AuthSession, IdentityAuditEvent, User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -152,6 +154,46 @@ def test_login_wrong_password_inactive_user_and_public_response(
     assert "samesite=strict" in csrf_cookie.lower()
     assert "oss_session" in identity_client.cookies
     assert identity_client.get("/api/v1/auth/me").json()["user"]["role"] == "operator"
+
+
+def test_login_and_session_accept_each_explicit_origin_but_reject_mismatched_host(
+    identity_engine: Engine,
+    identity_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_user(identity_engine, "operator", Role.OPERATOR)
+    internal = "https://172.17.7.2:8443"
+    public = "https://178.217.74.174:8443"
+    domain = "https://sd.oss-ab.net"
+    monkeypatch.setenv("AUTH_PUBLIC_ORIGIN", internal)
+    monkeypatch.setenv("AUTH_ADDITIONAL_ORIGINS", f"{public},{domain}")
+    get_settings.cache_clear()
+
+    with TestClient(identity_client.app, base_url=internal, headers={"Origin": internal}) as client:
+        assert login(client, "operator").status_code == 200
+        assert client.get("/api/v1/auth/me").status_code == 200
+
+    with TestClient(identity_client.app, base_url=public, headers={"Origin": public}) as client:
+        assert login(client, "operator").status_code == 200
+        assert client.get("/api/v1/auth/me").status_code == 200
+        assert client.post(
+            "/api/v1/auth/logout",
+            headers={**csrf(client), "Host": "172.17.7.2:8443"},
+        ).status_code == 403
+
+    with TestClient(identity_client.app, base_url=domain, headers={"Origin": domain}) as client:
+        assert login(client, "operator").status_code == 200
+        assert client.get("/api/v1/auth/me").status_code == 200
+
+    with TestClient(identity_client.app, base_url=public, headers={"Origin": public}) as client:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"login": "operator", "password": PASSWORD},
+            headers={"Host": "172.17.7.2:8443"},
+        )
+        assert response.status_code == 403
+        assert response.json()["code"] == "invalid_origin"
+    get_settings.cache_clear()
 
 
 def test_expired_and_revoked_sessions(identity_engine: Engine, identity_client: TestClient) -> None:
@@ -382,6 +424,62 @@ def test_source_rate_limit_applies_across_different_logins(
     for index in range(20):
         assert login(identity_client, f"unknown{index}", "wrong").status_code == 401
     assert login(identity_client, "another", "wrong").status_code == 429
+
+
+def test_trusted_proxy_separates_clients_and_ignores_spoofed_forwarding(
+    identity_engine: Engine, identity_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_user(identity_engine, "independent", Role.OPERATOR)
+    real_getaddrinfo = socket.getaddrinfo
+
+    def proxy_dns(host: str, *args, **kwargs):
+        if host == "web":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("172.22.0.3", 0))]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", proxy_dns)
+    monkeypatch.setenv("AUTH_TRUSTED_PROXY_HOST", "web")
+    get_settings.cache_clear()
+    identity_client._transport.client = ("172.22.0.3", 50000)
+    observed: list[tuple[str, str, str]] = []
+    original_source_address = identity_service.source_address
+
+    def record_source(request, settings):
+        address = original_source_address(request, settings)
+        observed.append((request.client.host, settings.auth_trusted_proxy_host, address))
+        return address
+
+    monkeypatch.setattr(identity_service, "source_address", record_source)
+    first = {"X-OSS-Client-IP": "198.51.100.10", "X-Forwarded-For": "203.0.113.99"}
+    second = {"X-OSS-Client-IP": "198.51.100.11", "X-Forwarded-For": "198.51.100.10"}
+    for index in range(20):
+        assert identity_client.post(
+            "/api/v1/auth/login", json={"login": f"unknown{index}", "password": "wrong"},
+            headers=first,
+        ).status_code == 401
+    assert identity_client.post(
+        "/api/v1/auth/login", json={"login": "blocked-source", "password": "wrong"},
+        headers=first,
+    ).status_code == 429
+    assert observed[-1] == ("172.22.0.3", "web", "198.51.100.10")
+    assert identity_client.post(
+        "/api/v1/auth/login", json={"login": "independent", "password": PASSWORD},
+        headers=second,
+    ).status_code == 200
+    assert identity_client.get("/api/v1/auth/me").status_code == 200
+
+    # A direct caller cannot make the backend trust either forwarding header.
+    identity_client._transport.client = ("172.22.0.9", 50000)
+    for index in range(20):
+        assert identity_client.post(
+            "/api/v1/auth/login", json={"login": f"direct{index}", "password": "wrong"},
+            headers={"X-OSS-Client-IP": f"203.0.113.{index + 1}",
+                     "X-Forwarded-For": f"198.51.100.{index + 1}"},
+        ).status_code == 401
+    assert identity_client.post(
+        "/api/v1/auth/login", json={"login": "direct-final", "password": "wrong"},
+        headers={"X-OSS-Client-IP": "203.0.113.250"},
+    ).status_code == 429
 
 
 def test_deactivation_invalidates_all_sessions(

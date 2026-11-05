@@ -34,6 +34,7 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
+      AUTH_TRUSTED_PROXY_HOST: web
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,8 +73,11 @@ services:
       - ./.dev-secrets/certs/server.crt:/run/dev-certs/server.crt:ro
       - ./.dev-secrets/certs/server.key:/run/dev-certs/server.key:ro
       - ./.dev-secrets/certs/ca.crt:/run/dev-certs/ca.crt:ro
+      - ./.dev-secrets/certs/sd.oss-ab.net.fullchain.crt:/run/domain-tls/fullchain.crt:ro
+      - ./.dev-secrets/certs/sd.oss-ab.net.key:/run/domain-tls/private.key:ro
     ports:
-      - "172.17.7.2:8443:8443"
+      - "0.0.0.0:8443:8443"
+      - "0.0.0.0:443:443"
     networks:
       - backend
       - edge

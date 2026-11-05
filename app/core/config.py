@@ -20,6 +20,8 @@ class Settings(BaseModel):
     postgres_password: SecretStr
     readiness_timeout_seconds: int = Field(default=2, ge=1, le=5)
     auth_public_origin: str
+    auth_additional_origins: tuple[str, ...] = ()
+    auth_trusted_proxy_host: str = ""
     auth_allow_http_loopback: bool = False
     auth_hash_key: SecretStr
 
@@ -39,23 +41,30 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def validate_auth_origin(self) -> "Settings":
+        for value in (self.auth_public_origin, *self.auth_additional_origins):
+            try:
+                origin = urlsplit(value)
+                port = origin.port
+            except ValueError as exc:
+                raise ValueError("Authentication origin is invalid") from exc
+            if (
+                origin.scheme not in {"http", "https"}
+                or not origin.hostname
+                or origin.path
+                or origin.query
+                or origin.fragment
+                or origin.username
+                or origin.password
+                or port == 0
+                or value != origin.geturl()
+            ):
+                raise ValueError("Authentication origins must be exact origins")
+            if value != self.auth_public_origin and origin.scheme != "https":
+                raise ValueError("Additional authentication origins must use HTTPS")
         try:
             origin = urlsplit(self.auth_public_origin)
-            port = origin.port
         except ValueError as exc:
             raise ValueError("AUTH_PUBLIC_ORIGIN is invalid") from exc
-        if (
-            origin.scheme not in {"http", "https"}
-            or not origin.hostname
-            or origin.path
-            or origin.query
-            or origin.fragment
-            or origin.username
-            or origin.password
-            or port == 0
-            or self.auth_public_origin != origin.geturl()
-        ):
-            raise ValueError("AUTH_PUBLIC_ORIGIN must be an exact origin")
         if origin.scheme == "http" and not (
             self.app_env == "dev"
             and self.auth_allow_http_loopback
@@ -95,6 +104,12 @@ class Settings(BaseModel):
                 "postgres_password": values.get("POSTGRES_PASSWORD"),
                 "readiness_timeout_seconds": values.get("READINESS_TIMEOUT_SECONDS", "2"),
                 "auth_public_origin": values.get("AUTH_PUBLIC_ORIGIN"),
+                "auth_additional_origins": tuple(
+                    origin.strip()
+                    for origin in values.get("AUTH_ADDITIONAL_ORIGINS", "").split(",")
+                    if origin.strip()
+                ),
+                "auth_trusted_proxy_host": values.get("AUTH_TRUSTED_PROXY_HOST", ""),
                 "auth_allow_http_loopback": values.get("AUTH_ALLOW_HTTP_LOOPBACK", "false"),
                 "auth_hash_key": values.get("AUTH_HASH_KEY"),
             }

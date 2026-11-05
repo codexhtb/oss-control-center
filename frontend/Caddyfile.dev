@@ -4,12 +4,38 @@
 	default_sni 172.17.7.2
 }
 
-https://172.17.7.2:8443 {
+https://172.17.7.2:8443, https://178.217.74.174:8443 {
 	tls /run/dev-certs/server.crt /run/dev-certs/server.key
 
 	@api path /api/v1/*
 	handle @api {
-		reverse_proxy api:8000
+		reverse_proxy api:8000 {
+			header_up X-OSS-Client-IP {remote_host}
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		header Cache-Control "no-store"
+		file_server
+	}
+
+	header {
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+}
+
+https://sd.oss-ab.net {
+	tls /run/domain-tls/fullchain.crt /run/domain-tls/private.key
+
+	@api path /api/v1/*
+	handle @api {
+		reverse_proxy api:8000 {
+			header_up X-OSS-Client-IP {remote_host}
+		}
 	}
 
 	handle {

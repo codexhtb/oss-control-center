@@ -63,8 +63,10 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 def require_origin(request: Request, settings: SettingsDep) -> None:
     origin = request.headers.get("origin", "")
     host = request.headers.get("host", "")
-    if not hmac.compare_digest(origin, settings.auth_public_origin) or (
-        host != urlsplit(settings.auth_public_origin).netloc
+    allowed_origins = (settings.auth_public_origin, *settings.auth_additional_origins)
+    if not any(
+        hmac.compare_digest(origin, allowed) and hmac.compare_digest(host, urlsplit(allowed).netloc)
+        for allowed in allowed_origins
     ):
         raise ApiError(403, "invalid_origin", "Request origin is not allowed")
 

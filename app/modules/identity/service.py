@@ -1,8 +1,10 @@
 """Transactional identity operations and persistent login throttling."""
 
 import secrets
+import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 from uuid import UUID
 
 from fastapi import Request
@@ -80,9 +82,27 @@ def audit(
     )
 
 
-def source_address(request: Request) -> str:
-    # Uvicorn runs with --no-proxy-headers; X-Forwarded-For is never a rate key.
-    return request.client.host if request.client else "unknown"
+def source_address(request: Request, settings: Settings) -> str:
+    # Uvicorn keeps the TCP peer intact. Only our named Caddy service may supply
+    # the address Caddy observed on its own connection, not a client-sent XFF.
+    peer = request.client.host if request.client else "unknown"
+    if not settings.auth_trusted_proxy_host:
+        return peer
+    try:
+        peer_ip = ip_address(peer)
+        trusted_ips = {
+            ip_address(address[4][0])
+            for address in socket.getaddrinfo(settings.auth_trusted_proxy_host, None)
+        }
+    except (OSError, ValueError):
+        return peer
+    if peer_ip not in trusted_ips:
+        return peer
+    forwarded = request.headers.get("x-oss-client-ip", "")
+    try:
+        return str(ip_address(forwarded))
+    except ValueError:
+        return peer
 
 
 def _lock_login_buckets(db: Session, login_key: str, source_key: str) -> dict[str, LoginBucket]:
@@ -130,7 +150,7 @@ def login_user(
         valid_login = False
     secret = settings.auth_hash_key.get_secret_value()
     login_key = fingerprint("login", canonical_login, secret)
-    source_key = fingerprint("source", source_address(request), secret)
+    source_key = fingerprint("source", source_address(request, settings), secret)
     buckets = _lock_login_buckets(db, login_key, source_key)
     now = utc_now()
     if any(bucket.blocked_until and bucket.blocked_until > now for bucket in buckets.values()):
