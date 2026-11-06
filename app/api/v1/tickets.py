@@ -93,7 +93,7 @@ from app.modules.tickets.service import (
     start_ticket,
     ticket_detail,
 )
-from app.modules.tickets.status import ResolutionReason, TicketPriority, TicketStatus, TicketType
+from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 PageNumber = Annotated[int, Query(ge=1)]
@@ -354,7 +354,7 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
                     if item.resolved_decision_id in current_decisions else None
                 ),
                 "resolution_reason": (
-                    ResolutionReason(current_decisions[item.resolved_decision_id].reason)
+                    current_decisions[item.resolved_decision_id].reason
                     if item.resolved_decision_id in current_decisions
                     and current_decisions[item.resolved_decision_id].reason is not None
                     else None

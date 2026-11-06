@@ -162,10 +162,11 @@ def seed_snapshot(
     phone: str | None = None,
     actual_address: str | None = None,
     house_number: str | None = None,
+    account_no: str = "000123",
 ) -> tuple[SubscriberSnapshot, list[ConnectionSnapshot]]:
     with Session(engine, expire_on_commit=False) as db:
         snapshot = SubscriberSnapshot(
-            account_no="000123",
+            account_no=account_no,
             source="MOCK",
             fetched_at=datetime.now(UTC),
             expires_at=datetime.now(UTC) + timedelta(hours=1),
@@ -928,6 +929,32 @@ def test_engineer_workflow_and_rbac(ticket_engine: Engine, ticket_client: TestCl
         ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json={}).status_code
         == 422
     )
+    closed_version = ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()["version"]
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{ticket_id}",
+            headers={**csrf(ticket_client), "If-Match": f'"{closed_version}"'},
+            json={"priority": "HIGH"},
+        ).status_code
+        == 422
+    )
+    correction = ticket_client.patch(
+        f"/api/v1/tickets/{ticket_id}",
+        headers={**csrf(ticket_client), "If-Match": f'"{closed_version}"'},
+        json={"priority": "HIGH", "reason": "Синтетическая поправка приоритета"},
+    )
+    assert correction.status_code == 200, correction.text
+    assert correction.json()["status"] == "CLOSED"
+    assert correction.json()["closed_at"] == closed.json()["closed_at"]
+    assert correction.json()["closed_decision_id"] == closed.json()["closed_decision_id"]
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{ticket_id}",
+            headers={**csrf(ticket_client), "If-Match": f'"{correction.json()["version"]}"'},
+            json={"ticket_type": "MANUAL", "reason": "Попытка смены типа"},
+        ).status_code
+        == 409
+    )
 
 
 def test_csrf_invalid_inputs_and_snapshot_scope(
@@ -1214,7 +1241,8 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     public_engineers = ticket_client.get("/api/v1/tickets/assignable-engineers")
     assert public_engineers.status_code == 200
     assert {item["id"] for item in public_engineers.json()["items"]} == {
-        str(engineer.id), str(admin.id)
+        str(engineer.id),
+        str(admin.id),
     }
     created = []
     for kind in ("MANUAL", "INTERNAL"):
@@ -1260,9 +1288,7 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     engineers = ticket_client.get("/api/v1/tickets/assignable-engineers", params={"size": 1})
     assert engineers.status_code == 200
     assert engineers.json()["total"] == 2
-    assert engineers.json()["items"] == [
-        {"id": str(admin.id), "display_name": admin.display_name}
-    ]
+    assert engineers.json()["items"] == [{"id": str(admin.id), "display_name": admin.display_name}]
     assigned = ticket_client.post(
         f"/api/v1/tickets/{created[0]['id']}/assignment",
         headers={**csrf(ticket_client), "If-Match": '"1"'},
@@ -1528,6 +1554,24 @@ def test_erroneous_payment_create_validation_replay_and_detail(
             )
             == 1
         )
+    admin = seed_user(ticket_engine, "payment-editor-admin", Role.ADMIN)
+    login(ticket_client, admin.login)
+    payment_edit = ticket_client.patch(
+        f"/api/v1/tickets/{body['id']}",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"payment_amount": "126.75", "correct_account_no": "CORRECT-003"},
+    )
+    assert payment_edit.status_code == 200, payment_edit.text
+    assert payment_edit.json()["payment_amount"] == "126.75"
+    assert payment_edit.json()["correct_account_no"] == "CORRECT-003"
+    assert (
+        ticket_client.patch(
+            f"/api/v1/tickets/{body['id']}",
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"ticket_type": "MANUAL", "reason": "Неверный тип"},
+        ).status_code
+        == 409
+    )
 
 
 def test_ticket_type_validation_replay_and_legacy_client(
@@ -1800,6 +1844,265 @@ def test_own_ticket_edit_scope_conflict_and_history(
                 )
             )
             == 1
+        )
+
+
+def test_full_ticket_edit_rebind_and_audit(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "full_edit_operator", Role.OPERATOR)
+    other_operator = seed_user(ticket_engine, "full_edit_other_operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "full_edit_engineer", Role.ENGINEER)
+    admin = seed_user(ticket_engine, "full_edit_admin", Role.ADMIN)
+    login(ticket_client, operator.login)
+    ticket = make_manual_ticket(ticket_client)
+    path = f"/api/v1/tickets/{ticket['id']}"
+    login(ticket_client, other_operator.login)
+    denied = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"priority": "HIGH"},
+    )
+    assert denied.status_code == 403
+    login(ticket_client, operator.login)
+    assert (
+        ticket_client.patch(
+            path,
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+            json={"priority": "HIGH"},
+        ).status_code
+        == 403
+    )
+    snapshot, _ = seed_snapshot(ticket_engine, engineer, actual_address="Синтетический адрес")
+    login(ticket_client, engineer.login)
+    edited = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={
+            "subject": "Уточнённое обращение",
+            "description": "Уточнённая проблема",
+            "priority": "HIGH",
+            "caller_phone": "+7 900 222 33 44",
+            "city": "Тестовый город 2",
+            "address_override": "Адрес для выезда",
+            "category_id": None,
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["version"] == 2
+    assert edited.json()["address_override"] == "Адрес для выезда"
+    assert edited.json()["priority"] == "HIGH"
+    assert (
+        ticket_client.patch(
+            path,
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+            json={"priority": "LOW"},
+        ).status_code
+        == 409
+    )
+    assert (
+        ticket_client.patch(
+            path,
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"id": str(uuid4())},
+        ).status_code
+        == 422
+    )
+    assert (
+        ticket_client.patch(
+            path,
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"ticket_type": "SUBSCRIBER_LINKED", "lookup_id": str(snapshot.id)},
+        ).status_code
+        == 422
+    )  # A source change requires a reason.
+    linked = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={
+            "ticket_type": "SUBSCRIBER_LINKED",
+            "lookup_id": str(snapshot.id),
+            "caller_full_name": None,
+            "reason": "Синтетическая корректировка привязки",
+        },
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["account_no"] == snapshot.account_no
+    assert linked.json()["subscriber_snapshot_id"] == str(snapshot.id)
+    assert linked.json()["ticket_type"] == "SUBSCRIBER_LINKED"
+    assert ticket_client.get(path).json()["subscriber"]["actual_address"] == "Синтетический адрес"
+    with Session(ticket_engine) as db:
+        assert db.get(SubscriberSnapshot, snapshot.id).actual_address == "Синтетический адрес"
+        events = db.scalars(
+            select(TicketEvent).where(TicketEvent.ticket_id == UUID(ticket["id"]))
+        ).all()
+        assert len(events) == 3
+        assert events[-1].event_data["changes"]["account_no"]["after"] == snapshot.account_no
+        assert events[-1].event_data["reason"] == "Синтетическая корректировка привязки"
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketAudit)
+                .where(
+                    TicketAudit.ticket_id == UUID(ticket["id"]),
+                    TicketAudit.action == "ticket_edited",
+                )
+            )
+            == 2
+        )
+    login(ticket_client, admin.login)
+    admin_edit = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"3"'},
+        json={"priority": "URGENT"},
+    )
+    assert admin_edit.status_code == 200, admin_edit.text
+    category = ticket_client.post(
+        "/api/v1/ticket-categories",
+        headers=csrf(ticket_client),
+        json={"name": "Синтетическая категория для правки", "sort_order": 90},
+    )
+    assert category.status_code == 201, category.text
+    recategorized = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"4"'},
+        json={"category_id": category.json()["id"]},
+    )
+    assert recategorized.status_code == 200, recategorized.text
+    assert recategorized.json()["category_name"] == "Синтетическая категория для правки"
+    assert recategorized.json()["subject"] == "Синтетическая категория для правки"
+    with pytest.raises(DBAPIError, match="ticket identity fields are immutable"):
+        with ticket_engine.begin() as connection:
+            connection.execute(
+                text("UPDATE tickets SET number = number + 1000 WHERE id = :id"),
+                {"id": UUID(ticket["id"])},
+            )
+    editor_only = seed_user(ticket_engine, "catalog_editor_only", Role.ENGINEER)
+    with Session(ticket_engine) as db:
+        user = db.get(User, editor_only.id)
+        user.permissions_customized = True
+        db.add_all(
+            [
+                UserPermission(user_id=user.id, permission=permission)
+                for permission in (Permission.TICKET_READ, Permission.TICKET_EDIT_ALL)
+            ]
+        )
+        db.commit()
+    login(ticket_client, editor_only.login)
+    assert ticket_client.get("/api/v1/ticket-categories").status_code == 200
+    assert (
+        ticket_client.post(
+            "/api/v1/ticket-categories",
+            headers=csrf(ticket_client),
+            json={"name": "Недопустимая категория", "sort_order": 1},
+        ).status_code
+        == 403
+    )
+    assert ticket_client.post(
+        path + "/assignment",
+        headers={**csrf(ticket_client), "If-Match": '"5"'},
+        json={"engineer_id": str(engineer.id)},
+    ).status_code == 403
+
+
+def test_linked_ticket_can_change_confirmed_account_without_rewriting_history(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "rebind_engineer", Role.ENGINEER)
+    first, _ = seed_snapshot(ticket_engine, engineer, account_no="TEST-101")
+    second, _ = seed_snapshot(ticket_engine, engineer, account_no="TEST-102")
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, first)
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    correction = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"lookup_id": str(second.id), "reason": "Проверен другой лицевой счёт"},
+    )
+    assert correction.status_code == 200, correction.text
+    assert correction.json()["account_no"] == "TEST-102"
+    assert correction.json()["subscriber_snapshot_id"] == str(second.id)
+    history = ticket_client.get(path + "/history").json()["items"]
+    edited = next(item for item in history if item["event_type"] == "ticket_edited")
+    assert edited["event_data"]["changes"]["account_no"] == {
+        "before": "TEST-101",
+        "after": "TEST-102",
+    }
+    assert edited["event_data"]["reason"] == "Проверен другой лицевой счёт"
+    with Session(ticket_engine) as db:
+        assert db.get(SubscriberSnapshot, first.id).account_no == "TEST-101"
+        assert db.get(SubscriberSnapshot, second.id).account_no == "TEST-102"
+
+
+def test_engineer_takeover_preserves_decisions_and_sec02(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    first = seed_user(ticket_engine, "takeover_first", Role.ENGINEER)
+    second = seed_user(ticket_engine, "takeover_second", Role.ENGINEER)
+    login(ticket_client, first.login)
+    ticket = make_manual_ticket(ticket_client)
+    path = f"/api/v1/tickets/{ticket['id']}"
+    claimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200, claimed.text
+    previous_decision = ticket_client.post(
+        path + "/decisions",
+        headers=csrf(ticket_client),
+        json={"decision_text": "Синтетическая первичная проверка"},
+    )
+    assert previous_decision.status_code == 201, previous_decision.text
+    old_version = ticket_client.get(path).json()["version"]
+    login(ticket_client, second.login)
+    takeover = ticket_client.post(
+        path + "/assignment",
+        headers={**csrf(ticket_client), "If-Match": f'"{old_version}"'},
+        json={"engineer_id": str(second.id)},
+    )
+    assert takeover.status_code == 200, takeover.text
+    assert takeover.json()["assigned_engineer_id"] == str(second.id)
+    login(ticket_client, first.login)
+    assert (
+        ticket_client.post(
+            path + "/decisions",
+            headers=csrf(ticket_client),
+            json={"decision_text": "Попытка чужого решения"},
+        ).status_code
+        == 403
+    )
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketResolution)
+                .where(TicketResolution.ticket_id == UUID(ticket["id"]))
+            )
+            == 1
+        )
+        assigned = db.scalar(
+            select(TicketEvent).where(
+                TicketEvent.ticket_id == UUID(ticket["id"]),
+                TicketEvent.event_type == "engineer_assigned",
+            )
+        )
+        assert assigned.event_data["previous_engineer_id"] == str(first.id)
+    login(ticket_client, second.login)
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{takeover.json()["version"]}"'},
+        json={"decision_text": "Синтетическое решение нового инженера"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["status"] == "RESOLVED"
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(TicketResolution)
+                .where(TicketResolution.ticket_id == UUID(ticket["id"]))
+            )
+            == 2
         )
 
 
@@ -2799,14 +3102,13 @@ def test_resolved_verdict_permissions_history_and_queues(
     assert revision.status_code == 201, revision.text
     assert revision.json()["reason"] == "CABLE_BREAK"
     assert revision.json()["performed_actions"] is None
-    assert (
-        ticket_client.post(
-            path + "/decisions",
-            headers=csrf(ticket_client),
-            json={"decision_text": "Invalid reason", "reason": "GUESSED_FROM_ONU"},
-        ).status_code
-        == 422
+    unknown_reason = ticket_client.post(
+        path + "/decisions",
+        headers=csrf(ticket_client),
+        json={"decision_text": "Invalid reason", "reason": "GUESSED_FROM_ONU"},
     )
+    assert unknown_reason.status_code == 409
+    assert unknown_reason.json()["code"] == "reason_unavailable"
     latest = ticket_client.get(path).json()
     assert latest["resolved_decision_id"] == revision.json()["id"]
     assert latest["resolved_at"] == data["resolved_at"]
@@ -2851,19 +3153,19 @@ def test_decision_versions_require_assignee_for_in_progress_and_resolved(
             return (
                 db.scalar(select(Ticket.version).where(Ticket.id == ticket_id)),
                 db.scalar(
-                    select(func.count()).select_from(TicketResolution).where(
-                        TicketResolution.ticket_id == ticket_id
-                    )
+                    select(func.count())
+                    .select_from(TicketResolution)
+                    .where(TicketResolution.ticket_id == ticket_id)
                 ),
                 db.scalar(
-                    select(func.count()).select_from(TicketEvent).where(
-                        TicketEvent.ticket_id == ticket_id
-                    )
+                    select(func.count())
+                    .select_from(TicketEvent)
+                    .where(TicketEvent.ticket_id == ticket_id)
                 ),
                 db.scalar(
-                    select(func.count()).select_from(TicketAudit).where(
-                        TicketAudit.ticket_id == ticket_id
-                    )
+                    select(func.count())
+                    .select_from(TicketAudit)
+                    .where(TicketAudit.ticket_id == ticket_id)
                 ),
             )
 
@@ -2880,7 +3182,8 @@ def test_decision_versions_require_assignee_for_in_progress_and_resolved(
     assert allowed.status_code == 201, allowed.text
     assert counts()[1] == before[1] + 1
     resolved = ticket_client.post(
-        path + "/resolve", headers={**csrf(ticket_client), "If-Match": f'"{version + 1}"'},
+        path + "/resolve",
+        headers={**csrf(ticket_client), "If-Match": f'"{version + 1}"'},
         json=payload,
     )
     assert resolved.status_code == 200, resolved.text
@@ -3175,6 +3478,49 @@ class RejectingFieldGateway:
         if self.uncertain:
             raise DispatchUncertain
         raise DispatchRejected("telegram_http_400")
+
+
+def test_ticket_address_correction_precedes_netup_for_new_field_work(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "ticket_address_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(
+        ticket_engine, engineer, phone="+000000000", actual_address="Старый адрес NetUP"
+    )
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    edited = ticket_client.patch(
+        path,
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"address_override": "Уточнённый адрес заявки"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert (
+        ticket_client.post(
+            f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"2"'}
+        ).status_code
+        == 200
+    )
+    requested = ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"3"'},
+        json={"reason": "Синтетическая проверка"},
+    )
+    assert requested.status_code == 200, requested.text
+    handoff = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
+    assert "Адрес: Уточнённый адрес заявки" in handoff["message_preview"]
+    assert (
+        ticket_client.patch(
+            path,
+            headers={**csrf(ticket_client), "If-Match": f'"{requested.json()["version"]}"'},
+            json={"lookup_id": str(snapshot.id), "reason": "Повторное сопоставление"},
+        ).status_code
+        == 409
+    )
+    with Session(ticket_engine) as db:
+        assert db.get(SubscriberSnapshot, snapshot.id).actual_address == "Старый адрес NetUP"
 
 
 def test_field_work_requires_explicit_confirmed_telegram_delivery(

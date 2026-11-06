@@ -1,5 +1,7 @@
 """Exact subscriber identity checks for active linked tickets."""
 
+from uuid import UUID
+
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
 
@@ -33,8 +35,13 @@ def active_query(snapshot: SubscriberSnapshot):
     )
 
 
-def active_count(db: Session, snapshot: SubscriberSnapshot) -> int:
-    return db.scalar(select(func.count()).select_from(active_query(snapshot).subquery())) or 0
+def active_count(
+    db: Session, snapshot: SubscriberSnapshot, *, exclude_ticket_id: UUID | None = None
+) -> int:
+    query = active_query(snapshot)
+    if exclude_ticket_id is not None:
+        query = query.where(Ticket.id != exclude_ticket_id)
+    return db.scalar(select(func.count()).select_from(query.subquery())) or 0
 
 
 def lock_subscriber(db: Session, snapshot: SubscriberSnapshot) -> None:

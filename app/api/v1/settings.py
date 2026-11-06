@@ -2,18 +2,22 @@
 
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, Query, Response
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.identity import CsrfIdentityDep, CurrentIdentityDep, SessionDep
 from app.core.errors import ApiError
 from app.modules.identity.access import has_permission
 from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import AuthContext, audit
+from app.modules.tickets.models import TicketResolution
+from app.modules.tickets.reason_labels import LEGACY_REASON_NAMES
 from app.modules.tickets.settings_models import DecisionReasonCatalog, TicketTextTemplate
 from app.modules.tickets.settings_schemas import (
+    CreateReason,
     CreateTemplate,
     ReasonView,
     TemplatePurpose,
@@ -75,6 +79,25 @@ def reasons(
     ).all()
 
 
+@router.post("/reasons", response_model=ReasonView, status_code=201)
+def create_reason(payload: CreateReason, identity: CsrfIdentityDep, db: SessionDep):
+    _manager(db, identity)
+    item = DecisionReasonCatalog(code=uuid4().hex.upper(), **payload.model_dump())
+    db.add(item)
+    try:
+        db.flush()
+        audit(
+            db, "decision_reason_created", "success", actor=identity.user.id,
+            details={"after": _snapshot(item)},
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ApiError(409, "reason_name_conflict", "Decision reason name already exists") from None
+    db.refresh(item)
+    return item
+
+
 @router.patch("/reasons/{code}", response_model=ReasonView)
 def update_reason(
     code: str,
@@ -109,9 +132,40 @@ def update_reason(
         actor=identity.user.id,
         details={"before": before, "after": after},
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ApiError(409, "reason_name_conflict", "Decision reason name already exists") from None
     db.refresh(item)
     return item
+
+
+@router.delete("/reasons/{code}", status_code=204)
+def delete_reason(
+    code: str, identity: CsrfIdentityDep, db: SessionDep, if_match: IfMatch = None,
+):
+    _manager(db, identity)
+    item = db.scalar(
+        select(DecisionReasonCatalog).where(DecisionReasonCatalog.code == code).with_for_update()
+    )
+    if item is None:
+        raise ApiError(404, "reason_not_found", "Decision reason not found")
+    _version(item.version, if_match)
+    if code in LEGACY_REASON_NAMES:
+        raise ApiError(409, "builtin_reason", "Built-in reason cannot be deleted")
+    if db.scalar(select(TicketResolution.id).where(TicketResolution.reason == code).limit(1)):
+        raise ApiError(409, "reason_in_use", "Reason is used by a ticket decision")
+    before = _snapshot(item)
+    db.delete(item)
+    audit(db, "decision_reason_deleted", "success", actor=identity.user.id,
+          details={"before": before})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ApiError(409, "reason_in_use", "Reason is used by a ticket decision") from None
+    return Response(status_code=204)
 
 
 PURPOSE_PERMISSION = {

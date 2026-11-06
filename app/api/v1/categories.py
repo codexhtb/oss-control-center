@@ -31,7 +31,10 @@ def categories(
     include_inactive: Annotated[bool, Query()] = False,
 ):
     manage = has_permission(db, identity.user, Permission.IDENTITY_MANAGE)
-    if not manage and not has_permission(db, identity.user, Permission.TICKET_CREATE):
+    if not manage and not any(
+        has_permission(db, identity.user, permission)
+        for permission in (Permission.TICKET_CREATE, Permission.TICKET_EDIT_ALL)
+    ):
         raise ApiError(403, "forbidden", "Permission denied")
     if include_inactive and not manage:
         raise ApiError(403, "forbidden", "Permission denied")

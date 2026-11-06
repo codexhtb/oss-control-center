@@ -85,7 +85,7 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     source_address = (
         None if snapshot is None else _address(snapshot.actual_address, snapshot.house_number)
     )
-    address = source_address or handoff.visit_address or "не указан"
+    address = ticket.address_override or source_address or handoff.visit_address or "не указан"
     values = {"subscriber": name, "contact": contact, "account": account}
     missing = tuple(key for key, value in values.items() if not value)
     if missing:
@@ -216,8 +216,9 @@ def prepare_send(
         else None
     )
     if update_visit_address:
-        if visit_address is not None and snapshot is not None and _address(
-            snapshot.actual_address, snapshot.house_number
+        if visit_address is not None and (
+            ticket.address_override
+            or (snapshot is not None and _address(snapshot.actual_address, snapshot.house_number))
         ):
             raise ApiError(422, "field_address_from_snapshot", "Address is already in snapshot")
         handoff.visit_address = visit_address

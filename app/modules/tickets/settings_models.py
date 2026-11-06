@@ -42,6 +42,9 @@ class DecisionReasonCatalog(Base):
     )
 
 
+Index("uq_decision_reason_name_ci", func.lower(DecisionReasonCatalog.name), unique=True)
+
+
 class TicketTextTemplate(Base):
     __tablename__ = "ticket_text_templates"
     __table_args__ = (

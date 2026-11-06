@@ -5,7 +5,9 @@ from enum import StrEnum
 from unicodedata import category
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+
+from app.modules.tickets.reason_labels import LEGACY_REASON_NAMES
 
 
 class TemplatePurpose(StrEnum):
@@ -30,6 +32,22 @@ class ReasonView(BaseModel):
     is_active: bool
     version: int
     updated_at: datetime
+
+    @computed_field
+    @property
+    def is_builtin(self) -> bool:
+        return self.code in LEGACY_REASON_NAMES
+
+
+class CreateReason(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(max_length=160)
+    sort_order: int = Field(default=0, ge=0, le=100000)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        return _clean(value)
 
 
 class UpdateReason(BaseModel):

@@ -170,6 +170,21 @@ class AssignEngineer(StrictModel):
 class EditTicket(StrictModel):
     subject: str | None = Field(default=None, max_length=160)
     description: str | None = Field(default=None, max_length=10000)
+    ticket_type: TicketType | None = None
+    category_id: UUID | None = None
+    priority: TicketPriority | None = None
+    caller_full_name: str | None = Field(default=None, max_length=160)
+    caller_phone: str | None = Field(default=None, max_length=50)
+    city: str | None = Field(default=None, max_length=160)
+    address_override: str | None = Field(default=None, max_length=300)
+    correct_account_no: str | None = Field(default=None, max_length=100)
+    erroneous_account_no: str | None = Field(default=None, max_length=100)
+    payment_occurred_at: datetime | None = None
+    payment_amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    lookup_id: UUID | None = None
+    selected_service_id: str | None = Field(default=None, min_length=1, max_length=100)
+    connection_snapshot_id: UUID | None = None
+    reason: str | None = Field(default=None, max_length=500)
 
     @field_validator("subject")
     @classmethod
@@ -186,12 +201,52 @@ class EditTicket(StrictModel):
             raise ValueError("description must contain text and no control characters")
         return value
 
+    @field_validator(
+        "caller_full_name",
+        "caller_phone",
+        "city",
+        "address_override",
+        "correct_account_no",
+        "erroneous_account_no",
+    )
+    @classmethod
+    def valid_contact(cls, value: str | None) -> str | None:
+        return CreateTicket.validate_contact_field(value)
+
+    @field_validator("payment_occurred_at")
+    @classmethod
+    def valid_payment_instant(cls, value: datetime | None) -> datetime | None:
+        return CreateTicket.valid_payment_instant(value)
+
+    @field_validator("reason")
+    @classmethod
+    def valid_reason(cls, value: str | None) -> str | None:
+        return CreateTicket.validate_duplicate_reason(value)
+
     @model_validator(mode="after")
     def nonempty(self) -> "EditTicket":
-        if not self.model_fields_set or any(
-            getattr(self, key) is None for key in self.model_fields_set
+        fields = self.model_fields_set - {"reason"}
+        if not fields:
+            raise ValueError("at least one ticket field is required")
+        if any(
+            getattr(self, key) is None
+            for key in fields
+            - {
+                "subject",
+                "category_id",
+                "caller_phone",
+                "city",
+                "caller_full_name",
+                "address_override",
+                "correct_account_no",
+                "erroneous_account_no",
+                "payment_occurred_at",
+                "payment_amount",
+                "selected_service_id",
+                "connection_snapshot_id",
+            }
         ):
-            raise ValueError("subject or description is required")
+            raise ValueError("required ticket fields cannot be null")
         return self
 
 
@@ -235,7 +290,12 @@ class ManualDiagnostic(StrictModel):
 
 class AddDecision(StrictModel):
     decision_text: str = Field(min_length=1, max_length=10000)
-    reason: ResolutionReason = ResolutionReason.NOT_ESTABLISHED
+    reason: str = Field(
+        default=ResolutionReason.NOT_ESTABLISHED.value,
+        min_length=1,
+        max_length=32,
+        pattern=r"^[A-Z0-9_]+$",
+    )
     performed_actions: str | None = Field(default=None, min_length=1, max_length=10000)
 
     @field_validator("decision_text", "performed_actions")
@@ -326,6 +386,7 @@ class TicketView(BaseModel):
     caller_phone: str | None = None
     city: str | None = None
     caller_full_name: str | None = None
+    address_override: str | None = None
     correct_account_no: str | None = None
     erroneous_account_no: str | None = None
     payment_occurred_at: datetime | None = None
@@ -360,7 +421,7 @@ class TicketListView(TicketView):
     last_callback_at: datetime | None = None
     field_report_pending: bool = False
     resolution_preview: str | None = None
-    resolution_reason: ResolutionReason | None = None
+    resolution_reason: str | None = None
     resolution_reason_name: str | None = None
 
 
@@ -413,7 +474,7 @@ class DecisionView(BaseModel):
     engineer_id: UUID
     engineer_name: str | None = None
     decision_text: str
-    reason: ResolutionReason | None
+    reason: str | None
     reason_name: str | None = None
     performed_actions: str | None
     created_at: datetime
@@ -421,7 +482,7 @@ class DecisionView(BaseModel):
     @model_validator(mode="after")
     def historical_reason_name(self) -> "DecisionView":
         if self.reason_name is None and self.reason is not None:
-            self.reason_name = LEGACY_REASON_NAMES.get(self.reason.value)
+            self.reason_name = LEGACY_REASON_NAMES.get(self.reason)
         return self
 
 

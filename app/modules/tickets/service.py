@@ -129,36 +129,172 @@ def edit_ticket(
     can_edit_own = has_permission(db, actor, Permission.TICKET_EDIT_OWN)
     if not can_edit_all and not (can_edit_own and ticket.created_by == actor_id):
         raise ApiError(403, "forbidden", "Permission denied")
+    if not can_edit_all and (
+        ticket.status == TicketStatus.CLOSED
+        or payload.model_fields_set - {"subject", "description"}
+    ):
+        raise ApiError(403, "forbidden", "Permission denied")
     if not has_permission(db, actor, Permission.TICKET_READ) and not (
         has_permission(db, actor, Permission.TICKET_READ_OWN) and ticket.created_by == actor_id
     ):
         raise ApiError(403, "forbidden", "Permission denied")
     _version(ticket, version)
-    _open(ticket)
+    fields = payload.model_fields_set
+    target_type = payload.ticket_type if "ticket_type" in fields else ticket.ticket_type
+    source_fields = {"lookup_id", "selected_service_id", "connection_snapshot_id"}
+    source_requested = bool(fields & source_fields)
+    type_changed = target_type != ticket.ticket_type
+    if type_changed or source_requested:
+        if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
+            raise ApiError(409, "source_locked", "Source cannot be changed after resolution")
+        if (
+            ticket.ticket_type == TicketType.ERRONEOUS_PAYMENT
+            or target_type == TicketType.ERRONEOUS_PAYMENT
+        ):
+            raise ApiError(409, "type_locked", "Payment ticket type cannot be changed")
+        if type_changed and (ticket.status != TicketStatus.OPEN or ticket.assigned_engineer_id):
+            raise ApiError(409, "type_locked", "Type can change only before work starts")
+        if any(
+            db.scalar(select(exists().where(model.ticket_id == ticket.id)))
+            for model in (
+                TicketResolution,
+                TicketCallback,
+                FieldWorkHandoff,
+                DiagnosticSnapshot,
+                DiagnosticCheck,
+            )
+        ):
+            raise ApiError(409, "source_locked", "Related work prevents changing ticket source")
+        if not payload.reason:
+            raise ApiError(422, "reason_required", "Explain the source correction")
+    elif ticket.status == TicketStatus.CLOSED and not payload.reason:
+        raise ApiError(422, "reason_required", "Explain the correction to a closed ticket")
+    if source_requested and "lookup_id" not in fields:
+        raise ApiError(422, "lookup_required", "A fresh subscriber lookup is required")
     if (
-        "description" in payload.model_fields_set
-        and payload.description == ""
-        and ticket.ticket_type not in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT)
+        target_type == TicketType.SUBSCRIBER_LINKED
+        and ticket.ticket_type != target_type
+        and not source_requested
+    ):
+        raise ApiError(422, "lookup_required", "A confirmed subscriber lookup is required")
+    if target_type != TicketType.SUBSCRIBER_LINKED and source_requested:
+        raise ApiError(422, "invalid_source", "Only linked tickets accept subscriber lookups")
+    changes: dict[str, dict[str, str | None]] = {}
+
+    def set_field(field: str, value: object) -> None:
+        previous = getattr(ticket, field)
+        if previous != value:
+            changes[field] = {
+                "before": str(previous) if previous is not None else None,
+                "after": str(value) if value is not None else None,
+            }
+            setattr(ticket, field, value)
+
+    if type_changed:
+        set_field("ticket_type", target_type)
+        if target_type != TicketType.SUBSCRIBER_LINKED:
+            for field in (
+                "account_no",
+                "subscriber_snapshot_id",
+                "connection_snapshot_id",
+                "selected_service_id",
+            ):
+                set_field(field, None)
+    if source_requested:
+        account, snapshot_id, service_id, connection_id = _linked_source(db, actor_id, payload)
+        destination = db.get(SubscriberSnapshot, snapshot_id)
+        lock_subscriber(db, destination)
+        if active_count(db, destination, exclude_ticket_id=ticket.id):
+            raise ApiError(409, "active_ticket_exists", "An active ticket exists for this account")
+        for field, value in (
+            ("account_no", account),
+            ("subscriber_snapshot_id", snapshot_id),
+            ("selected_service_id", service_id),
+            ("connection_snapshot_id", connection_id),
+        ):
+            set_field(field, value)
+    if "category_id" in fields:
+        category = None
+        if payload.category_id is not None:
+            category = db.scalar(
+                select(TicketCategory)
+                .where(TicketCategory.id == payload.category_id)
+                .with_for_update(read=True)
+            )
+            if category is None or not category.is_active:
+                raise ApiError(422, "invalid_category", "Select an active category")
+        set_field("category_id", category.id if category else None)
+        set_field("category_name", category.name if category else None)
+        if category and not category.is_other:
+            if "subject" in fields and payload.subject != category.name:
+                raise ApiError(422, "category_subject_conflict", "Subject is set by category")
+            set_field("subject", category.name)
+    if target_type == TicketType.ERRONEOUS_PAYMENT:
+        if "category_id" in fields and payload.category_id is not None:
+            raise ApiError(422, "invalid_category", "Payment tickets have no category")
+        if "subject" in fields and payload.subject != "Ошибочный платёж":
+            raise ApiError(422, "fixed_subject", "Payment ticket subject is fixed")
+    elif "subject" in fields and ("category_id" not in fields or payload.category_id is None):
+        set_field("subject", payload.subject)
+    editable = (
+        "description",
+        "priority",
+        "caller_full_name",
+        "caller_phone",
+        "city",
+        "address_override",
+        "correct_account_no",
+        "erroneous_account_no",
+        "payment_occurred_at",
+        "payment_amount",
+    )
+    payment_fields = {
+        "correct_account_no",
+        "erroneous_account_no",
+        "payment_occurred_at",
+        "payment_amount",
+    }
+    if target_type != TicketType.ERRONEOUS_PAYMENT and fields & payment_fields:
+        raise ApiError(422, "invalid_payment_fields", "Payment fields belong to payment tickets")
+    for field in editable:
+        if field in fields:
+            set_field(field, getattr(payload, field))
+    if not ticket.description and target_type not in (
+        TicketType.MANUAL,
+        TicketType.ERRONEOUS_PAYMENT,
     ):
         raise ApiError(422, "invalid_description", "Description is required for this ticket type")
-    if (
-        ticket.ticket_type == TicketType.ERRONEOUS_PAYMENT
-        and "subject" in payload.model_fields_set
-        and payload.subject != "Ошибочный платёж"
+    if target_type == TicketType.MANUAL and not all(
+        (ticket.caller_full_name, ticket.caller_phone, ticket.city)
     ):
-        raise ApiError(422, "fixed_subject", "Subject is fixed for erroneous payment tickets")
-    changed: dict[str, dict[str, str | None]] = {}
-    for field in ("subject", "description"):
-        if field in payload.model_fields_set:
-            value = getattr(payload, field)
-            previous = getattr(ticket, field)
-            if value != previous:
-                changed[field] = {"before": previous, "after": value}
-                setattr(ticket, field, value)
-    if not changed:
+        raise ApiError(
+            422, "missing_contact", "Name, phone and city are required for manual tickets"
+        )
+    if target_type == TicketType.MANUAL and ticket.subject is None:
+        set_field("subject", "Ручное обращение")
+    if (
+        target_type in (TicketType.SUBSCRIBER_LINKED, TicketType.INTERNAL)
+        and ticket.caller_full_name
+    ):
+        raise ApiError(422, "invalid_contact", "Caller name belongs to manual tickets")
+    if target_type == TicketType.ERRONEOUS_PAYMENT and (
+        not ticket.caller_full_name
+        or not ticket.correct_account_no
+        or not ticket.erroneous_account_no
+        or ticket.correct_account_no == ticket.erroneous_account_no
+        or not ticket.payment_occurred_at
+        or not ticket.payment_amount
+        or ticket.caller_phone
+        or ticket.city
+    ):
+        raise ApiError(422, "invalid_payment", "Payment ticket fields are incomplete")
+    if not changes:
         raise ApiError(409, "no_change", "No fields changed")
     _changed(ticket)
-    _fact(db, ticket, actor_id, "ticket_edited", {"changes": changed})
+    event_data: dict = {"changes": changes}
+    if payload.reason:
+        event_data["reason"] = payload.reason
+    _fact(db, ticket, actor_id, "ticket_edited", event_data)
     db.commit()
     db.refresh(ticket)
     return ticket
@@ -699,32 +835,40 @@ def assign_engineer(
     engineer = db.execute(
         select(User).where(User.id == engineer_id).with_for_update()
     ).scalar_one_or_none()
-    if engineer is None or not engineer.is_active or not all(
-        has_permission(db, engineer, permission)
-        for permission in (
-            Permission.TICKET_READ,
-            Permission.TICKET_START,
-            Permission.TICKET_DECISION,
+    if (
+        engineer is None
+        or not engineer.is_active
+        or not all(
+            has_permission(db, engineer, permission)
+            for permission in (
+                Permission.TICKET_READ,
+                Permission.TICKET_START,
+                Permission.TICKET_DECISION,
+            )
         )
     ):
         raise ApiError(422, "invalid_engineer", "Assignee must be allowed to work on tickets")
     ticket = _ticket(db, ticket_id, lock=True)
+    if not _can_read_ticket(db, actor, ticket):
+        raise ApiError(403, "forbidden", "Permission denied")
     _version(ticket, version)
     if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
         raise ApiError(409, "invalid_transition", "Only active work can be assigned")
-    if (
-        ticket.assigned_engineer_id is not None
-        and ticket.assigned_engineer_id != engineer_id
-        and actor.role != Role.ADMIN
-    ):
-        raise ApiError(
-            409, "ticket_already_assigned", "Only an administrator can reassign a claimed ticket"
-        )
     if ticket.assigned_engineer_id == engineer_id:
         raise ApiError(409, "same_assignee", "Engineer is already assigned")
+    previous_engineer_id = ticket.assigned_engineer_id
     ticket.assigned_engineer_id = engineer_id
     _changed(ticket)
-    _fact(db, ticket, actor_id, "engineer_assigned", {"engineer_id": str(engineer_id)})
+    _fact(
+        db,
+        ticket,
+        actor_id,
+        "engineer_assigned",
+        {
+            "engineer_id": str(engineer_id),
+            "previous_engineer_id": str(previous_engineer_id) if previous_engineer_id else None,
+        },
+    )
     db.commit()
     db.refresh(ticket)
     return ticket
@@ -913,10 +1057,11 @@ def confirm_monitoring_check(
     return item
 
 
-def _decision_reason_name(db: Session, reason: ResolutionReason) -> str:
+def _decision_reason_name(db: Session, reason: str) -> str:
     # A shared row lock serializes new decisions against disabling the reason.
     item = db.scalar(
-        select(DecisionReasonCatalog).where(DecisionReasonCatalog.code == reason.value)
+        select(DecisionReasonCatalog)
+        .where(DecisionReasonCatalog.code == reason)
         .with_for_update(read=True)
     )
     if item is None or not item.is_active:
@@ -933,13 +1078,13 @@ def add_decision(
         raise ApiError(409, "invalid_transition", "Start ticket before recording a decision")
     if ticket.assigned_engineer_id != actor_id and actor.role != Role.ADMIN:
         raise ApiError(403, "forbidden", "Only the assigned engineer can record a verdict")
-    reason = payload.reason or ResolutionReason.NOT_ESTABLISHED
+    reason = payload.reason or ResolutionReason.NOT_ESTABLISHED.value
     reason_name = _decision_reason_name(db, reason)
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,
         decision_text=payload.decision_text,
-        reason=reason.value,
+        reason=reason,
         reason_name=reason_name,
         performed_actions=payload.performed_actions,
     )
@@ -966,13 +1111,13 @@ def resolve_ticket(
         raise ApiError(403, "forbidden", "Only the assigned engineer can resolve this ticket")
     if not payload.decision_text.strip():
         raise ApiError(422, "empty_decision", "Engineer verdict is required")
-    reason = payload.reason or ResolutionReason.NOT_ESTABLISHED
+    reason = payload.reason or ResolutionReason.NOT_ESTABLISHED.value
     reason_name = _decision_reason_name(db, reason)
     item = TicketResolution(
         ticket_id=ticket_id,
         engineer_id=actor_id,
         decision_text=payload.decision_text.strip(),
-        reason=reason.value,
+        reason=reason,
         reason_name=reason_name,
         performed_actions=payload.performed_actions,
     )
