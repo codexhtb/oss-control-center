@@ -82,6 +82,21 @@ export function errorText(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'telegram_group_not_bound') return 'Сначала привяжите Telegram-группу командой /oss_bind.'
     if (error.code === 'telegram_bot_not_in_bound_group') return 'Бот недоступен в привязанной группе. Добавьте его с правами администратора.'
+    const ticketEditErrors: Record<string, string> = {
+      source_locked: 'Привязку нельзя изменить после решения, диагностики, обзвона или передачи монтажникам.',
+      type_locked: 'Тип заявки можно изменить только до начала работы; тип ошибочного платежа фиксирован.',
+      active_ticket_exists: 'По выбранному абоненту уже есть активная заявка.',
+      reason_required: 'Укажите причину корректировки.',
+      lookup_required: 'Подтвердите лицевой счёт поиском NetUP.',
+      lookup_expired: 'Данные поиска NetUP устарели. Найдите абонента ещё раз.',
+      invalid_category: 'Выберите действующую категорию.',
+      category_subject_conflict: 'Тема должна совпадать с готовой категорией. Для своего названия уберите категорию.',
+      missing_contact: 'Для ручной заявки нужны имя, телефон и город.',
+      invalid_description: 'Для этого типа заявки необходимо описание проблемы.',
+      invalid_payment: 'Проверьте поля ошибочного платежа.',
+    }
+    const ticketEditMessage = ticketEditErrors[error.code]
+    if (ticketEditMessage) return ticketEditMessage
     switch (error.status) {
       case 401: return 'Сессия завершена. Войдите снова.'
       case 403: return 'Недостаточно прав или запрос отклонён проверкой безопасности.'
@@ -94,6 +109,10 @@ export function errorText(error: unknown): string {
           case 'cannot_delete_self': return 'Нельзя удалить свою учётную запись.'
           case 'already_active': return 'Учётная запись уже активна.'
           case 'already_inactive': return 'Учётная запись уже отключена.'
+          case 'reason_name_conflict': return 'Причина с таким названием уже есть.'
+          case 'reason_in_use': return 'Причина уже использована в решении. Её можно отключить, но нельзя удалить.'
+          case 'builtin_reason': return 'Предустановленную причину нельзя удалить.'
+          case 'reason_unavailable': return 'Причина отключена или удалена. Выберите другую.'
           default: return 'Данные изменились. Обновите страницу и повторите действие.'
         }
       case 422: return 'Проверьте введённые данные.'

@@ -29,12 +29,24 @@ function ReasonRow({ item, reload }: { item: DecisionReasonSetting; reload: () =
       await reload()
     } finally { setBusy(false) }
   }
+  async function remove() {
+    if (busy || !window.confirm(`Удалить неиспользуемую причину «${item.name}»?`)) return
+    setBusy(true); setError(null)
+    try {
+      await settingsApi.deleteReason(item.code, item.version)
+      await reload()
+    } catch (reason) {
+      setError(reason)
+      await reload()
+    } finally { setBusy(false) }
+  }
   return <form className="settings-editor-row" onSubmit={(event) => void save(event)}>
     <code>{item.code}</code>
     <label className="field"><span>Название</span><input aria-label={`Название причины ${item.code}`} value={name} maxLength={160} required onChange={(event) => setName(event.target.value)} /></label>
     <label className="field"><span>Порядок</span><input aria-label={`Порядок причины ${item.code}`} type="number" min={0} max={100000} value={order} onChange={(event) => setOrder(Number(event.target.value))} /></label>
     <label className="settings-editor-active"><input type="checkbox" aria-label={`Активна причина ${item.code}`} checked={active} disabled={item.code === 'NOT_ESTABLISHED'} onChange={(event) => setActive(event.target.checked)} /> Активна</label>
     <Button type="submit" disabled={busy || !name.trim() || !changed}>Сохранить</Button>
+    {!item.is_builtin && <Button type="button" variant="quiet" disabled={busy} onClick={() => void remove()}>Удалить</Button>}
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
   </form>
 }
@@ -42,10 +54,34 @@ function ReasonRow({ item, reload }: { item: DecisionReasonSetting; reload: () =
 export function ReasonManager() {
   const client = useQueryClient()
   const reasons = useQuery({ queryKey: ['decision-reasons', 'all'], queryFn: ({ signal }) => settingsApi.reasons(true, signal) })
+  const [name, setName] = useState('')
+  const [order, setOrder] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
   async function reload() { await client.invalidateQueries({ queryKey: ['decision-reasons'] }) }
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy || !name.trim()) return
+    setBusy(true); setError(null)
+    try {
+      await settingsApi.createReason({ name: name.trim(), sort_order: order })
+      setName(''); setOrder(0)
+      await reload()
+    } catch (reason) { setError(reason) }
+    finally { setBusy(false) }
+  }
   return <section className="detail-panel settings-section"><div className="detail-panel__heading"><h2>Причины решений</h2></div>
     {reasons.isPending ? <p role="status">Загружаем причины…</p> : reasons.isError ? <Notice tone="error">{errorText(reasons.error)}</Notice> : reasons.data.length === 0 ? <p className="muted">Причины не найдены.</p> : <div className="settings-editor-list">{reasons.data.map((item) => <ReasonRow key={item.code} item={item} reload={reload} />)}</div>}
-    <p className="muted">Коды причин неизменяемы. Старые решения сохраняют исходное название.</p>
+    <form className="settings-template-row settings-template-row--new settings-reason-create" onSubmit={(event) => void add(event)}>
+      <h3>Новая причина</h3>
+      <div className="settings-template-fields">
+        <label className="field"><span>Название</span><input aria-label="Название новой причины" value={name} maxLength={160} required onChange={(event) => setName(event.target.value)} /></label>
+        <label className="field"><span>Порядок</span><input aria-label="Порядок новой причины" type="number" min={0} max={100000} value={order} onChange={(event) => setOrder(Number(event.target.value))} /></label>
+      </div>
+      <Button type="submit" disabled={busy || !name.trim()}>Создать причину</Button>
+      {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
+    </form>
+    <p className="muted">Коды причин неизменяемы. Использованные причины нельзя удалить; их прежние названия сохраняются в решениях.</p>
   </section>
 }
 

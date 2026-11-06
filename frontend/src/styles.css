@@ -684,12 +684,13 @@ html[data-effects="simple"] .workspace-welcome__particle { display: none; }
 .settings-links span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 .settings-editor-list { display: grid; gap: 10px; }
 .settings-editor-row, .settings-template-row { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface-raised); }
-.settings-editor-row { grid-template-columns: minmax(130px, 1fr) minmax(160px, 2fr) 110px 100px auto; align-items: end; }
+.settings-editor-row { grid-template-columns: minmax(130px, 1fr) minmax(160px, 2fr) 110px 100px auto auto; align-items: end; }
 .settings-editor-row > code { align-self: center; color: var(--muted); overflow-wrap: anywhere; }
 .settings-editor-row .field, .settings-template-row .field { min-width: 0; }
 .settings-editor-row input, .settings-template-row input { height: 36px; }
 .settings-editor-active { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; white-space: nowrap; }
 .settings-template-fields { display: grid; grid-template-columns: minmax(160px, 2fr) minmax(150px, 1fr) 100px auto; gap: 10px; align-items: end; }
+.settings-reason-create .settings-template-fields { grid-template-columns: minmax(160px, 2fr) 110px; max-width: 480px; }
 .settings-template-row h3 { margin: 0; font-size: 15px; }
 .settings-template-row--new { margin-top: 14px; }
 .settings-template-row textarea { width: 100%; }
@@ -697,6 +698,7 @@ html[data-effects="simple"] .workspace-welcome__particle { display: none; }
 .template-picker { max-width: 280px; }
 @media (max-width: 850px) { .settings-editor-row, .settings-template-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .settings-editor-row, .settings-template-fields { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) { .settings-reason-create .settings-template-fields { grid-template-columns: minmax(0, 1fr); } }
 .detail-panel__heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding-bottom: 16px; margin-bottom: 15px; border-bottom: 1px solid var(--line-soft); }
 .detail-panel__heading h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: #edf3f3; font-size: 15px; font-weight: 680; }
 .detail-panel__heading h2 svg { color: var(--accent); }
@@ -950,3 +952,10 @@ body:has(.staff-chat) { min-height: 0; overflow: hidden; }
 .staff-chat__hint { position: absolute; left: 19px; bottom: 4px; color: #899aa6; font-size: 10px; }
 .staff-chat__send-error { flex: 1 0 100%; order: 2; color: #f7afa5; font-size: 11px; }
 @media (max-width: 640px) { .main-content:has(> .staff-chat) { padding: 10px; } .staff-chat__header { padding: 8px 14px; } .staff-chat__timeline { padding: 8px 10px; } .staff-chat__message { max-width: 91%; } .staff-chat__composer { padding: 7px 10px 19px; } .staff-chat__hint { left: 11px; } }
+.ticket-editor { display: grid; gap: 16px; }
+.ticket-editor__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ticket-editor__group { min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--border, #34404a); border-radius: 12px; display: grid; gap: 11px; }
+.ticket-editor__group legend { padding: 0 6px; font-weight: 700; }
+.ticket-editor__lookup { display: flex; align-items: end; gap: 10px; }
+.ticket-editor__lookup .field { flex: 1; }
+@media (max-width: 700px) { .ticket-editor__grid { grid-template-columns: 1fr; } .ticket-editor__lookup { align-items: stretch; flex-direction: column; } }

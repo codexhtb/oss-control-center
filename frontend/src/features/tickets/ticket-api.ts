@@ -3,7 +3,7 @@ import type {
   ActiveTickets, ConfiguredServicesPage, TariffHistoryPage, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard, SubscriberFinanceKind, SubscriberFinancePage,
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
   ResolutionReason,
-  FieldWorkHandoff,
+  FieldWorkHandoff, EditTicketInput,
   FieldExternalMessage,
 } from './types'
 
@@ -24,9 +24,9 @@ export const ticketApi = {
   get: (id: string, signal?: AbortSignal) => apiRequest<TicketDetail>(ticketPath(id), { signal }),
   create: (payload: CreateTicketInput) =>
     apiRequest<Ticket>('/api/v1/tickets', { method: 'POST', json: payload }),
-  edit: (id: string, version: number, subject: string, description: string) =>
+  edit: (id: string, version: number, payload: EditTicketInput) =>
     apiRequest<Ticket>(ticketPath(id), {
-      method: 'PATCH', json: { subject, description }, ifMatch: `"${version}"`,
+      method: 'PATCH', json: payload, ifMatch: `"${version}"`,
     }),
   trash: (page: number, signal?: AbortSignal) =>
     apiRequest<Page<Ticket>>(withQuery('/api/v1/tickets/trash', { page, size: 20 }), { signal }),

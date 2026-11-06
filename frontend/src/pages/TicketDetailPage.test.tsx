@@ -9,7 +9,7 @@ import type { MeResponse } from '../shared/api/types'
 import { TicketDetailPage } from './TicketDetailPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
-  get: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
+  get: vi.fn(), edit: vi.fn(), categories: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
   decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
@@ -54,12 +54,13 @@ beforeEach(() => {
   vi.mocked(settingsApi.reasons).mockReset()
   vi.mocked(settingsApi.templates).mockReset()
   vi.mocked(settingsApi.reasons).mockResolvedValue([
-    { code: 'NOT_ESTABLISHED', name: 'Причина не установлена', sort_order: 90, is_active: true, version: 1, updated_at: base.created_at },
-    { code: 'NETWORK_FAULT', name: 'Неисправность сети', sort_order: 40, is_active: true, version: 1, updated_at: base.created_at },
-    { code: 'CUSTOMER_EQUIPMENT', name: 'Оборудование абонента', sort_order: 20, is_active: true, version: 1, updated_at: base.created_at },
+    { code: 'NOT_ESTABLISHED', name: 'Причина не установлена', sort_order: 90, is_active: true, version: 1, updated_at: base.created_at, is_builtin: true },
+    { code: 'NETWORK_FAULT', name: 'Неисправность сети', sort_order: 40, is_active: true, version: 1, updated_at: base.created_at, is_builtin: true },
+    { code: 'CUSTOMER_EQUIPMENT', name: 'Оборудование абонента', sort_order: 20, is_active: true, version: 1, updated_at: base.created_at, is_builtin: true },
   ])
   vi.mocked(settingsApi.templates).mockResolvedValue([])
   vi.mocked(ticketApi.get).mockResolvedValue(base)
+  vi.mocked(ticketApi.categories).mockResolvedValue([])
   vi.mocked(ticketApi.comments).mockResolvedValue(empty)
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
   vi.mocked(ticketApi.diagnostics).mockResolvedValue(empty)
@@ -74,6 +75,38 @@ beforeEach(() => {
     availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
     limitations: ['onu_source_not_configured'], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
   })
+})
+
+it('opens the full editor for an engineer and sends changed fields with the ticket version', async () => {
+  const engineer = session('engineer')
+  vi.mocked(ticketApi.edit).mockResolvedValue({ ...base, priority: 'HIGH', address_override: 'Синтетический адрес', version: 4 })
+  renderDetail('engineer', { ...engineer, permissions: [...engineer.permissions, 'tickets.edit.all'] })
+  fireEvent.click(await screen.findByRole('button', { name: 'Редактировать заявку' }))
+  const form = screen.getByRole('form', { name: 'Редактирование заявки' })
+  fireEvent.change(within(form).getByRole('combobox', { name: 'Приоритет' }), { target: { value: 'HIGH' } })
+  fireEvent.change(within(form).getByRole('textbox', { name: 'Адрес для заявки' }), { target: { value: 'Синтетический адрес' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Сохранить изменения' }))
+  await waitFor(() => expect(ticketApi.edit).toHaveBeenCalledWith(ticketId, 3, {
+    priority: 'HIGH', address_override: 'Синтетический адрес',
+  }))
+})
+
+it('requires a reason for correcting a closed ticket and does not show the editor without permission', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'CLOSED', closed_by: 'engineer-id', closed_at: base.created_at, closed_decision_id: 'decision-id' })
+  renderDetail('operator')
+  expect(await screen.findByRole('heading', { name: 'Проверка OSS' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Редактировать заявку' })).not.toBeInTheDocument()
+})
+
+it('keeps the legacy own-ticket editor limited to subject and description', async () => {
+  const operator = session('operator')
+  renderDetail('operator', { ...operator, permissions: [...operator.permissions, 'tickets.edit.own'] })
+  fireEvent.click(await screen.findByRole('button', { name: 'Редактировать заявку' }))
+  const form = screen.getByRole('form', { name: 'Редактирование заявки' })
+  expect(within(form).getByRole('textbox', { name: 'Тема' })).toBeInTheDocument()
+  expect(within(form).getByRole('textbox', { name: 'Описание проблемы' })).toBeInTheDocument()
+  expect(within(form).queryByRole('combobox', { name: 'Приоритет' })).not.toBeInTheDocument()
+  expect(within(form).queryByRole('textbox', { name: 'Адрес для заявки' })).not.toBeInTheDocument()
 })
 
 it('shows the saved ticket and sends the current version when an engineer starts work', async () => {
@@ -242,12 +275,14 @@ it.each([
   ))
 })
 
-it('does not offer claim or reassignment of another engineer ticket', async () => {
+it('offers explicit takeover of another engineer ticket only with assignment rights', async () => {
   vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: 'other-engineer', assigned_engineer_name: 'Другой инженер' })
+  vi.mocked(ticketApi.assign).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: session('engineer').user.id, version: 4 })
   renderDetail('engineer')
   expect(await screen.findByText('Другой инженер')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /Взять в работу|Освободить заявку/ })).not.toBeInTheDocument()
-  expect(screen.queryByText('Назначить инженера')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Забрать себе' }))
+  await waitFor(() => expect(ticketApi.assign).toHaveBeenCalledWith(ticketId, session('engineer').user.id, 3))
 })
 
 it('shows only confirmed connection fields and opens a fresh subscriber lookup', async () => {
@@ -594,6 +629,26 @@ it('groups metadata and permitted OPEN actions in one panel, with deletion behin
   fireEvent.change(panel.getByRole('textbox', { name: 'Причина (необязательно)' }), { target: { value: 'Дубликат' } })
   fireEvent.click(panel.getByRole('button', { name: 'Подтвердить удаление' }))
   await waitFor(() => expect(ticketApi.remove).toHaveBeenCalledWith(ticketId, 3, 'Дубликат'))
+})
+
+it('offers a newly created catalog reason in the decision form', async () => {
+  const code = 'A'.repeat(32)
+  vi.mocked(settingsApi.reasons).mockResolvedValue([
+    { code: 'NOT_ESTABLISHED', name: 'Причина не установлена', sort_order: 90,
+      is_active: true, version: 1, updated_at: base.created_at, is_builtin: true },
+    { code, name: 'Новая причина', sort_order: 1, is_active: true, version: 1,
+      updated_at: base.created_at, is_builtin: false },
+  ])
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS', assigned_engineer_id: session('engineer').user.id })
+  renderDetail('engineer')
+  const reason = await screen.findByRole('combobox', { name: 'Причина решения' })
+  expect(screen.getByRole('option', { name: 'Новая причина' })).toBeInTheDocument()
+  fireEvent.change(reason, { target: { value: code } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Решение инженера' }), {
+    target: { value: 'Проверено' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Решено' }))
+  await waitFor(() => expect(ticketApi.resolve).toHaveBeenCalledWith(ticketId, 'Проверено', code, 3))
 })
 
 it('records a verdict in the action panel before offering a separate closure', async () => {

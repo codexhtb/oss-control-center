@@ -49,6 +49,8 @@ describe('same-origin API client', () => {
     expect(errorText(new ApiError(409, 'user_conflict'))).toBe('Логин уже занят другим сотрудником.')
     expect(errorText(new ApiError(409, 'no_change'))).toBe('Изменений нет.')
     expect(errorText(new ApiError(409, 'version_conflict'))).toContain('Обновите страницу')
+    expect(errorText(new ApiError(409, 'source_locked'))).toContain('Привязку нельзя изменить')
+    expect(errorText(new ApiError(422, 'reason_required'))).toContain('причину корректировки')
     expect(errorText(new ApiError(503, 'billing_unavailable'))).toContain('временно недоступен')
   })
 })

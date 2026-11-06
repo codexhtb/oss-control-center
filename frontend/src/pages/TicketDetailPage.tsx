@@ -7,6 +7,7 @@ import type { MeResponse } from '../shared/api/types'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { ticketApi } from '../features/tickets/ticket-api'
+import { TicketEditor } from '../features/tickets/TicketEditor'
 import { settingsApi } from '../features/tickets/settings-api'
 import { TemplatePicker } from '../features/tickets/TemplatePicker'
 import { MonitoringTicketSection } from '../features/tickets/MonitoringTicketSection'
@@ -39,13 +40,14 @@ function Pager({ page, total, change }: { page: number; total: number; change: (
 function EditedFields({ data }: { data: Record<string, unknown> }) {
   const changes = data.changes
   if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return null
-  return <div className="history-changes">{Object.entries(changes).filter(([field]) => field === 'subject' || field === 'description').map(([field, entry]) => {
+  const labels: Record<string, string> = { subject: 'Тема', description: 'Описание', ticket_type: 'Тип', category_id: 'Категория', category_name: 'Название категории', priority: 'Приоритет', caller_full_name: 'Обратившийся', caller_phone: 'Телефон', city: 'Город', address_override: 'Адрес', account_no: 'Лицевой счёт', subscriber_snapshot_id: 'Снимок абонента', connection_snapshot_id: 'Подключение', selected_service_id: 'Услуга', correct_account_no: 'Верный лицевой счёт', erroneous_account_no: 'Ошибочный лицевой счёт', payment_occurred_at: 'Время платежа', payment_amount: 'Сумма платежа' }
+  return <div className="history-changes">{Object.entries(changes).filter(([field]) => !!labels[field]).map(([field, entry]) => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
     const values = entry as Record<string, unknown>
     const before = typeof values.before === 'string' ? values.before : 'Не указано'
     const after = typeof values.after === 'string' ? values.after : 'Не указано'
-    return <p key={field}><b>{field === 'subject' ? 'Тема' : 'Описание'}:</b> {before} → {after}</p>
-  })}</div>
+    return <p key={field}><b>{labels[field]}:</b> {before} → {after}</p>
+  })}{typeof data.reason === 'string' && <p><b>Причина:</b> {data.reason}</p>}</div>
 }
 
 export function TicketDetailPage({ session }: { session: MeResponse }) {
@@ -80,8 +82,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [subscriberBusy, setSubscriberBusy] = useState(false)
   const [subscriberError, setSubscriberError] = useState<unknown>(null)
   const [editing, setEditing] = useState(false)
-  const [editSubject, setEditSubject] = useState('')
-  const [editDescription, setEditDescription] = useState('')
+  const editDirty = useRef(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteReason, setDeleteReason] = useState('')
   useEffect(() => { if (confirmDelete) deleteReasonInput.current?.focus() }, [confirmDelete])
@@ -174,6 +175,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to={listDestination}><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{errorText(ticketQuery.error)}</Notice></div>
   const ticket = ticketQuery.data
   const primaryPhone = ticket.caller_phone || ticket.subscriber?.phone || null
+  const hasTicketAddress = !!(ticket.address_override || ticket.subscriber?.actual_address)?.trim()
   const additionalPhones = [
     ticket.subscriber?.phone,
     ...(ticket.subscriber?.contacts?.map((contact) => contact.value) || []),
@@ -183,14 +185,22 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
       phoneKey(phone) !== phoneKey(primaryPhone || '') &&
       phones.findIndex((item) => phoneKey(item) === phoneKey(phone)) === index,
     )
-  const canEdit = ticket.status !== 'CLOSED' && (session.permissions.includes('tickets.edit.all') || (session.permissions.includes('tickets.edit.own') && ticket.created_by === session.user.id))
+  const canEditAll = session.permissions.includes('tickets.edit.all')
+  const canEdit = canEditAll || (ticket.status !== 'CLOSED' && session.permissions.includes('tickets.edit.own') && ticket.created_by === session.user.id)
   const canDelete = session.permissions.includes('tickets.delete.all') || (session.permissions.includes('tickets.delete.own') && ticket.created_by === session.user.id)
   const open = ticket.status !== 'CLOSED'
   const activeWork = ticket.status === 'OPEN' || ticket.status === 'IN_PROGRESS'
   const inProgress = ticket.status === 'IN_PROGRESS'
   const canWriteVerdict = canDecide && (ticket.assigned_engineer_id === session.user.id || session.user.role === 'admin')
   const assignedName = ticket.assigned_engineer_name || engineers.data?.items.find((item) => item.id === ticket.assigned_engineer_id)?.display_name
-  const canManualAssign = canAssign && (ticket.assigned_engineer_id === null || session.user.role === 'admin')
+  const canManualAssign = canAssign
+
+  function leaveEditor(): boolean {
+    if (editing && editDirty.current && !window.confirm('Отменить несохранённые изменения заявки?')) return false
+    editDirty.current = false
+    setEditing(false)
+    return true
+  }
 
   function submitCallback(outcome: CallbackOutcome) {
     if (outcome === 'STILL_BROKEN' && !callbackComment.trim()) return
@@ -252,10 +262,10 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
 
   return (
     <div className="page desk-page ticket-detail-page">
-      <Link to={listDestination} className="back-link"><ArrowLeft size={15} /> К реестру заявок</Link>
+      <Link to={listDestination} className="back-link" onClick={(event) => { if (!leaveEditor()) event.preventDefault() }}><ArrowLeft size={15} /> К реестру заявок</Link>
       <header className="ticket-detail-heading">
         <div className="ticket-detail-heading__title"><p className="eyebrow">SERVICEDESK / ЗАЯВКА #{ticket.number}</p><h1>{ticketTitle(ticket.subject)}</h1><div className="ticket-detail-tags"><span className={`status-chip status-chip--${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span><span className="type-label">{typeLabel[ticket.ticket_type]}</span><span className={`priority priority--${ticket.priority.toLowerCase()}`}>{priorityLabel[ticket.priority]}</span></div></div>
-        <Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => void ticketQuery.refetch()} disabled={ticketQuery.isFetching}>Обновить</Button>
+        <div className="user-actions">{canEdit && <Button variant="secondary" onClick={() => { setActiveTab('work'); setEditing(true) }}>Редактировать заявку</Button>}<Button variant="quiet" icon={<RefreshCw size={15} />} onClick={() => { if (leaveEditor()) void ticketQuery.refetch() }} disabled={ticketQuery.isFetching}>Обновить</Button></div>
         <dl className="ticket-detail-facts">
           {ticket.ticket_type === 'ERRONEOUS_PAYMENT' ? <>
             <div><dt>Наименование обратившегося</dt><dd>{ticket.caller_full_name || '—'}</dd></div>
@@ -268,7 +278,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
           <div><dt>Лицевой счёт</dt><dd>{ticket.account_no || '—'}</dd></div>
           <div><dt>Телефон</dt><dd>{primaryPhone || '—'}</dd></div>
           <div><dt>Город</dt><dd>{ticket.city || '—'}</dd></div>
-          <div><dt>Адрес</dt><dd>{formatSubscriberAddress(ticket.subscriber?.actual_address, ticket.subscriber?.house_number) || '—'}</dd></div>
+          <div><dt>Адрес</dt><dd>{ticket.address_override || formatSubscriberAddress(ticket.subscriber?.actual_address, ticket.subscriber?.house_number) || '—'}</dd></div>
           <div><dt>Категория</dt><dd>{ticket.category_name || '—'}</dd></div>
           </>}
         </dl>
@@ -276,14 +286,15 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
       {actionError !== null && <Notice tone="error">{actionError instanceof ApiError && actionError.code === 'ticket_already_claimed' ? 'Заявку уже взял другой инженер.' : errorText(actionError)}{actionError instanceof ApiError && actionError.status === 409 ? ' Карточка обновлена; проверьте исполнителя перед повтором.' : ''}</Notice>}
       {actionSuccess && <Notice>{actionSuccess}</Notice>}
       <nav className="ticket-tabs" role="tablist" aria-label="Разделы заявки">
-        {ticketTabs.map((tab) => <button key={tab.id} id={`ticket-tab-${tab.id}`} className="ticket-tabs__tab" type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={`ticket-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => setActiveTab(tab.id)} onKeyDown={(event) => {
+        {ticketTabs.map((tab) => <button key={tab.id} id={`ticket-tab-${tab.id}`} className="ticket-tabs__tab" type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={`ticket-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => { if (tab.id === 'work' || leaveEditor()) setActiveTab(tab.id) }} onKeyDown={(event) => {
           const index = ticketTabs.findIndex((item) => item.id === activeTab)
           const next = event.key === 'ArrowRight' ? (index + 1) % ticketTabs.length : event.key === 'ArrowLeft' ? (index + ticketTabs.length - 1) % ticketTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? ticketTabs.length - 1 : -1
           const nextTab = ticketTabs[next]
-          if (nextTab) { event.preventDefault(); setActiveTab(nextTab.id); document.getElementById(`ticket-tab-${nextTab.id}`)?.focus() }
+          if (nextTab) { event.preventDefault(); if (nextTab.id === 'work' || leaveEditor()) { setActiveTab(nextTab.id); document.getElementById(`ticket-tab-${nextTab.id}`)?.focus() } }
         }}>{tab.label}</button>)}
       </nav>
       {activeTab === 'work' && <div id="ticket-panel-work" className="ticket-detail-main" role="tabpanel" aria-labelledby="ticket-tab-work">
+        {editing && <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Редактирование заявки</h2></div><TicketEditor key={`${ticket.id}:${ticket.version}`} ticket={ticket} busy={!!busy} basicOnly={!canEditAll} onDirtyChange={(dirty) => { editDirty.current = dirty }} onSave={(payload) => void runAction('edit', () => ticketApi.edit(id, ticket.version, payload), () => { editDirty.current = false; setEditing(false) })} onCancel={() => { editDirty.current = false; setEditing(false) }} /></section>}
         <section className="detail-panel ticket-work-panel" aria-label="Управление заявкой">
           <div className="detail-panel__heading"><h2>Работа с заявкой</h2><span>Автор, исполнитель и текущий этап</span></div>
             <dl className="ticket-meta">
@@ -294,6 +305,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
             {ticket.status === 'RESOLVED' && <p className="rail-note">{ticket.ticket_type === 'SUBSCRIBER_LINKED' ? 'Решение инженера сохранено. Следующий шаг — контрольный звонок.' : 'Решение инженера сохранено. Следующий шаг — закрытие без обзвона.'}</p>}
           <div className="ticket-work-toolbar">
               {activeWork && canClaim && ticket.assigned_engineer_id === null && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('claim', () => ticketApi.claim(id, ticket.version))}>Взять в работу <ArrowRight size={15} /></Button>}
+              {activeWork && canAssign && canClaim && session.permissions.includes('tickets.read.all') && ticket.assigned_engineer_id !== null && ticket.assigned_engineer_id !== session.user.id && <Button variant="secondary" disabled={!!busy} onClick={() => void runAction('assign-self', () => ticketApi.assign(id, session.user.id, ticket.version))}>Забрать себе</Button>}
               {activeWork && canClaim && ticket.assigned_engineer_id === session.user.id && <Button variant="secondary" disabled={!!busy} onClick={() => void runAction('release', () => ticketApi.release(id, ticket.version))}>Освободить заявку</Button>}
               {ticket.status === 'OPEN' && canStart && ticket.assigned_engineer_id === session.user.id && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('start', () => ticketApi.start(id, ticket.version))}>Начать работу <ArrowRight size={15} /></Button>}
               {activeWork && canManualAssign && <details className="ticket-action-disclosure"><summary>Назначить инженера</summary>
@@ -323,10 +335,10 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                 {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
                 {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
                   <strong>Передача в Telegram</strong>
-                  <pre>{fieldHandoff.data.handoff.message_preview && !ticket.subscriber?.actual_address?.trim() && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status)
+                  <pre>{fieldHandoff.data.handoff.message_preview && !hasTicketAddress && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status)
                     ? fieldHandoff.data.handoff.message_preview.replace(/^Адрес: .*$/m, () => `Адрес: ${visitAddress.trim() || 'не указан'}`)
                     : fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>
-                  {!ticket.subscriber?.actual_address?.trim() && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status) && <label className="field"><span>Адрес для выезда (необязательно)</span><input aria-label="Адрес для выезда" maxLength={500} value={visitAddress} onChange={(event) => setVisitAddress(event.target.value)} placeholder="Можно отправить без адреса" /><small>Используется только в этой Telegram-передаче; данные NetUP не изменятся.</small></label>}
+                  {!hasTicketAddress && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status) && <label className="field"><span>Адрес для выезда (необязательно)</span><input aria-label="Адрес для выезда" maxLength={500} value={visitAddress} onChange={(event) => setVisitAddress(event.target.value)} placeholder="Можно отправить без адреса" /><small>Используется только в этой Telegram-передаче; данные NetUP не изменятся.</small></label>}
                   {fieldHandoff.data.handoff.missing_fields.length > 0 && <p className="rail-note">Не хватает данных: {fieldHandoff.data.handoff.missing_fields.join(', ')}.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-live="polite">
@@ -348,7 +360,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   {fieldHandoff.data.handoff.delivery_status === 'SENDING' && <p className="rail-note">Отправка выполняется. Повторный запрос заблокирован.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">Telegram отклонил отправку. Можно повторить отдельным действием.</Notice>}
                   {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <Notice tone="error">Результат отправки неизвестен. Автоматический повтор заблокирован во избежание дубля.</Notice>}
-                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !ticket.subscriber?.actual_address?.trim() ? visitAddress.trim() || null : undefined))}>Отправить боту</Button>}
+                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !hasTicketAddress ? visitAddress.trim() || null : undefined))}>Отправить боту</Button>}
                 </div>}
               </div></section>}
         </div>
@@ -359,11 +371,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         </section>}
 
         <section className="detail-panel"><div className="detail-panel__heading"><h2>Описание</h2><span>Создана {formatDate(ticket.created_at)}</span></div>
-            {editing ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void runAction('edit', () => ticketApi.edit(id, ticket.version, editSubject.trim(), editDescription.trim()), () => setEditing(false)) }}>
-              {ticket.ticket_type !== 'ERRONEOUS_PAYMENT' && <label className="field"><span>Тема</span><input value={editSubject} maxLength={160} onChange={(event) => setEditSubject(event.target.value)} required /></label>}
-              <label className="field"><span>{ticket.ticket_type === 'ERRONEOUS_PAYMENT' ? 'Комментарий' : 'Описание'}{(ticket.ticket_type === 'MANUAL' || ticket.ticket_type === 'ERRONEOUS_PAYMENT') && ' (необязательно)'}</span><textarea value={editDescription} maxLength={10000} rows={5} onChange={(event) => setEditDescription(event.target.value)} required={ticket.ticket_type !== 'MANUAL' && ticket.ticket_type !== 'ERRONEOUS_PAYMENT'} /></label>
-              <div className="user-actions"><Button type="submit" disabled={!!busy || (ticket.ticket_type !== 'MANUAL' && ticket.ticket_type !== 'ERRONEOUS_PAYMENT' && !editDescription.trim())}>Сохранить изменения</Button><Button variant="quiet" type="button" onClick={() => setEditing(false)}>Отмена</Button></div>
-            </form> : <>{ticket.description && <p className="ticket-description">{ticket.description}</p>}{canEdit && <Button variant="secondary" onClick={() => { setEditSubject(ticket.subject || ''); setEditDescription(ticket.description); setEditing(true) }}>Редактировать заявку</Button>}</>}
+            {ticket.description && <p className="ticket-description">{ticket.description}</p>}
           </section>
         {!ticket.subscriber && <div className="unlinked-note">Заявка без привязки к абоненту.</div>}
         {canDelete && <section className="detail-panel ticket-work-panel ticket-work-panel--more">

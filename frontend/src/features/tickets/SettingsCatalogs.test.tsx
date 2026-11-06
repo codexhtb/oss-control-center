@@ -6,7 +6,8 @@ import { settingsApi } from './settings-api'
 import { ReasonManager, TemplateManager } from './SettingsCatalogs'
 
 vi.mock('./settings-api', () => ({ settingsApi: {
-  reasons: vi.fn(), updateReason: vi.fn(), templates: vi.fn(), createTemplate: vi.fn(), updateTemplate: vi.fn(),
+  reasons: vi.fn(), createReason: vi.fn(), updateReason: vi.fn(), deleteReason: vi.fn(),
+  templates: vi.fn(), createTemplate: vi.fn(), updateTemplate: vi.fn(),
 } }))
 
 function show(content: ReactNode) {
@@ -17,7 +18,7 @@ function show(content: ReactNode) {
 beforeEach(() => {
   for (const fn of Object.values(settingsApi)) vi.mocked(fn).mockReset()
   vi.mocked(settingsApi.reasons).mockResolvedValue([{
-    code: 'NETWORK_FAULT', name: 'Сеть', sort_order: 40, is_active: true, version: 3,
+    code: 'NETWORK_FAULT', name: 'Сеть', sort_order: 40, is_active: true, version: 3, is_builtin: true,
     updated_at: '2026-01-01T00:00:00Z',
   }])
   vi.mocked(settingsApi.templates).mockResolvedValue([])
@@ -25,7 +26,7 @@ beforeEach(() => {
 
 it('edits a reason by immutable code and current version', async () => {
   vi.mocked(settingsApi.updateReason).mockResolvedValue({
-    code: 'NETWORK_FAULT', name: 'Сетевой узел', sort_order: 40, is_active: true, version: 4,
+    code: 'NETWORK_FAULT', name: 'Сетевой узел', sort_order: 40, is_active: true, version: 4, is_builtin: true,
     updated_at: '2026-01-01T00:00:00Z',
   })
   show(<ReasonManager />)
@@ -36,6 +37,31 @@ it('edits a reason by immutable code and current version', async () => {
   await waitFor(() => expect(settingsApi.updateReason).toHaveBeenCalledWith(
     'NETWORK_FAULT', 3, { name: 'Сетевой узел', sort_order: 40, is_active: true },
   ))
+})
+
+it('creates a reason from the WEB form and deletes an unused custom reason', async () => {
+  const code = 'A'.repeat(32)
+  const item = { code, name: 'Новая причина', sort_order: 7, is_active: true,
+    version: 1, updated_at: '2026-01-01T00:00:00Z', is_builtin: false }
+  vi.mocked(settingsApi.createReason).mockResolvedValue(item)
+  vi.mocked(settingsApi.deleteReason).mockResolvedValue(undefined)
+  vi.mocked(settingsApi.reasons).mockResolvedValue([item])
+  const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  try {
+    show(<ReasonManager />)
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Название новой причины' }), {
+      target: { value: 'Новая причина' },
+    })
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Порядок новой причины' }), {
+      target: { value: '7' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Создать причину' }))
+    await waitFor(() => expect(settingsApi.createReason).toHaveBeenCalledWith({
+      name: 'Новая причина', sort_order: 7,
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить' }))
+    await waitFor(() => expect(settingsApi.deleteReason).toHaveBeenCalledWith(code, 1))
+  } finally { confirmation.mockRestore() }
 })
 
 it('creates a typed server template and shows an empty list state', async () => {

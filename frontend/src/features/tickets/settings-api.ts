@@ -9,6 +9,7 @@ export interface DecisionReasonSetting {
   is_active: boolean
   version: number
   updated_at: string
+  is_builtin: boolean
 }
 
 export interface TicketTextTemplate {
@@ -27,9 +28,15 @@ export const settingsApi = {
   reasons: (includeInactive = false, signal?: AbortSignal) => apiRequest<DecisionReasonSetting[]>(
     `/api/v1/settings/reasons${includeInactive ? '?include_inactive=true' : ''}`, { signal },
   ),
+  createReason: (value: Pick<DecisionReasonSetting, 'name' | 'sort_order'>) =>
+    apiRequest<DecisionReasonSetting>('/api/v1/settings/reasons', { method: 'POST', json: value }),
   updateReason: (code: string, version: number, changes: Partial<Pick<DecisionReasonSetting, 'name' | 'sort_order' | 'is_active'>>) =>
     apiRequest<DecisionReasonSetting>(`/api/v1/settings/reasons/${encodeURIComponent(code)}`, {
       method: 'PATCH', ifMatch: `"${version}"`, json: changes,
+    }),
+  deleteReason: (code: string, version: number) =>
+    apiRequest<void>(`/api/v1/settings/reasons/${encodeURIComponent(code)}`, {
+      method: 'DELETE', ifMatch: `"${version}"`,
     }),
   templates: (purpose?: TemplatePurpose, includeInactive = false, signal?: AbortSignal) => {
     const query = new URLSearchParams()

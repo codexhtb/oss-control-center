@@ -1,9 +1,8 @@
 export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'INTERNAL' | 'ERRONEOUS_PAYMENT'
 export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'
 export type TicketPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
-export type ResolutionReason = 'CABLE_BREAK' | 'CUSTOMER_EQUIPMENT' | 'ONU_POWER' |
-  'NETWORK_FAULT' | 'CONFIGURATION_IP' | 'CONNECTION_SETUP' | 'CONSULTATION' |
-  'OTHER' | 'NOT_ESTABLISHED'
+// Stable catalog code; legacy values remain valid and new codes come from the API.
+export type ResolutionReason = string
 
 export interface Page<T> {
   items: T[]
@@ -22,6 +21,7 @@ export interface Ticket {
   caller_phone?: string | null
   city?: string | null
   caller_full_name?: string | null
+  address_override?: string | null
   correct_account_no?: string | null
   erroneous_account_no?: string | null
   payment_occurred_at?: string | null
@@ -90,6 +90,17 @@ export interface TicketDetail extends Ticket {
   } | null
   selected_connection: SubscriberConnection | null
   technical_state: string
+}
+
+export type EditTicketInput = Partial<Pick<Ticket,
+  'subject' | 'description' | 'ticket_type' | 'category_id' | 'priority' |
+  'caller_full_name' | 'caller_phone' | 'city' | 'address_override' |
+  'correct_account_no' | 'erroneous_account_no' | 'payment_occurred_at' | 'payment_amount'
+>> & {
+  lookup_id?: string
+  selected_service_id?: string | null
+  connection_snapshot_id?: string | null
+  reason?: string
 }
 
 export type CallbackOutcome = 'CONFIRMED' | 'STILL_BROKEN' | 'NO_ANSWER'
