@@ -671,6 +671,14 @@ html[data-effects="simple"] .workspace-welcome__particle { display: none; }
 .ticket-work-panel .ticket-action-form .field { width: 100%; }
 .ticket-work-panel--field .field-dispatch-preview { width: 100%; }
 .ticket-work-panel--more { padding-block: 12px; }
+.previous-tickets { display: grid; gap: 10px; padding: 15px 20px; }
+.previous-tickets .detail-panel__heading { margin: 0; }
+.previous-tickets__table th, .previous-tickets__table td { padding-block: 7px; }
+.previous-tickets__row--open { background: rgba(230, 170, 72, .055); }
+.previous-tickets__row--open td:first-child { box-shadow: inset 3px 0 #d6a455; }
+.previous-tickets__status--open { color: #f1ca80; font-weight: 700; }
+.previous-tickets__actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.previous-tickets__actions .subscriber-pagination { margin: 0; }
 .ticket-work-panel--more > details > summary { list-style-position: inside; }
 .detail-panel { min-width: 0; padding: 22px 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .settings-page { max-width: 960px; }

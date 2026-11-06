@@ -141,6 +141,133 @@ def ticket_payload(card: dict, *, request_id: UUID | None = None) -> dict:
     }
 
 
+def test_ticket_previous_history_uses_current_subscriber_and_ticket_scope(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    operator = seed_user(billing_engine, "history_operator", Role.OPERATOR)
+    other = seed_user(billing_engine, "history_other", Role.OPERATOR)
+    own = seed_user(billing_engine, "history_own", Role.OPERATOR)
+    with Session(billing_engine) as db:
+        own_row = db.get(User, own.id)
+        own_row.permissions_customized = True
+        db.add(UserPermission(user_id=own.id, permission=Permission.TICKET_READ_OWN))
+        db.commit()
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def add_snapshot(db: Session, account: str, subscriber: str | None, source: str):
+        snapshot = SubscriberSnapshot(
+            account_no=account, subscriber_id=subscriber, source=source,
+            requested_by=operator.id, fetched_at=start, expires_at=start + timedelta(days=2),
+            contracts=[], services=[],
+        )
+        db.add(snapshot)
+        db.flush()
+        return snapshot
+
+    def add_ticket(
+        db: Session, snapshot: SubscriberSnapshot | None, creator: User, minute: int,
+        *, status: str = "OPEN", deleted: bool = False,
+    ) -> Ticket:
+        created_at = start + timedelta(minutes=minute)
+        ticket = Ticket(
+            ticket_type="SUBSCRIBER_LINKED" if snapshot else "MANUAL",
+            subscriber_snapshot_id=snapshot.id if snapshot else None,
+            account_no=snapshot.account_no if snapshot else None,
+            subject=f"Synthetic issue {minute}", description="Synthetic issue",
+            status=status, priority="NORMAL", created_by=creator.id,
+            assigned_engineer_id=other.id if snapshot else None,
+            client_request_id=uuid4(), created_at=created_at, updated_at=created_at,
+            deleted_at=created_at if deleted else None,
+            deleted_by=creator.id if deleted else None,
+        )
+        db.add(ticket)
+        db.flush()
+        return ticket
+
+    with Session(billing_engine, expire_on_commit=False) as db:
+        first = add_snapshot(db, "A-1", "NETUP-101", "NETUP")
+        same = add_snapshot(db, "A-9", "NETUP-101", "NETUP")
+        different = add_snapshot(db, "A-2", "NETUP-202", "NETUP")
+        mock = add_snapshot(db, "A-1", "NETUP-101", "MOCK")
+        current = add_ticket(db, first, own, 100)
+        manual = add_ticket(db, None, own, 101)
+        db.commit()
+        current_id, manual_id = current.id, manual.id
+
+    login(billing_client, operator.login)
+    path = f"/api/v1/tickets/{current_id}/previous-tickets"
+    empty = billing_client.get(path)
+    assert empty.status_code == 200
+    assert empty.headers["Cache-Control"] == "no-store"
+    assert empty.json()["total"] == 0
+    assert billing_client.get(f"/api/v1/tickets/{manual_id}/previous-tickets").json()["total"] == 0
+
+    with Session(billing_engine, expire_on_commit=False) as db:
+        previous = [add_ticket(db, same, other, minute) for minute in range(80, 85)]
+        own_previous = add_ticket(db, first, own, 85)
+        different_previous = add_ticket(db, different, other, 86)
+        add_ticket(db, mock, other, 87)
+        add_ticket(db, first, other, 88, deleted=True)
+        add_ticket(db, first, other, 101)
+        db.commit()
+        previous_ids = {row.id for row in previous}
+        own_previous_id = own_previous.id
+        different_previous_id = different_previous.id
+
+    page_one = billing_client.get(f"{path}?page=1&size=3")
+    assert page_one.status_code == 200
+    assert page_one.json()["total"] == 6
+    assert len(page_one.json()["items"]) == 3
+    assert page_one.json()["items"][0]["id"] == str(own_previous_id)
+    assert page_one.json()["items"][0]["assigned_engineer_name"] == other.display_name
+    page_two = billing_client.get(f"{path}?page=2&size=3")
+    assert page_two.status_code == 200
+    assert {UUID(item["id"]) for item in page_one.json()["items"] + page_two.json()["items"]} == (
+        previous_ids | {own_previous_id}
+    )
+    assert billing_client.get(f"{path}?page=0").status_code == 422
+    assert billing_client.get(f"{path}?size=51").status_code == 422
+
+    logout = billing_client.post("/api/v1/auth/logout", headers=csrf(billing_client))
+    assert logout.status_code == 200
+    login(billing_client, own.login)
+    own_page = billing_client.get(path)
+    assert own_page.status_code == 200
+    assert own_page.json()["total"] == 1
+    assert own_page.json()["items"][0]["id"] == str(own_previous_id)
+    hidden = billing_client.get(f"/api/v1/tickets/{different_previous_id}/previous-tickets")
+    assert hidden.status_code == 404
+
+    with Session(billing_engine) as db:
+        current_row = db.get(Ticket, current_id)
+        current_row.subscriber_snapshot_id = different.id
+        current_row.account_no = different.account_no
+        db.commit()
+    rebound = billing_client.get(path)
+    assert rebound.status_code == 200
+    assert rebound.json()["total"] == 0
+    logout = billing_client.post("/api/v1/auth/logout", headers=csrf(billing_client))
+    assert logout.status_code == 200
+    login(billing_client, operator.login)
+    rebound_all = billing_client.get(path)
+    assert rebound_all.json()["total"] == 1
+    assert rebound_all.json()["items"][0]["id"] == str(different_previous_id)
+
+    with Session(billing_engine, expire_on_commit=False) as db:
+        old_without_id = add_snapshot(db, "A-3", None, "NETUP")
+        new_without_id = add_snapshot(db, "A-3", None, "NETUP")
+        mock_without_id = add_snapshot(db, "A-3", None, "MOCK")
+        fallback_previous = add_ticket(db, old_without_id, other, 110)
+        fallback_current = add_ticket(db, new_without_id, operator, 120)
+        add_ticket(db, mock_without_id, other, 111)
+        db.commit()
+    fallback = billing_client.get(f"/api/v1/tickets/{fallback_current.id}/previous-tickets")
+    assert fallback.status_code == 200
+    assert fallback.json()["total"] == 1
+    assert fallback.json()["items"][0]["id"] == str(fallback_previous.id)
+
+
 def test_engineer_can_lookup_and_create_linked_ticket_via_existing_api(
     billing_engine: Engine, billing_client: TestClient
 ) -> None:

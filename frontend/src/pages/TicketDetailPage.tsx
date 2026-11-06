@@ -11,6 +11,7 @@ import { TicketEditor } from '../features/tickets/TicketEditor'
 import { settingsApi } from '../features/tickets/settings-api'
 import { TemplatePicker } from '../features/tickets/TemplatePicker'
 import { MonitoringTicketSection } from '../features/tickets/MonitoringTicketSection'
+import { PreviousTickets } from '../features/tickets/PreviousTickets'
 import { isDiagnosticReport, MonitoringReport } from '../features/tickets/MonitoringReport'
 import { eventLabel, formatDate, priorityLabel, resolutionReasonLabel, statusLabel, ticketTitle, typeLabel } from '../features/tickets/presentation'
 import type { CallbackOutcome, ResolutionReason } from '../features/tickets/types'
@@ -316,6 +317,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               </details>}
           </div>
         </section>
+        {linked && ticket.subscriber_snapshot_id && <PreviousTickets key={`${id}:${ticket.subscriber_snapshot_id}`} ticketId={id} snapshotId={ticket.subscriber_snapshot_id} />}
         <div className="ticket-work-grid">
           <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Решение инженера</h2></div>
             {currentDecisionId && (currentDecision.isPending ? <p className="muted">Загружаем актуальное решение…</p> : currentDecision.isError ? <Notice tone="error">Не удалось загрузить актуальное решение: {errorText(currentDecision.error)}</Notice> : currentDecision.data && <article className="ticket-current-decision" aria-label="Актуальное решение инженера"><div><strong>{currentDecision.data.reason_name || (currentDecision.data.reason ? resolutionReasonLabel[currentDecision.data.reason] : 'Причина не указана в исторической записи')}</strong><span>{currentDecision.data.engineer_name || ticket.resolved_by_name || 'Инженер'} · <time dateTime={currentDecision.data.created_at}>{formatDate(currentDecision.data.created_at)}</time></span></div><p>{currentDecision.data.decision_text}</p></article>)}

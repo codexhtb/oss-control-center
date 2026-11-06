@@ -2,6 +2,7 @@ import { apiRequest } from '../../shared/api/client'
 import type {
   ActiveTickets, ConfiguredServicesPage, TariffHistoryPage, CreateTicketInput, Decision, Diagnostic, DiagnosticReport, TicketCheckResult, Engineer, OnuResult, Page, RecentEvent, SubscriberCard, SubscriberFinanceKind, SubscriberFinancePage,
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
+  PreviousTicket,
   ResolutionReason,
   FieldWorkHandoff, EditTicketInput,
   FieldExternalMessage,
@@ -58,6 +59,8 @@ export const ticketApi = {
     apiRequest<TariffHistoryPage>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/tariff-history`, { signal }),
   subscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>
     apiRequest<Page<Ticket>>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/tickets`, { page, size: 10 }), { signal }),
+  previousTickets: (id: string, page: number, size: number, signal?: AbortSignal) =>
+    apiRequest<Page<PreviousTicket>>(withQuery(`${ticketPath(id)}/previous-tickets`, { page, size }), { signal }),
   activeSubscriberTickets: (lookupId: string, page: number, signal?: AbortSignal) =>
     apiRequest<ActiveTickets>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/active-tickets`, { page, size: 20 }), { signal }),
   checkSubscriber: (lookupId: string, connectionId: string) =>

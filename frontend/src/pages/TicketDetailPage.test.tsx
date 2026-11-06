@@ -10,6 +10,7 @@ import { TicketDetailPage } from './TicketDetailPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   get: vi.fn(), edit: vi.fn(), categories: vi.fn(), comments: vi.fn(), history: vi.fn(), diagnostics: vi.fn(),
+  previousTickets: vi.fn(),
   decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
@@ -63,6 +64,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.categories).mockResolvedValue([])
   vi.mocked(ticketApi.comments).mockResolvedValue(empty)
   vi.mocked(ticketApi.history).mockResolvedValue(empty)
+  vi.mocked(ticketApi.previousTickets).mockResolvedValue({ items: [], page: 1, size: 3, total: 0 })
   vi.mocked(ticketApi.diagnostics).mockResolvedValue(empty)
   vi.mocked(ticketApi.decisions).mockResolvedValue(empty)
   vi.mocked(ticketApi.decision).mockImplementation(async (_id, decisionId) => ({ id: decisionId, ticket_id: ticketId, engineer_id: session('engineer').user.id, engineer_name: 'Инженер теста', decision_text: 'Синтетический вердикт', reason: 'NETWORK_FAULT', performed_actions: null, created_at: base.created_at }))
@@ -75,6 +77,29 @@ beforeEach(() => {
     availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
     limitations: ['onu_source_not_configured'], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
   })
+})
+
+it('loads previous subscriber tickets in the work tab without replacing current-ticket history', async () => {
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, ticket_type: 'SUBSCRIBER_LINKED', account_no: 'MOCK-ETH-001',
+    subscriber_snapshot_id: '00000000-0000-4000-8000-000000000099',
+  })
+  vi.mocked(ticketApi.previousTickets).mockResolvedValue({
+    items: [{ id: '00000000-0000-4000-8000-000000000008', number: 8, subject: 'Старая заявка', status: 'OPEN', assigned_engineer_name: 'Инженер', created_at: base.created_at }],
+    page: 1, size: 3, total: 1,
+  })
+  renderDetail('operator')
+  expect(await screen.findByRole('heading', { name: 'История обращений абонента' })).toBeInTheDocument()
+  expect(await screen.findByRole('link', { name: 'Открыть заявку #8' })).toHaveAttribute('href', '/tickets/00000000-0000-4000-8000-000000000008')
+  expect(ticketApi.previousTickets).toHaveBeenCalledWith(ticketId, 1, 3, expect.anything())
+  expect(screen.getByRole('tab', { name: 'История' })).toBeInTheDocument()
+})
+
+it('does not request subscriber history for an unlinked ticket', async () => {
+  renderDetail('operator')
+  expect(await screen.findByRole('heading', { name: 'Проверка OSS' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'История обращений абонента' })).not.toBeInTheDocument()
+  expect(ticketApi.previousTickets).not.toHaveBeenCalled()
 })
 
 it('opens the full editor for an engineer and sends changed fields with the ticket version', async () => {

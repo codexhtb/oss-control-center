@@ -30,6 +30,7 @@ from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.duplicates import active_count, active_query
 from app.modules.tickets.models import SubscriberSnapshot, Ticket
 from app.modules.tickets.schemas import ActiveTickets, Page, TicketView
+from app.modules.tickets.subscriber_history import matching_subscriber
 
 router = APIRouter(prefix="/subscriber-lookups", tags=["billing"])
 
@@ -229,14 +230,8 @@ def subscriber_tickets(
     snapshot = db.get(SubscriberSnapshot, lookup_id)
     if snapshot is None or snapshot.requested_by != identity.user.id:
         raise ApiError(404, "lookup_not_found", "Subscriber lookup not found")
-    same_subscriber = (
-        SubscriberSnapshot.subscriber_id == snapshot.subscriber_id
-        if snapshot.subscriber_id is not None
-        else SubscriberSnapshot.account_no == snapshot.account_no
-    )
     conditions = (
-        SubscriberSnapshot.source == snapshot.source,
-        same_subscriber,
+        matching_subscriber(snapshot),
         Ticket.deleted_at.is_(None),
     )
     if not has_permission(db, identity.user, Permission.TICKET_READ):

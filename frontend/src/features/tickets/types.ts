@@ -11,6 +11,15 @@ export interface Page<T> {
   total: number
 }
 
+export interface PreviousTicket {
+  id: string
+  number: number
+  subject: string | null
+  status: TicketStatus
+  assigned_engineer_name: string | null
+  created_at: string
+}
+
 export interface Ticket {
   id: string
   number: number

@@ -425,6 +425,15 @@ class TicketListView(TicketView):
     resolution_reason_name: str | None = None
 
 
+class PreviousTicketView(BaseModel):
+    id: UUID
+    number: int
+    subject: str | None
+    status: TicketStatus
+    assigned_engineer_name: str | None
+    created_at: datetime
+
+
 class TicketDetail(TicketView):
     subscriber: SubscriberView | None
     selected_connection: ConnectionView | None

@@ -65,6 +65,7 @@ from app.modules.tickets.schemas import (
     FieldWorkRequest,
     ManualDiagnostic,
     Page,
+    PreviousTicketView,
     PurgeTicket,
     RecentEventView,
     RecordCallback,
@@ -94,6 +95,7 @@ from app.modules.tickets.service import (
     ticket_detail,
 )
 from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
+from app.modules.tickets.subscriber_history import matching_subscriber
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 PageNumber = Annotated[int, Query(ge=1)]
@@ -612,6 +614,59 @@ def get_one(ticket_id: UUID, response: Response, identity: ReadDep, db: SessionD
     )
     _etag(response, ticket)
     return ticket
+
+
+@router.get("/{ticket_id}/previous-tickets", response_model=Page[PreviousTicketView])
+def previous_tickets(
+    ticket_id: UUID,
+    response: Response,
+    identity: ReadDep,
+    db: SessionDep,
+    page: PageNumber = 1,
+    size: FeedPageSize = 10,
+):
+    current = _readable(db, identity, ticket_id)
+    response.headers["Cache-Control"] = "no-store"
+    if current.ticket_type != TicketType.SUBSCRIBER_LINKED:
+        return {"items": [], "page": page, "size": size, "total": 0}
+    snapshot = db.get(SubscriberSnapshot, current.subscriber_snapshot_id)
+    if snapshot is None:
+        raise ApiError(404, "subscriber_snapshot_not_found", "Subscriber snapshot not found")
+    conditions = [
+        matching_subscriber(snapshot),
+        Ticket.ticket_type == TicketType.SUBSCRIBER_LINKED,
+        Ticket.id != current.id,
+        Ticket.created_at < current.created_at,
+        Ticket.deleted_at.is_(None),
+    ]
+    if not has_permission(db, identity.user, Permission.TICKET_READ):
+        conditions.append(Ticket.created_by == identity.user.id)
+    base = select(Ticket).join(
+        SubscriberSnapshot, Ticket.subscriber_snapshot_id == SubscriberSnapshot.id
+    ).where(*conditions)
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    items = db.scalars(
+        base.order_by(Ticket.created_at.desc(), Ticket.id.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+    ).all()
+    names = _names(db, [item.assigned_engineer_id for item in items])
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "number": item.number,
+                "subject": item.subject,
+                "status": item.status,
+                "assigned_engineer_name": names.get(item.assigned_engineer_id),
+                "created_at": item.created_at,
+            }
+            for item in items
+        ],
+        "page": page,
+        "size": size,
+        "total": total,
+    }
 
 
 @router.patch("/{ticket_id}", response_model=TicketView)
