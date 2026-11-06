@@ -897,6 +897,7 @@ html[data-effects="simple"] .workspace-welcome__name { animation: workspace-simp
 .ticket-work-panel .button { min-height: 38px; font-size: 12px; }
 .ticket-work-panel .ticket-danger-action { color: #ffaaa1; }
 .ticket-work-panel--field .field-dispatch-preview pre { max-height: none; overflow: visible; }
+.field-dispatch-preview textarea { width: 100%; min-height: 180px; resize: vertical; font-size: 12px; line-height: 1.55; }
 @media (max-width: 420px) { .ticket-detail-facts, .ticket-work-panel .ticket-meta { grid-template-columns: 1fr; } .ticket-work-toolbar .button { width: 100%; } }
 @media (max-width: 480px) { .ticket-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: visible; border-bottom: 0; } .ticket-tabs__tab { min-width: 0; padding: 11px 5px; border-bottom: 1px solid var(--line); text-align: center; white-space: normal; } }
 .chat-nav-count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: 11px; background: #e7b84e; color: #17202a; font-size: 11px; font-weight: 800; }

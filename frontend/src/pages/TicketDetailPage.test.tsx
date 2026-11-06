@@ -277,10 +277,16 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
   ))
   expect(ticketApi.sendFieldWork).not.toHaveBeenCalled()
   const send = await screen.findByRole('button', { name: 'Отправить боту' })
+  const message = screen.getByRole('textbox', { name: 'Текст сообщения для Telegram' })
+  expect(message).toHaveValue(handoff.message_preview)
   expect(screen.queryByRole('textbox', { name: 'Адрес для выезда' })).not.toBeInTheDocument()
+  fireEvent.change(message, { target: { value: 'Исправленный текст для монтажников' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Восстановить исходный текст' }))
+  expect(message).toHaveValue(handoff.message_preview)
+  fireEvent.change(message, { target: { value: 'Исправленный текст для монтажников' } })
   fireEvent.click(send)
   await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
-    ticketId, handoff.id, expect.any(String), undefined,
+    ticketId, handoff.id, expect.any(String), undefined, 'Исправленный текст для монтажников',
   ))
 })
 
@@ -313,11 +319,56 @@ it.each([
   renderDetail('engineer', privileged)
   const field = await screen.findByRole('textbox', { name: 'Адрес для выезда' })
   fireEvent.change(field, { target: { value: input } })
-  expect(document.querySelector('.field-dispatch-preview pre')?.textContent).toContain(`Адрес: ${address}`)
+  expect((screen.getByRole('textbox', { name: 'Текст сообщения для Telegram' }) as HTMLTextAreaElement).value).toContain(`Адрес: ${address}`)
   fireEvent.click(screen.getByRole('button', { name: 'Отправить боту' }))
   await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
-    ticketId, handoff.id, expect.any(String), input || null,
+    ticketId, handoff.id, expect.any(String), input || null, expect.stringContaining(`Адрес: ${address}`),
   ))
+})
+
+it('restores generated text when retrying a rejected Telegram send', async () => {
+  const staff = session('engineer')
+  const privileged: MeResponse = { ...staff, permissions: [...staff.permissions, 'tickets.field_work'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  const handoff = {
+    id: '00000000-0000-4000-8000-000000000040', ticket_id: ticketId,
+    reason: 'Проверка', delivery_status: 'FAILED' as const,
+    work_status: 'AWAITING_REPORT' as const, chat_id: '-5319791765',
+    telegram_message_id: null, message_preview: 'Последний отклонённый текст',
+    generated_preview: 'Заявка #73\nИсходный текст', ready_to_send: true, missing_fields: [],
+    created_by: staff.user.id, sent_by: staff.user.id, sent_by_name: null,
+    last_error_code: 'telegram_http_400', created_at: base.created_at,
+    send_started_at: base.created_at, sent_at: null, reported_at: null,
+    verified_by: null, verified_by_name: null, verified_at: null, updated_at: base.updated_at,
+  }
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff })
+  renderDetail('engineer', privileged)
+  const message = await screen.findByRole('textbox', { name: 'Текст сообщения для Telegram' })
+  expect(message).toHaveValue('Последний отклонённый текст')
+  fireEvent.click(screen.getByRole('button', { name: 'Восстановить исходный текст' }))
+  expect(message).toHaveValue('Заявка #73\nИсходный текст')
+})
+
+it.each(['SENDING', 'SENT', 'UNCERTAIN'] as const)('locks Telegram text in %s', async (status) => {
+  const staff = session('engineer')
+  const privileged: MeResponse = { ...staff, permissions: [...staff.permissions, 'tickets.field_work'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff: {
+    id: '00000000-0000-4000-8000-000000000040', ticket_id: ticketId,
+    reason: 'Проверка', delivery_status: status,
+    work_status: 'AWAITING_REPORT', chat_id: '-5319791765', telegram_message_id: status === 'SENT' ? 701 : null,
+    message_preview: 'Утверждённый текст', generated_preview: 'Исходный текст',
+    ready_to_send: false, missing_fields: [], created_by: staff.user.id,
+    sent_by: staff.user.id, sent_by_name: null, last_error_code: status === 'UNCERTAIN' ? 'telegram_transport_uncertain' : null,
+    created_at: base.created_at, send_started_at: base.created_at,
+    sent_at: status === 'SENT' ? base.created_at : null, reported_at: null,
+    verified_by: null, verified_by_name: null, verified_at: null, updated_at: base.updated_at,
+  } })
+  renderDetail('engineer', privileged)
+  expect(await screen.findByText('Утверждённый текст')).toBeInTheDocument()
+  expect(screen.queryByRole('textbox', { name: 'Текст сообщения для Telegram' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Восстановить исходный текст' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Отправить боту' })).not.toBeInTheDocument()
 })
 
 it('offers explicit takeover of another engineer ticket only with assignment rights', async () => {

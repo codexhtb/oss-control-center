@@ -79,6 +79,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [decisionReason, setDecisionReason] = useState<ResolutionReason>('NOT_ESTABLISHED')
   const [fieldReason, setFieldReason] = useState('')
   const [visitAddress, setVisitAddress] = useState('')
+  const [editedFieldMessage, setEditedFieldMessage] = useState<{ id: string; text: string } | null>(null)
   const [engineerId, setEngineerId] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<unknown>(null)
@@ -184,6 +185,15 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const ticket = ticketQuery.data
   const primaryPhone = ticket.caller_phone || ticket.subscriber?.phone || null
   const hasTicketAddress = !!(ticket.address_override || ticket.subscriber?.actual_address)?.trim()
+  const handoff = fieldHandoff.data?.handoff
+  const canEditFieldMessage = handoff?.delivery_status === 'DRAFT' || handoff?.delivery_status === 'FAILED'
+  const withVisitAddress = (text: string) => !hasTicketAddress && canEditFieldMessage
+    ? text.replace(/^Адрес: .*$/m, () => `Адрес: ${visitAddress.trim() || 'не указан'}`) : text
+  const originalFieldMessage = withVisitAddress(handoff?.generated_preview ?? handoff?.message_preview ?? '')
+  const fieldMessage = editedFieldMessage && editedFieldMessage.id === handoffId
+    ? editedFieldMessage.text : withVisitAddress(handoff?.message_preview ?? '')
+  const validFieldMessage = !!fieldMessage.trim() && fieldMessage.length <= 4096
+    && !Array.from(fieldMessage).some((char) => /[\x00-\x09\x0b-\x1f\x7f]/.test(char))
   const additionalPhones = [
     ticket.subscriber?.phone,
     ...(ticket.subscriber?.contacts?.map((contact) => contact.value) || []),
@@ -343,10 +353,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                 {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
                 {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
                   <strong>Передача в Telegram</strong>
-                  <pre>{fieldHandoff.data.handoff.message_preview && !hasTicketAddress && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status)
-                    ? fieldHandoff.data.handoff.message_preview.replace(/^Адрес: .*$/m, () => `Адрес: ${visitAddress.trim() || 'не указан'}`)
-                    : fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>
-                  {!hasTicketAddress && ['DRAFT', 'FAILED'].includes(fieldHandoff.data.handoff.delivery_status) && <label className="field"><span>Адрес для выезда (необязательно)</span><input aria-label="Адрес для выезда" maxLength={500} value={visitAddress} onChange={(event) => setVisitAddress(event.target.value)} placeholder="Можно отправить без адреса" /><small>Используется только в этой Telegram-передаче; данные NetUP не изменятся.</small></label>}
+                  {canEditFieldMessage ? <><label className="field"><span>Текст сообщения для Telegram</span><textarea aria-label="Текст сообщения для Telegram" rows={8} maxLength={4096} value={fieldMessage} onChange={(event) => setEditedFieldMessage({ id: handoffId!, text: event.target.value })} /><small>{fieldMessage.length} / 4096 символов. Текст сохранится при отправке.</small></label><Button variant="quiet" disabled={!!busy || !originalFieldMessage} onClick={() => setEditedFieldMessage({ id: handoffId!, text: originalFieldMessage })}>Восстановить исходный текст</Button></>
+                    : <pre>{fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>}
+                  {!hasTicketAddress && canEditFieldMessage && <label className="field"><span>Адрес для выезда (необязательно)</span><input aria-label="Адрес для выезда" maxLength={500} value={visitAddress} onChange={(event) => { const next = event.target.value; setVisitAddress(next); if (editedFieldMessage && editedFieldMessage.id === handoffId) setEditedFieldMessage({ id: handoffId!, text: editedFieldMessage.text.replace(/^Адрес: .*$/m, () => `Адрес: ${next.trim() || 'не указан'}`) }) }} placeholder="Можно отправить без адреса" /><small>Используется только в этой Telegram-передаче; данные NetUP не изменятся.</small></label>}
                   {fieldHandoff.data.handoff.missing_fields.length > 0 && <p className="rail-note">Не хватает данных: {fieldHandoff.data.handoff.missing_fields.join(', ')}.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-live="polite">
@@ -368,7 +377,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   {fieldHandoff.data.handoff.delivery_status === 'SENDING' && <p className="rail-note">Отправка выполняется. Повторный запрос заблокирован.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">Telegram отклонил отправку. Можно повторить отдельным действием.</Notice>}
                   {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <Notice tone="error">Результат отправки неизвестен. Автоматический повтор заблокирован во избежание дубля.</Notice>}
-                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !hasTicketAddress ? visitAddress.trim() || null : undefined))}>Отправить боту</Button>}
+                  {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy || !validFieldMessage} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !hasTicketAddress ? visitAddress.trim() || null : undefined, fieldMessage))}>Отправить боту</Button>}
                 </div>}
               </div></section>}
         </div>

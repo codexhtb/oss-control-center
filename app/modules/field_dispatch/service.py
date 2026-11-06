@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from unicodedata import category
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -150,6 +151,7 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
     return FieldWorkHandoffView.model_validate(handoff).model_copy(
         update={
             "message_preview": handoff.message_text or data.text,
+            "generated_preview": data.text,
             "ready_to_send": not data.missing and handoff.delivery_status in {"DRAFT", "FAILED"},
             "missing_fields": list(data.missing),
             "sent_by_name": sender_name,
@@ -177,6 +179,7 @@ def prepare_send(
     request_id: UUID,
     visit_address: str | None = None,
     update_visit_address: bool = False,
+    message_text: str | None = None,
 ) -> PreparedSend | FieldWorkHandoff:
     actor = _actor(db, actor_id)
     handoff = db.execute(
@@ -201,10 +204,16 @@ def prepare_send(
         )
     )
     if prior is not None:
+        if message_text is not None and message_text != handoff.message_text:
+            raise ApiError(
+                409, "field_send_request_conflict", "Request text differs from prior send"
+            )
         if prior.status == "SENDING":
             raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
         return handoff
     if handoff.delivery_status == "SENT":
+        if message_text is not None and message_text != handoff.message_text:
+            raise ApiError(409, "field_send_locked", "Sent text cannot be changed")
         return handoff
     if handoff.delivery_status == "SENDING":
         raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
@@ -226,6 +235,11 @@ def prepare_send(
     message = _message(db, handoff, actor)
     if message.missing:
         raise ApiError(409, "field_dispatch_incomplete", "Required dispatch data is missing")
+    text = message_text if message_text is not None else message.text
+    if not text or not text.strip() or len(text) > 4096 or any(
+        category(char) == "Cc" and char != "\n" for char in text
+    ):
+        raise ApiError(422, "field_message_invalid", "Telegram message must contain valid text")
     now = datetime.now(UTC)
     attempt = FieldWorkDeliveryAttempt(
         handoff_id=handoff.id,
@@ -236,7 +250,7 @@ def prepare_send(
     )
     db.add(attempt)
     handoff.delivery_status = "SENDING"
-    handoff.message_text = message.text
+    handoff.message_text = text
     handoff.sent_by = actor_id
     handoff.send_started_at = now
     handoff.last_error_code = None
@@ -255,7 +269,7 @@ def prepare_send(
         handoff.id,
         attempt.id,
         handoff.chat_id,
-        message.text or "",
+        text,
         f"field_done:{handoff.id}",
     )
 
@@ -324,9 +338,11 @@ def send_handoff(
     request_id: UUID,
     visit_address: str | None = None,
     update_visit_address: bool = False,
+    message_text: str | None = None,
 ) -> FieldWorkHandoff:
     prepared = prepare_send(
-        db, actor_id, ticket_id, handoff_id, request_id, visit_address, update_visit_address
+        db, actor_id, ticket_id, handoff_id, request_id, visit_address,
+        update_visit_address, message_text,
     )
     if isinstance(prepared, FieldWorkHandoff):
         return prepared

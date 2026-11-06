@@ -43,6 +43,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
 )
 from app.modules.field_dispatch.poller import _send_prompt, _sync_completion
+from app.modules.field_dispatch.service import finalize_send, prepare_send
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
@@ -3572,6 +3573,7 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     assert "Город: Тестовый город" in handoff["message_preview"]
     assert handoff["visit_address"] is None
     assert "Отправил инженер: Field_Dispatch_Engineer" in handoff["message_preview"]
+    assert handoff["generated_preview"] == handoff["message_preview"]
 
     with Session(ticket_engine) as db:
         binding = db.get(FieldDispatchGroupBinding, 1)
@@ -3582,6 +3584,15 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
         db.commit()
 
     send_path = f"{path}/field-work-handoffs/{handoff['id']}/send"
+    approved_text = handoff["message_preview"] + "\nУточнение инженера: проверить ввод в дом."
+    for invalid_text in ("   ", "Недопустимый\x00символ", "x" * 4097):
+        rejected = ticket_client.post(
+            send_path,
+            headers=csrf(ticket_client),
+            json={"client_request_id": str(uuid4()), "message_text": invalid_text},
+        )
+        assert rejected.status_code == 422, rejected.text
+    assert gateway.calls == []
     assert (
         ticket_client.post(
             send_path,
@@ -3593,18 +3604,22 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     request_id = str(uuid4())
     assert ticket_client.post(send_path, json={"client_request_id": request_id}).status_code == 403
     sent = ticket_client.post(
-        send_path, headers=csrf(ticket_client), json={"client_request_id": request_id}
+        send_path, headers=csrf(ticket_client),
+        json={"client_request_id": request_id, "message_text": approved_text},
     )
     assert sent.status_code == 200, sent.text
     assert sent.json()["delivery_status"] == "SENT"
     assert sent.json()["telegram_message_id"] == 701
     assert sent.json()["sent_by"] == str(engineer.id)
+    assert sent.json()["message_preview"] == approved_text
+    assert sent.json()["generated_preview"] == handoff["generated_preview"]
     assert len(gateway.calls) == 1
     assert gateway.calls[0][0] == "-2222222"
-    assert "Адрес: г. Тест, ул. Безопасная, д. 20" in gateway.calls[0][1]
+    assert gateway.calls[0][1] == approved_text
     with Session(ticket_engine) as db:
         saved_handoff = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert saved_handoff is not None and saved_handoff.chat_id == "-2222222"
+        assert saved_handoff.message_text == approved_text
         binding = db.get(FieldDispatchGroupBinding, 1)
         assert binding is not None
         binding.chat_id = "-3333333"
@@ -3613,9 +3628,16 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
         db.commit()
     for replay_id in (request_id, str(uuid4())):
         replay = ticket_client.post(
-            send_path, headers=csrf(ticket_client), json={"client_request_id": replay_id}
+            send_path, headers=csrf(ticket_client),
+            json={"client_request_id": replay_id, "message_text": approved_text},
         )
         assert replay.status_code == 200, replay.text
+    changed_after_send = ticket_client.post(
+        send_path, headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "message_text": "Новый текст"},
+    )
+    assert changed_after_send.status_code == 409
+    assert changed_after_send.json()["code"] == "field_send_locked"
     assert len(gateway.calls) == 1
 
     second = ticket_client.post(
@@ -3629,7 +3651,8 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     rejected_gateway = RejectingFieldGateway()
     ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: rejected_gateway
     failed = ticket_client.post(
-        second_path, headers=csrf(ticket_client), json={"client_request_id": str(uuid4())}
+        second_path, headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "message_text": "Первая подготовка"},
     )
     assert failed.status_code == 200, failed.text
     assert failed.json()["delivery_status"] == "FAILED"
@@ -3638,12 +3661,15 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
     uncertain_gateway = RejectingFieldGateway(uncertain=True)
     ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: uncertain_gateway
     uncertain = ticket_client.post(
-        second_path, headers=csrf(ticket_client), json={"client_request_id": str(uuid4())}
+        second_path, headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "message_text": "Исправление после отказа"},
     )
     assert uncertain.status_code == 200, uncertain.text
     assert uncertain.json()["delivery_status"] == "UNCERTAIN"
+    assert uncertain.json()["message_preview"] == "Исправление после отказа"
     blocked = ticket_client.post(
-        second_path, headers=csrf(ticket_client), json={"client_request_id": str(uuid4())}
+        second_path, headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "message_text": "Ещё одно исправление"},
     )
     assert blocked.status_code == 409
     assert blocked.json()["code"] == "field_send_uncertain"
@@ -3663,6 +3689,46 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
             )
             == 1
         )
+
+
+def test_field_work_text_is_locked_during_concurrent_send(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "field_text_lock_engineer", Role.ENGINEER)
+    snapshot, connections = seed_snapshot(ticket_engine, engineer, phone="+000000000")
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot, connections[0])
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    claimed = ticket_client.post(
+        f"{path}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200, claimed.text
+    requested = ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Проверить подключение"},
+    )
+    assert requested.status_code == 200, requested.text
+    latest = ticket_client.get(f"{path}/field-work-handoffs/latest")
+    handoff_id = UUID(latest.json()["handoff"]["id"])
+    ticket_id = UUID(created.json()["id"])
+    with Session(ticket_engine) as db:
+        prepared = prepare_send(
+            db, engineer.id, ticket_id, handoff_id, uuid4(), message_text="Точный текст инженера"
+        )
+    with Session(ticket_engine) as db, pytest.raises(ApiError) as blocked:
+        prepare_send(db, engineer.id, ticket_id, handoff_id, uuid4(), message_text="Чужой текст")
+    assert blocked.value.code == "field_send_in_progress"
+    with Session(ticket_engine) as db:
+        saved = db.get(FieldWorkHandoff, handoff_id)
+        assert saved is not None and saved.message_text == "Точный текст инженера"
+        assert saved.delivery_status == "SENDING"
+    with Session(ticket_engine) as db:
+        finalized = finalize_send(
+            db, prepared, receipt=DispatchReceipt(chat_id=prepared.chat_id, message_id="701")
+        )
+    assert finalized.message_text == "Точный текст инженера"
 
 
 @pytest.mark.parametrize(

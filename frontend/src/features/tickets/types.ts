@@ -262,6 +262,7 @@ export interface FieldWorkHandoff {
   chat_id: string
   telegram_message_id: number | null
   message_preview: string | null
+  generated_preview?: string | null
   visit_address?: string | null
   ready_to_send: boolean
   missing_fields: string[]

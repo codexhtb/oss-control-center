@@ -13,6 +13,7 @@ class SendFieldWork(BaseModel):
 
     client_request_id: UUID
     visit_address: str | None = Field(default=None, max_length=500)
+    message_text: str | None = Field(default=None, max_length=4096)
 
     @field_validator("visit_address")
     @classmethod
@@ -35,6 +36,7 @@ class FieldWorkHandoffView(BaseModel):
     chat_id: str
     telegram_message_id: int | None
     message_preview: str | None = None
+    generated_preview: str | None = None
     visit_address: str | None = None
     ready_to_send: bool = False
     missing_fields: list[str] = Field(default_factory=list)
