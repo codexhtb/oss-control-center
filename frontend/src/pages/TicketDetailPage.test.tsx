@@ -79,7 +79,7 @@ beforeEach(() => {
   })
 })
 
-it('loads previous subscriber tickets in the work tab without replacing current-ticket history', async () => {
+it('loads previous subscriber tickets only in the requests tab, after current-ticket history', async () => {
   vi.mocked(ticketApi.get).mockResolvedValue({
     ...base, ticket_type: 'SUBSCRIBER_LINKED', account_no: 'MOCK-ETH-001',
     subscriber_snapshot_id: '00000000-0000-4000-8000-000000000099',
@@ -89,16 +89,36 @@ it('loads previous subscriber tickets in the work tab without replacing current-
     page: 1, size: 3, total: 1,
   })
   renderDetail('operator')
+  expect(await screen.findByRole('heading', { name: 'Проверка OSS' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: 'Работа с заявкой' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.queryByRole('heading', { name: 'История обращений абонента' })).not.toBeInTheDocument()
+  expect(ticketApi.previousTickets).not.toHaveBeenCalled()
+  const tabs = screen.getAllByRole('tab')
+  expect(tabs.at(-2)).toHaveTextContent('История')
+  expect(tabs.at(-1)).toHaveTextContent('Обращения')
+  fireEvent.click(screen.getByRole('tab', { name: 'История' }))
+  expect(ticketApi.previousTickets).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('tab', { name: 'Обращения' }))
   expect(await screen.findByRole('heading', { name: 'История обращений абонента' })).toBeInTheDocument()
   expect(await screen.findByRole('link', { name: 'Открыть заявку #8' })).toHaveAttribute('href', '/tickets/00000000-0000-4000-8000-000000000008')
   expect(ticketApi.previousTickets).toHaveBeenCalledWith(ticketId, 1, 3, expect.anything())
-  expect(screen.getByRole('tab', { name: 'История' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'История событий' })).not.toBeInTheDocument()
+  vi.mocked(ticketApi.get).mockResolvedValue({
+    ...base, id: '00000000-0000-4000-8000-000000000008', number: 8,
+    subject: 'Следующая заявка', ticket_type: 'SUBSCRIBER_LINKED',
+    subscriber_snapshot_id: '00000000-0000-4000-8000-000000000099',
+  })
+  fireEvent.click(screen.getByRole('link', { name: 'Открыть заявку #8' }))
+  expect(await screen.findByRole('heading', { name: 'Следующая заявка' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: 'Работа с заявкой' })).toHaveAttribute('aria-selected', 'true')
+  expect(ticketApi.previousTickets).toHaveBeenCalledTimes(1)
 })
 
 it('does not request subscriber history for an unlinked ticket', async () => {
   renderDetail('operator')
   expect(await screen.findByRole('heading', { name: 'Проверка OSS' })).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: 'История обращений абонента' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('tab', { name: 'Обращения' })).not.toBeInTheDocument()
   expect(ticketApi.previousTickets).not.toHaveBeenCalled()
 })
 

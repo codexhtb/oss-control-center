@@ -21,7 +21,7 @@ const callbackLabels: Record<CallbackOutcome, string> = {
   CONFIRMED: 'Проблема устранена', STILL_BROKEN: 'Проблема осталась', NO_ANSWER: 'Не дозвонилась',
 }
 
-type TicketTab = 'work' | 'diagnostics' | 'subscriber' | 'history'
+type TicketTab = 'work' | 'diagnostics' | 'subscriber' | 'history' | 'requests'
 const phoneKey = (phone: string) => {
   const digits = phone.replace(/\D/g, '')
   return digits.length >= 5 ? digits : phone.trim().toLowerCase()
@@ -31,6 +31,7 @@ const ticketTabs: { id: TicketTab; label: string }[] = [
   { id: 'diagnostics', label: 'Диагностика' },
   { id: 'subscriber', label: 'Абонент' },
   { id: 'history', label: 'История' },
+  { id: 'requests', label: 'Обращения' },
 ]
 
 function Pager({ page, total, change }: { page: number; total: number; change: (page: number) => void }) {
@@ -62,7 +63,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const deleteTrigger = useRef<HTMLButtonElement>(null)
   const deleteReasonInput = useRef<HTMLTextAreaElement>(null)
   const [commentPage, setCommentPage] = useState(1)
-  const [activeTab, setActiveTab] = useState<TicketTab>('work')
+  const [tabSelection, setTabSelection] = useState<{ ticketId: string; tab: TicketTab }>({ ticketId: id, tab: 'work' })
+  const activeTab = tabSelection.ticketId === id ? tabSelection.tab : 'work'
+  const setActiveTab = (tab: TicketTab) => setTabSelection({ ticketId: id, tab })
   const [historyPage, setHistoryPage] = useState(1)
   const [diagnosticPage, setDiagnosticPage] = useState(1)
   const [decisionPage, setDecisionPage] = useState(1)
@@ -105,6 +108,10 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const related = !!id && ticketQuery.isSuccess
   const resolved = ticketQuery.data?.status === 'RESOLVED'
   const linked = ticketQuery.data?.ticket_type === 'SUBSCRIBER_LINKED'
+  const visibleTabs = linked ? ticketTabs : ticketTabs.slice(0, -1)
+  useEffect(() => {
+    if (ticketQuery.isSuccess && !linked && activeTab === 'requests') setActiveTab('work')
+  }, [activeTab, linked, ticketQuery.isSuccess])
   const currentDecisionId = ticketQuery.data?.status === 'CLOSED'
     ? ticketQuery.data.closed_decision_id || ticketQuery.data.resolved_decision_id
     : ticketQuery.data?.resolved_decision_id
@@ -287,10 +294,10 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
       {actionError !== null && <Notice tone="error">{actionError instanceof ApiError && actionError.code === 'ticket_already_claimed' ? 'Заявку уже взял другой инженер.' : errorText(actionError)}{actionError instanceof ApiError && actionError.status === 409 ? ' Карточка обновлена; проверьте исполнителя перед повтором.' : ''}</Notice>}
       {actionSuccess && <Notice>{actionSuccess}</Notice>}
       <nav className="ticket-tabs" role="tablist" aria-label="Разделы заявки">
-        {ticketTabs.map((tab) => <button key={tab.id} id={`ticket-tab-${tab.id}`} className="ticket-tabs__tab" type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={`ticket-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => { if (tab.id === 'work' || leaveEditor()) setActiveTab(tab.id) }} onKeyDown={(event) => {
-          const index = ticketTabs.findIndex((item) => item.id === activeTab)
-          const next = event.key === 'ArrowRight' ? (index + 1) % ticketTabs.length : event.key === 'ArrowLeft' ? (index + ticketTabs.length - 1) % ticketTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? ticketTabs.length - 1 : -1
-          const nextTab = ticketTabs[next]
+        {visibleTabs.map((tab) => <button key={tab.id} id={`ticket-tab-${tab.id}`} className="ticket-tabs__tab" type="button" role="tab" aria-selected={activeTab === tab.id} aria-controls={`ticket-panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1} onClick={() => { if (tab.id === 'work' || leaveEditor()) setActiveTab(tab.id) }} onKeyDown={(event) => {
+          const index = visibleTabs.findIndex((item) => item.id === activeTab)
+          const next = event.key === 'ArrowRight' ? (index + 1) % visibleTabs.length : event.key === 'ArrowLeft' ? (index + visibleTabs.length - 1) % visibleTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? visibleTabs.length - 1 : -1
+          const nextTab = visibleTabs[next]
           if (nextTab) { event.preventDefault(); if (nextTab.id === 'work' || leaveEditor()) { setActiveTab(nextTab.id); document.getElementById(`ticket-tab-${nextTab.id}`)?.focus() } }
         }}>{tab.label}</button>)}
       </nav>
@@ -317,7 +324,6 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
               </details>}
           </div>
         </section>
-        {linked && ticket.subscriber_snapshot_id && <PreviousTickets key={`${id}:${ticket.subscriber_snapshot_id}`} ticketId={id} snapshotId={ticket.subscriber_snapshot_id} />}
         <div className="ticket-work-grid">
           <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Решение инженера</h2></div>
             {currentDecisionId && (currentDecision.isPending ? <p className="muted">Загружаем актуальное решение…</p> : currentDecision.isError ? <Notice tone="error">Не удалось загрузить актуальное решение: {errorText(currentDecision.error)}</Notice> : currentDecision.data && <article className="ticket-current-decision" aria-label="Актуальное решение инженера"><div><strong>{currentDecision.data.reason_name || (currentDecision.data.reason ? resolutionReasonLabel[currentDecision.data.reason] : 'Причина не указана в исторической записи')}</strong><span>{currentDecision.data.engineer_name || ticket.resolved_by_name || 'Инженер'} · <time dateTime={currentDecision.data.created_at}>{formatDate(currentDecision.data.created_at)}</time></span></div><p>{currentDecision.data.decision_text}</p></article>)}
@@ -407,6 +413,11 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
           <section className="detail-panel"><div className="detail-panel__heading"><h2><ClipboardCheck size={17} /> Решения инженера</h2></div><div>{decisions.isPending ? <p className="muted">Загружаем решения…</p> : decisions.isError ? <Notice tone="error">{errorText(decisions.error)}</Notice> : decisions.data?.items.length ? <div className="fact-list">{decisions.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{item.id === ticket.resolved_decision_id ? 'Текущий вердикт' : 'Решение инженера'}</strong><time>{formatDate(item.created_at)}</time></div><p>{item.decision_text}</p><p className="fact-item__secondary">{item.engineer_name || 'Инженер'} · {item.reason_name || (item.reason ? resolutionReasonLabel[item.reason] : 'Причина не указана в исторической записи')}</p>{item.performed_actions && <p className="fact-item__secondary">Ранее указанные действия: {item.performed_actions}</p>}</article>)}</div> : <p className="empty-facts">Решение ещё не зафиксировано.</p>}<Pager page={decisionPage} total={decisions.data?.total || 0} change={setDecisionPage} /></div></section>
           {ticket.ticket_type === 'SUBSCRIBER_LINKED' && <section className="detail-panel"><div className="detail-panel__heading"><h2>История контрольных обзвонов</h2></div><div>{callbacks.isPending ? <p className="muted">Загружаем звонки…</p> : callbacks.isError ? <Notice tone="error">{errorText(callbacks.error)}</Notice> : callbacks.data?.items.length ? <div className="fact-list">{callbacks.data.items.map((item) => <article className="fact-item" key={item.id}><div><strong>{callbackLabels[item.outcome]}</strong><time>{formatDate(item.occurred_at)}</time></div><p className="fact-item__secondary">{item.actor_name || 'Сотрудник'}{item.comment ? ` · ${item.comment}` : ''}</p></article>)}</div> : <p className="empty-facts">Контрольных звонков пока не было.</p>}<Pager page={callbackPage} total={callbacks.data?.total || 0} change={setCallbackPage} /></div></section>}
           <section className="detail-panel"><div className="detail-panel__heading"><h2><Clock3 size={17} /> История событий</h2></div><div>{history.isPending ? <p className="muted">Загружаем историю…</p> : history.isError ? <Notice tone="error">{errorText(history.error)}</Notice> : history.data?.items.length ? <ol className="history-list">{history.data.items.map((item) => <li key={item.id}><span className="history-dot" /><div><strong>{eventLabel[item.event_type] || item.event_type}</strong><span>{item.actor_name || "Система"} · версия {item.ticket_version}</span>{item.event_type === 'ticket_edited' && <EditedFields data={item.event_data} />}</div><time>{formatDate(item.occurred_at)}</time></li>)}</ol> : <p className="empty-facts">История пуста.</p>}<Pager page={historyPage} total={history.data?.total || 0} change={setHistoryPage} /></div></section>
+      </div>}
+      {activeTab === 'requests' && linked && <div id="ticket-panel-requests" className="ticket-detail-main" role="tabpanel" aria-labelledby="ticket-tab-requests">
+        {ticket.subscriber_snapshot_id
+          ? <PreviousTickets key={`${id}:${ticket.subscriber_snapshot_id}`} ticketId={id} snapshotId={ticket.subscriber_snapshot_id} />
+          : <p className="empty-facts">Нет привязки к абоненту.</p>}
       </div>}
     </div>
   )
