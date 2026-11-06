@@ -2904,23 +2904,31 @@ def test_claim_permissions_closed_deleted_and_admin_reassignment(
     for actor in (denied,):
         login(ticket_client, actor.login)
         assert ticket_client.post(path + "/claim", headers=headers(1)).status_code == 403
+        assert ticket_client.post(
+            path + "/assignment", headers=headers(1), json={"engineer_id": str(actor.id)}
+        ).status_code == 403
     login(ticket_client, first.login)
     assert ticket_client.post(path + "/claim", headers=headers(1)).status_code == 200
     login(ticket_client, second.login)
-    assert (
-        ticket_client.post(
-            path + "/assignment", headers=headers(2), json={"engineer_id": str(second.id)}
-        ).status_code
-        == 409
+    takeover = ticket_client.post(
+        path + "/assignment", headers=headers(2), json={"engineer_id": str(second.id)}
     )
+    assert takeover.status_code == 200
+    assert takeover.json()["assigned_engineer_id"] == str(second.id)
     assert ticket_client.post(path + "/start", headers=headers(2)).status_code == 409
     login(ticket_client, admin.login)
     reassigned = ticket_client.post(
-        path + "/assignment", headers=headers(2), json={"engineer_id": str(second.id)}
+        path + "/assignment", headers=headers(takeover.json()["version"]),
+        json={"engineer_id": str(first.id)},
     )
     assert reassigned.status_code == 200 and reassigned.json()["assigned_engineer_id"] == str(
-        second.id
+        first.id
     )
+    reassigned = ticket_client.post(
+        path + "/assignment", headers=headers(reassigned.json()["version"]),
+        json={"engineer_id": str(second.id)},
+    )
+    assert reassigned.status_code == 200
     login(ticket_client, second.login)
     decision = ticket_client.post(
         path + "/decisions",
