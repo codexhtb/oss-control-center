@@ -60,7 +60,7 @@ it('does not request ServiceDesk information for technical admin', async () => {
   expect(ticketApi.recentEvents).not.toHaveBeenCalled()
 })
 
-it('shows the welcome without a flower button for an engineer', () => {
+it('shows the welcome with a plain name for an engineer', () => {
   renderWorkspace({ ...user, user: { ...user.user, role: 'engineer' } })
   expect(screen.getByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Тестовый оператор' })).not.toBeInTheDocument()
@@ -69,6 +69,7 @@ it('shows the welcome without a flower button for an engineer', () => {
 it('keeps the welcome on every visit to the workspace', async () => {
   const first = renderWorkspace(user)
   expect(await screen.findByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Тестовый оператор' })).not.toBeInTheDocument()
   first.unmount()
 
   renderWorkspace(user)

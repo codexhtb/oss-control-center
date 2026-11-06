@@ -25,10 +25,9 @@ async function main() {
     assert.equal(await page.locator('.workspace-welcome__name-word').count(), 2)
     assert.ok(await page.locator('.workspace-welcome__name-letter').count() > 10)
     assert.equal(await page.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'workspace-letter-assemble')
+    assert.equal(await name.evaluate((element) => element.tagName), 'SPAN')
     assert.equal(await page.locator('.workspace-welcome__particle').count(), 0)
-    await name.click()
-    assert.equal(await page.locator('.workspace-welcome__particle').count(), 10)
-    await page.waitForTimeout(350)
+    assert.equal(await page.locator('.workspace-welcome__burst').count(), 0)
     if (process.env.OSS_SCREENSHOTS === '1') {
       await page.screenshot({ path: '/run/screenshots/workspace-welcome-desktop.png' })
     }
@@ -47,10 +46,7 @@ async function main() {
 
     await page.emulateMedia({ reducedMotion: 'reduce' })
     assert.equal(await page.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'none')
-    await page.locator('.workspace-welcome__name').click()
-    assert.equal(await page.locator('.workspace-welcome__particle').count(), 10)
-    assert.equal(await page.locator('.workspace-welcome__particle').first().evaluate((element) => getComputedStyle(element).display), 'none')
-    assert.notEqual(await page.locator('.workspace-welcome__burst').evaluate((element) => getComputedStyle(element, '::after').content), 'none')
+    assert.equal(await page.locator('.workspace-welcome__burst').count(), 0)
 
     await page.setViewportSize({ width: 390, height: 844 })
     await page.waitForTimeout(1700)
@@ -59,7 +55,7 @@ async function main() {
     if (process.env.OSS_SCREENSHOTS === '1') {
       await page.screenshot({ path: '/run/screenshots/workspace-welcome-mobile.png' })
     }
-    console.log('Welcome desktop, return visit, click effect, reduced motion and mobile layout passed')
+    console.log('Welcome desktop, return visit, reduced motion and mobile layout passed')
     await context.close()
 
     for (const login of ['dev-engineer', 'dev-admin']) {
@@ -74,18 +70,17 @@ async function main() {
         assert.equal(await otherPage.locator('.workspace-welcome').count(), 1)
         assert.equal(await otherPage.locator('.workspace-welcome__name').evaluate((element) => getComputedStyle(element).fontSize), operatorNameSize)
         assert.equal(await otherPage.locator('.workspace-welcome__name-letter').first().evaluate((element) => getComputedStyle(element).animationName), 'workspace-letter-assemble')
-        assert.equal(await otherPage.locator('.workspace-welcome__name--interactive').count(), 0)
+        assert.equal(await otherPage.locator('.workspace-welcome__name').evaluate((element) => element.tagName), 'SPAN')
         if (process.env.OSS_SCREENSHOTS === '1') {
           await otherPage.waitForTimeout(1600)
           await otherPage.screenshot({ path: `/run/screenshots/workspace-welcome-${login}.png` })
         }
-        await otherPage.locator('.workspace-welcome__name').click()
         assert.equal(await otherPage.locator('.workspace-welcome__particle').count(), 0)
       } finally {
         await otherContext.close()
       }
     }
-    console.log('Engineer and admin see the welcome without flower interaction')
+    console.log('Engineer and admin see the welcome with a plain name')
   } finally {
     await browser.close()
   }
