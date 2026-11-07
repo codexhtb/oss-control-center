@@ -1,83 +1,110 @@
 # OSS Control Center
 
-**Service Desk и платформа диагностики абонентских подключений интернет-провайдера.**
+### ISP Service Desk · Subscriber 360 · Network Diagnostics · Field Dispatch
 
-> **Состояние описания: 17 октября 2026; сверено с кодом ветки `main` на коммите `8b7a1ea`.** Это внутренний dev/LAB-проект, а не руководство по готовому production-развёртыванию. Функции и подключения ниже разделены на реализованные и планируемые.
+**An ISP operations platform designed to replace repeated lookups, disconnected monitoring screens, and manual messenger handoffs with one support workflow.**
 
-OSS Control Center объединяет работу первой линии, сетевых инженеров и контрольного обзвона. Оператор находит абонента по лицевому счёту, открывает обращение и видит подтверждённые сведения о подключении; инженер работает с очередью и данными сетевого мониторинга; сотрудник контрольного обзвона подтверждает результат. Для передачи задачи монтажникам предусмотрена отдельная отправка в Telegram LAB.
+**[📖 Read the engineering case study →](docs/portfolio-case-study.md)** — *the problem, architecture, before/after workflow, design decisions, and documented outcomes.*
 
-## Что работает
+> **Status (07 November 2026):** This repository contains the evolving implementation and an internally demonstrated workflow. Features listed below are present in the code or project demonstrations, but this README does **not** certify production deployment, availability, complete operational security, or the activation of every external integration. Some existing detailed docs and runbooks reflect the **17 October 2026 dev/LAB snapshot** and must be revalidated before use.
 
-| Область | Текущее состояние |
+## The operational problem
+
+The old process involved NetUP UTM5 → ServiceDesk Plus → equipment CLI / PRTG → messenger → ServiceDesk Plus. Operators copied subscriber details, engineers repeated the same lookup, and field responses had to be transcribed manually.
+
+**OSS Control Center integrates these stages without treating monitoring observations as engineer decisions.**
+
+## Main capabilities
+
+| Capability | What the implementation provides |
 | --- | --- |
-| Service Desk | Типы заявок `SUBSCRIBER_LINKED`, `MANUAL`, `INTERNAL`; создание, категории, комментарии, очереди, назначение/взятие в работу, история, аудит, soft delete |
-| Инженерный workflow | Вердикт с категорией причины и текстом решения; `IN_PROGRESS → RESOLVED`; возвращение в работу при подтверждённой проблеме |
-| Контрольный обзвон | Очередь `RESOLVED`, запись результата звонка, переход в `CLOSED` либо обратно в `IN_PROGRESS` |
-| Identity | Локальные учётные записи, роли и персональные разрешения, сессии, CSRF |
-| Subscriber 360 | Поиск по ЛС через read-only NetUP **Lab snapshot**, контакты, услуги, связки, адрес, IP-группы с происхождением и качеством данных |
-| Мониторинг | Read-only LibreNMS API; отдельное read-only чтение инвентаря и оптики BDCOM ONU из MariaDB LibreNMS |
-| Выездные работы | Telegram **T1**: сохранение черновика причины и отдельная кнопка отправки в утверждённую LAB-группу; история попыток |
-| Не готово | Production NetUP, Icinga runtime, входящие ответы Telegram **T2**, редактор общего шаблона/текста перед отправкой, полное production-развёртывание |
+| **Subscriber 360** | Lookup **by account number**, contacts, address, service links, connection context, previous tickets |
+| **Billing read-only** | NetUP-backed subscriber data, balance, payment and charge history, services and tariff information (source depends on environment) |
+| **Service Desk** | Subscriber-linked, manual and internal tickets; wrong-payment ticket type; assignment, comments, audit and histories |
+| **Network diagnostics** | Read-only LibreNMS/BDCOM EPON-GPON observations, ONU state and optical measurements with conservative correlation |
+| **Field work** | Explicit Telegram outbound handoff and incoming field report handling; separate engineer confirmation |
+| **Customer callback** | Follow-up queue and customer-confirmed closure or return to investigation |
+| **Internal chat** | Authenticated shared room for operators and engineers, message history/read state and SSE updates |
+| **Administration** | Users, roles, permissions and configurable service-desk settings |
 
-## Как устроена система
+These are **software capabilities**, not claims that all external services are currently configured or reachable in production. In particular, older repository documentation describes an isolated NetUP LAB source and Telegram LAB integration; verify the current runtime environment independently. An Icinga integration mentioned in design documents should not be assumed active.
 
-```mermaid
+## Workflow
+
+~~~mermaid
 flowchart LR
-    U["Оператор / инженер / контрольный обзвон"] --> WEB["React Web UI"]
-    WEB --> API["FastAPI /api/v1"]
-    API <--> PG[("PostgreSQL: заявки, снимки, аудит")]
-    API --> BILL["BillingProvider: NetUP Lab read-only"]
-    API --> LN["LibreNMS HTTP API read-only"]
-    API --> DBR["BDCOM ONU SQL reader read-only"]
-    DBR --> SOCK["Unix socket / локальный proxy"]
-    SOCK --> TUN["SSH-туннель"]
-    TUN --> LDB[("LibreNMS MariaDB")]
-    COL["BDCOM collectors + Oxidized / LibreNMS host"] --> LDB
-    API --> TG["Telegram Bot API: outbound LAB T1"]
-```
+    CALL["Subscriber calls"] --> ACCOUNT["Account-number lookup"]
+    ACCOUNT --> TICKET["Create ticket"]
+    TICKET --> DIAG["Engineer + read-only diagnosis"]
+    DIAG --> FIELD{"Visit needed?"}
+    FIELD -->|Yes| TG["Telegram field request / report"]
+    TG --> RESOLVE["Engineer resolution"]
+    FIELD -->|No| RESOLVE
+    RESOLVE --> CALLBACK["Customer callback"]
+    CALLBACK -->|Restored| CLOSED["Closed"]
+    CALLBACK -->|Still broken| DIAG
+~~~
 
-**Важно:** LibreNMS API и прямое SQL-чтение BDCOM — **два разных канала**. OSS не запускает SNMP-опросы и не управляет BDCOM-коллекторами. Производственная конфигурация NetUP не подключена. Состояние заявки живёт в PostgreSQL OSS, а не в биллинге или Telegram.
+For the fuller before/after comparison and architectural tradeoffs, see the **[engineering case study](docs/portfolio-case-study.md)**.
 
-## Одна заявка — коротко
+## Architecture
 
-1. Оператор ищет ЛС. `BillingProvider` возвращает сведения из NetUP Lab; OSS сохраняет snapshot с источником и временем.
-2. Создаётся заявка; инженер берёт её из очереди.
-3. Для EPON/GPON интерфейс читает доступные наблюдения ONU с проверкой связки NetUP → OLT → PON → VLAN. Неподтверждённые кандидаты не считаются принадлежащими абоненту.
-4. Инженер записывает решение: заявка переходит в `RESOLVED`.
-5. При контрольном звонке подтверждение закрывает заявку; сообщение о сохраняющейся проблеме возвращает её инженерам.
-6. При необходимости инженер отдельно отправляет выездную задачу Telegram-боту; эта отправка **сама по себе не закрывает заявку**.
+~~~mermaid
+flowchart LR
+    STAFF["Contact center · OSS engineers"] --> WEB["React / TypeScript"]
+    WEB --> API["FastAPI"]
+    API <--> PG[("PostgreSQL: tickets · chat · audit")]
+    API -->|Read-only| BILL["NetUP UTM5 billing provider"]
+    API -->|Read-only| LN["LibreNMS API"]
+    API -->|Read-only| ONU["BDCOM ONU observations"]
+    API -->|Field workflow| TG["Telegram bot"]
+~~~
 
-## Технологии и расположение кода
+### Data boundaries
 
-| Слой | Код |
+- **PostgreSQL OSS** holds tickets, workflow transitions, audit, chat and subscriber snapshots.
+- **NetUP UTM5** supplies billing and subscriber context through read-only provider access.
+- **LibreNMS/BDCOM** supplies observed network state, without turning a diagnosis screen into live device control.
+- **Telegram** transports field-work messages; external reports do not close a ticket automatically.
+- **Missing or ambiguous data** remains explicitly unknown/unconfirmed rather than a presumed subscriber-to-ONU match.
+
+## Technology and code
+
+| Layer | Source |
 | --- | --- |
-| Web UI | [`frontend/src/`](frontend/src/) — React/TypeScript |
-| API | [`app/api/v1/`](app/api/v1/) — FastAPI |
-| NetUP | [`app/modules/billing/`](app/modules/billing/) |
-| LibreNMS / BDCOM | [`app/modules/diagnostics/`](app/modules/diagnostics/) |
-| Заявки | [`app/modules/tickets/`](app/modules/tickets/) |
-| Telegram | [`app/modules/field_dispatch/`](app/modules/field_dispatch/) |
-| Identity | [`app/modules/identity/`](app/modules/identity/) |
-| PostgreSQL schema | [`app/db/migrations/versions/`](app/db/migrations/versions/) — миграции до `0020_telegram_field_dispatch` |
-| Dev orchestration | [`compose.dev.yaml`](compose.dev.yaml) и opt-in `compose.*.dev.yaml` |
+| React / TypeScript UI | [frontend/src](frontend/src/) |
+| FastAPI routes | [app/api/v1](app/api/v1/) |
+| Billing and NetUP | [app/modules/billing](app/modules/billing/) |
+| Network/ONU diagnostics | [app/modules/diagnostics](app/modules/diagnostics/) |
+| Tickets and lifecycle | [app/modules/tickets](app/modules/tickets/) |
+| Field dispatch | [app/modules/field_dispatch](app/modules/field_dispatch/) |
+| Internal chat | [app/modules/chat](app/modules/chat/) |
+| Identity and permissions | [app/modules/identity](app/modules/identity/) |
+| PostgreSQL migrations | [app/db/migrations/versions](app/db/migrations/versions/) |
+| Backend tests | [tests](tests/) |
 
-## Документация
+**Stack:** Python · FastAPI · React · TypeScript · PostgreSQL · MariaDB · Docker Compose · LibreNMS · NetUP UTM5 · Telegram Bot API.
 
-**Начать здесь:** [карта документации](docs/README.md).
+## Documentation and development
 
-- [Архитектура актуальной системы](docs/architecture/current-system.md) — контуры, модули, процессы, доверие к данным.
-- [LibreNMS и BDCOM: путь данных](docs/integrations/librenms-bdcom.md) — SNMP → collectors → MariaDB → OSS.
-- [NetUP и корреляция](docs/integrations/netup.md) — источник абонентских данных и ограничения.
-- [Карта восстановления](docs/operations/recovery-map.md) — что входит в Git, а что нужно архивировать отдельно.
-- [Изолированный dev-стек](docs/operations/dev-lab.md), [Telegram T1](docs/operations/telegram-field-dispatch.md), [секреты](docs/operations/secret-management.md).
-- [API-контракты](docs/architecture/api-contracts.md), [RBAC](docs/architecture/rbac.md).
+- **[Engineering portfolio case study](docs/portfolio-case-study.md)** — recommended first read.
+- [Documentation index](docs/README.md) — technical references, including older snapshots.
+- [Architecture snapshot (17 Oct 2026)](docs/architecture/current-system.md) — useful historical technical baseline, not automatically the present runtime.
+- [Shared staff chat](docs/architecture/staff-chat.md) — implementation and event stream.
+- [Subscriber finances](docs/architecture/subscriber-360-finance-phase-2.md) — access-controlled read-only financial operations.
+- [LibreNMS / BDCOM](docs/integrations/librenms-bdcom.md) — observation collection and correlation.
+- [NetUP provider](docs/integrations/netup.md) — billing integration design and limitations.
+- [Telegram field dispatch](docs/operations/telegram-field-dispatch.md) — dev/LAB procedures; must not be followed blindly on a different environment.
+- [Secret management](docs/operations/secret-management.md) and [recovery map](docs/operations/recovery-map.md).
 
-## Запуск, данные и безопасность
+The Docker Compose files are environment-specific. **Do not assume that \`docker compose up\` in the repository root is a safe production installation procedure.** Keep test databases isolated from persistent operational data and verify backups before migrations.
 
-Рабочее dev-окружение развёрнуто как Compose project `oss-control-dev` с собственной PostgreSQL `oss_control_dev`. **Не путать** его с отдельным старым стеком `oss-control-center` и базой `oss_control`. Пошаговый порядок и полный набор Compose overrides — в [dev runbook](docs/operations/dev-lab.md) и [Telegram T1 runbook](docs/operations/telegram-field-dispatch.md); не заменяйте их командой `docker compose up` из корня по умолчанию.
+## Security and publication
 
-Тесты, создающие заявки/пользователей, должны использовать только одноразовые `oss_test_*` базы. Перед миграциями постоянной БД нужен backup с **проверенным восстановлением**.
+This public repository must never include billing exports, actual subscriber records, active production passwords or tokens, certificate private keys, sensitive device mappings, unredacted configuration backups, or full internal network topology. **Publishing source does not prove that every historical commit or document has been independently security-audited.**
 
-**В GitHub находятся исходники, а не работающие данные или резервная копия серверов.** Не коммитить реальные `.env`, токены, пароли, сертификатные ключи, список соответствий устройств, выгрузки абонентов, SQL-дампы, RRD и приватные конфигурации Oxidized. Кастомные PHP-коллекторы на отдельном LibreNMS-хосте не включены в этот репозиторий автоматически: их инвентаризация и безопасное версионирование остаются отдельной задачей.
+For portfolio use, prefer sanitized screenshots and synthetic subscriber examples. No performance or financial impact figures are asserted without an actual before/after measurement.
 
-Этот README — обзор текущего реализованного кода; документы прежних Phases и исторический LibreNMS-runbook не следует использовать как безусловное описание текущего runtime.
+---
+
+*Built to make routine ISP support work less repetitive and more traceable.*
