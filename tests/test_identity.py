@@ -265,6 +265,7 @@ def test_permissions_by_role(
     assert (Permission.TICKET_CLOSE in permissions) == (role != Role.OPERATOR)
     assert Permission.TICKET_CREATE in permissions
     assert Permission.SUBSCRIBER_READ in permissions
+    assert (Permission.REPORTS_READ in permissions) == (role != Role.OPERATOR)
 
 
 @pytest.mark.parametrize("role", [Role.OPERATOR, Role.ENGINEER])

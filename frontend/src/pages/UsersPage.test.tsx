@@ -126,11 +126,13 @@ it('sends a replacement grant set for the selected employee', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
   fireEvent.click(screen.getByRole('button', { name: 'Разрешения' }))
   fireEvent.click(screen.getByRole('checkbox', { name: 'Создание' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Просмотр отчётов Service Desk' }))
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить разрешения' }))
   await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.some(([path, options]) =>
     path === `/api/v1/users/${worker.id}/permissions` && options?.method === 'PUT' &&
     Array.isArray((options.json as { permissions: string[] }).permissions) &&
-    (options.json as { permissions: string[] }).permissions.includes('tickets.create'),
+    (options.json as { permissions: string[] }).permissions.includes('tickets.create') &&
+    (options.json as { permissions: string[] }).permissions.includes('reports.read'),
   )).toBe(true))
 })
 

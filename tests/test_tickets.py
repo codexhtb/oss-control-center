@@ -4860,6 +4860,16 @@ def test_general_report_period_events_and_operator_scope(
         )
         db.commit()
     params = {"start": start.isoformat(), "end": start.isoformat(), "page": 1, "size": 1}
+    assert ticket_client.get("/api/v1/reports/general", params=params).status_code == 403
+    admin = seed_user(ticket_engine, "report_admin", Role.ADMIN)
+    login(ticket_client, admin.login)
+    granted = ticket_client.put(
+        f"/api/v1/users/{operator.id}/permissions",
+        headers=csrf(ticket_client),
+        json={"permissions": [Permission.TICKET_READ, Permission.REPORTS_READ]},
+    )
+    assert granted.status_code == 200, granted.text
+    login(ticket_client, operator.login)
     response = ticket_client.get("/api/v1/reports/general", params=params)
     assert response.status_code == 200, response.text
     body = response.json()
@@ -4898,6 +4908,15 @@ def test_general_report_period_events_and_operator_scope(
     assert empty["metrics"]["created"] == 0
     assert empty["metrics"]["average_resolution_seconds"] is None
     assert empty["metrics"]["active_now"] == 1
+    login(ticket_client, admin.login)
+    revoked = ticket_client.put(
+        f"/api/v1/users/{operator.id}/permissions",
+        headers=csrf(ticket_client),
+        json={"permissions": [Permission.TICKET_READ]},
+    )
+    assert revoked.status_code == 200, revoked.text
+    login(ticket_client, operator.login)
+    assert ticket_client.get("/api/v1/reports/general", params=params).status_code == 403
     login(ticket_client, engineer.login)
     visible = ticket_client.get("/api/v1/reports/general", params=params).json()
     assert visible["metrics"]["created"] == 2
@@ -4912,12 +4931,20 @@ def test_general_report_period_events_and_operator_scope(
         user = db.get(User, restricted.id)
         assert user is not None
         user.permissions_customized = True
-        db.add(UserPermission(user_id=user.id, permission=Permission.TICKET_READ_OWN))
+        db.add_all(
+            [
+                UserPermission(user_id=user.id, permission=Permission.TICKET_READ_OWN),
+                UserPermission(user_id=user.id, permission=Permission.REPORTS_READ),
+            ]
+        )
         db.commit()
     login(ticket_client, restricted.login)
     own = ticket_client.get("/api/v1/reports/general", params=params)
     assert own.status_code == 200 and own.json()["metrics"]["created"] == 0
     with Session(ticket_engine) as db:
-        db.query(UserPermission).filter(UserPermission.user_id == restricted.id).delete()
+        db.query(UserPermission).filter(
+            UserPermission.user_id == restricted.id,
+            UserPermission.permission == Permission.TICKET_READ_OWN,
+        ).delete()
         db.commit()
     assert ticket_client.get("/api/v1/reports/general", params=params).status_code == 403

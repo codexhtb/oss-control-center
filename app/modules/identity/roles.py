@@ -36,6 +36,7 @@ class Permission(StrEnum):
     USERS_READ = "users.read"
     CHAT_MESSAGES_DELETE = "chat.messages.delete"
     SETTINGS_MANAGE = "settings.manage"
+    REPORTS_READ = "reports.read"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -66,6 +67,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.TICKET_DECISION,
             Permission.TICKET_CLOSE,
             Permission.TICKET_AUDIT_READ,
+            Permission.REPORTS_READ,
         }
     ),
     # Settings management is opt-in for existing accounts, including legacy admins.

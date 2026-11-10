@@ -52,9 +52,16 @@ describe('session shell', () => {
     fireEvent.click(screen.getByRole('button', { name: /Войти/ }))
     expect(await screen.findByRole('heading', { name: /Добро пожаловать, Тестовый оператор/ })).toBeInTheDocument()
     expect(screen.getByText('Тестовый оператор', { selector: '.sidebar__profile-text strong' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Отчёты/ })).not.toBeInTheDocument()
     expect(screen.queryByText('Состояние API')).not.toBeInTheDocument()
     expect(screen.queryByText('Backend доступен')).not.toBeInTheDocument()
     expect(vi.mocked(authApi.login)).toHaveBeenCalledWith('synthetic-operator', 'test-only')
+  })
+
+  it('shows reports only with the personal reporting grant', async () => {
+    vi.mocked(authApi.me).mockResolvedValue({ ...operator, permissions: [...operator.permissions, 'reports.read'] })
+    render(<App />)
+    expect(await screen.findByRole('link', { name: /Отчёты/ })).toHaveAttribute('href', '/reports')
   })
 
   it('uses individual permissions even for a restricted admin account', async () => {

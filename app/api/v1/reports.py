@@ -75,6 +75,8 @@ def general_report(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> GeneralReport:
+    if not has_permission(db, identity.user, Permission.REPORTS_READ):
+        raise ApiError(403, "forbidden", "Permission denied")
     all_access = has_permission(db, identity.user, Permission.TICKET_READ)
     if not all_access and not has_permission(db, identity.user, Permission.TICKET_READ_OWN):
         raise ApiError(403, "forbidden", "Permission denied")
