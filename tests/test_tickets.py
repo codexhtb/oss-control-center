@@ -214,6 +214,75 @@ def csrf(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": client.cookies["oss_csrf"]}
 
 
+def test_internal_tickets_are_invisible_to_operators_even_with_ticket_grants(
+    ticket_engine: Engine, ticket_client: TestClient,
+) -> None:
+    engineer = seed_user(ticket_engine, "internal_access_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "internal_access_operator", Role.OPERATOR)
+    for permission in (
+        Permission.TICKET_EDIT_ALL, Permission.TICKET_START, Permission.TICKET_FIELD_WORK,
+        Permission.TICKET_ASSIGN, Permission.TICKET_DECISION,
+    ):
+        grant_ticket_permission(ticket_engine, operator, permission)
+
+    login(ticket_client, engineer.login)
+    internal = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json={
+        "ticket_type": "INTERNAL", "subject": "Internal access sentinel",
+        "description": "Synthetic internal details", "client_request_id": str(uuid4()),
+    })
+    assert internal.status_code == 201, internal.text
+    internal_id = internal.json()["id"]
+    path = f"/api/v1/tickets/{internal_id}"
+    assert ticket_client.get(path).status_code == 200
+    assert ticket_client.get("/api/v1/tickets", params={"ticket_type": "INTERNAL"}).json()[
+        "total"
+    ] == 1
+    assert ticket_client.post(
+        path + "/comments", headers=csrf(ticket_client), json={"body": "Synthetic comment"},
+    ).status_code == 201
+
+    login(ticket_client, operator.login)
+    manual = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json={
+        "ticket_type": "MANUAL", "caller_full_name": "Synthetic Caller",
+        "caller_phone": "+7 900 000 00 01", "city": "Synthetic City",
+        "client_request_id": str(uuid4()),
+    })
+    assert manual.status_code == 201, manual.text
+    forbidden_create = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json={
+        "ticket_type": "INTERNAL", "subject": "No access",
+        "description": "Synthetic attempt", "client_request_id": str(uuid4()),
+    })
+    assert forbidden_create.status_code == 403
+    for params in ({}, {"ticket_type": "INTERNAL"}, {"q": "Internal access sentinel"},
+                   {"number": internal.json()["number"]}):
+        page = ticket_client.get("/api/v1/tickets", params=params)
+        assert page.status_code == 200 and page.json()["total"] == (1 if not params else 0)
+        assert all(item["id"] != internal_id for item in page.json()["items"])
+    events = ticket_client.get("/api/v1/tickets/events/recent")
+    assert events.status_code == 200
+    assert all(item["ticket_id"] != internal_id for item in events.json()["items"])
+    for suffix in ("", "/comments", "/history", "/decisions", "/manual-diagnostics",
+                   "/previous-tickets", "/field-work-handoffs/latest"):
+        assert ticket_client.get(path + suffix).status_code == 404, suffix
+    assert ticket_client.patch(path, headers={**csrf(ticket_client), "If-Match": '"1"'},
+                               json={"subject": "Synthetic change"}).status_code == 404
+    assert ticket_client.post(path + "/comments", headers=csrf(ticket_client),
+                              json={"body": "Denied"}).status_code == 404
+    assert ticket_client.post(path + "/start", headers={**csrf(ticket_client),
+                               "If-Match": '"1"'}).status_code == 404
+    assert ticket_client.get(f"/api/v1/tickets/{manual.json()['id']}").status_code == 200
+    manual_path = f"/api/v1/tickets/{manual.json()['id']}"
+    assert ticket_client.patch(
+        manual_path, headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json={"ticket_type": "INTERNAL", "reason": "Synthetic attempt"},
+    ).status_code == 403
+    assert ticket_client.get(manual_path).json()["ticket_type"] == "MANUAL"
+
+    login(ticket_client, engineer.login)
+    assert ticket_client.get(path + "/comments").json()["total"] == 1
+    assert ticket_client.get(path + "/history").status_code == 200
+
+
 def grant_ticket_permission(engine: Engine, user: User, permission: Permission) -> None:
     with Session(engine) as db:
         row = db.get(User, user.id)
@@ -1022,6 +1091,7 @@ def test_concurrent_version_conflict(ticket_engine: Engine, ticket_client: TestC
 
 def test_failed_audit_rolls_back_ticket(ticket_engine: Engine, ticket_client: TestClient) -> None:
     operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "audit_engineer", Role.ENGINEER)
     snapshot, _ = seed_snapshot(ticket_engine, operator)
     login(ticket_client, "operator")
     with ticket_engine.begin() as connection:
@@ -1039,6 +1109,7 @@ def test_failed_audit_rolls_back_ticket(ticket_engine: Engine, ticket_client: Te
         )
     with pytest.raises(Exception, match="blocked"):
         create(ticket_client, snapshot)
+    login(ticket_client, engineer.login)
     with pytest.raises(Exception, match="blocked"):
         ticket_client.post(
             "/api/v1/tickets",
@@ -1085,7 +1156,10 @@ def test_three_types_http_creation_rbac_and_filters(
     for actor in (operator, engineer):
         snapshot, _ = seed_snapshot(ticket_engine, actor)
         login(ticket_client, actor.login)
-        for kind in (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL, TicketType.INTERNAL):
+        kinds = (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL)
+        if actor.role == Role.ENGINEER:
+            kinds += (TicketType.INTERNAL,)
+        for kind in kinds:
             payload = {
                 "ticket_type": kind.value,
                 "description": f"Synthetic {kind.value} request",
@@ -1124,14 +1198,14 @@ def test_three_types_http_creation_rbac_and_filters(
             listing = ticket_client.get("/api/v1/tickets", params={"ticket_type": kind.value})
             assert listing.status_code == 200
             assert all(item["ticket_type"] == kind.value for item in listing.json()["items"])
-    assert len(set(created_ids)) == 6
+    assert len(set(created_ids)) == 5
     assert (
         ticket_client.get("/api/v1/tickets", params={"account_no": "000123"}).json()["total"] == 2
     )
     with Session(ticket_engine) as db:
-        assert db.scalar(select(func.count()).select_from(Ticket)) == 6
-        assert db.scalar(select(func.count()).select_from(TicketEvent)) == 6
-        assert db.scalar(select(func.count()).select_from(TicketAudit)) == 6
+        assert db.scalar(select(func.count()).select_from(Ticket)) == 5
+        assert db.scalar(select(func.count()).select_from(TicketEvent)) == 5
+        assert db.scalar(select(func.count()).select_from(TicketAudit)) == 5
     login(ticket_client, "admin")
     assert ticket_client.get("/api/v1/tickets").status_code == 200
     for kind in (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL, TicketType.INTERNAL):
@@ -1158,6 +1232,7 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:
     operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "subject_engineer", Role.ENGINEER)
     snapshot, _ = seed_snapshot(ticket_engine, operator)
     login(ticket_client, operator.login)
     old_payload = {
@@ -1177,6 +1252,8 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
         == 200
     )
     for kind in (TicketType.SUBSCRIBER_LINKED, TicketType.MANUAL, TicketType.INTERNAL):
+        if kind == TicketType.INTERNAL:
+            login(ticket_client, engineer.login)
         payload = {
             "ticket_type": kind.value,
             "subject": f"Synthetic {kind.value} task",
@@ -1215,6 +1292,8 @@ def test_subject_for_all_types_validation_replay_and_legacy_client(
             == 409
         )
         assert ticket_client.post("/api/v1/tickets", json=payload).status_code == 403
+        if kind == TicketType.INTERNAL:
+            login(ticket_client, operator.login)
     invalid = ("", "   ", " leading", "trailing ", "line\nbreak", "control\x7f", "x" * 161)
     for subject in invalid:
         response = ticket_client.post(
@@ -1252,6 +1331,8 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     }
     created = []
     for kind in ("MANUAL", "INTERNAL"):
+        if kind == "INTERNAL":
+            login(ticket_client, engineer.login)
         response = ticket_client.post(
             "/api/v1/tickets",
             headers=csrf(ticket_client),
@@ -1264,6 +1345,8 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
         )
         assert response.status_code == 201, response.text
         created.append(response.json())
+        if kind == "INTERNAL":
+            login(ticket_client, operator.login)
     unassigned = ticket_client.get(
         "/api/v1/tickets",
         params={"unassigned": "true", "ticket_type": "MANUAL", "page": 1, "size": 1},
@@ -1273,7 +1356,7 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     assert len(unassigned.json()["items"]) == 1
     feed = ticket_client.get("/api/v1/tickets/events/recent", params={"size": 1, "page": 1})
     assert feed.status_code == 200
-    assert feed.json()["total"] == 2 and len(feed.json()["items"]) == 1
+    assert feed.json()["total"] == 1 and len(feed.json()["items"]) == 1
     assert set(feed.json()["items"][0]) == {
         "id",
         "ticket_id",
@@ -1294,6 +1377,7 @@ def test_assignable_engineers_unassigned_filter_and_recent_events(
     engineers = ticket_client.get("/api/v1/tickets/assignable-engineers", params={"size": 1})
     assert engineers.status_code == 200
     assert engineers.json()["total"] == 2
+    assert ticket_client.get("/api/v1/tickets/events/recent").json()["total"] == 2
     assert engineers.json()["items"] == [{"id": str(admin.id), "display_name": admin.display_name}]
     assigned = ticket_client.post(
         f"/api/v1/tickets/{created[0]['id']}/assignment",
@@ -1390,6 +1474,8 @@ def test_manual_internal_lifecycle_without_billing(
     )
     assert unavailable.status_code == 503
     for kind in (TicketType.MANUAL, TicketType.INTERNAL):
+        if kind == TicketType.INTERNAL:
+            login(ticket_client, engineer.login)
         created = ticket_client.post(
             "/api/v1/tickets",
             headers=csrf(ticket_client),
@@ -1406,13 +1492,14 @@ def test_manual_internal_lifecycle_without_billing(
         )
         assert created.status_code == 201, created.text
         ticket_id = created.json()["id"]
-        assert (
-            ticket_client.post(
-                f"/api/v1/tickets/{ticket_id}/start",
-                headers={**csrf(ticket_client), "If-Match": '"1"'},
-            ).status_code
-            == 403
-        )
+        if kind == TicketType.INTERNAL:
+            login(ticket_client, operator.login)
+        assert ticket_client.post(
+            f"/api/v1/tickets/{ticket_id}/start",
+            headers={**csrf(ticket_client), "If-Match": '"1"'},
+        ).status_code == 403
+        if kind == TicketType.INTERNAL:
+            login(ticket_client, engineer.login)
         comment = ticket_client.post(
             f"/api/v1/tickets/{ticket_id}/comments",
             headers=csrf(ticket_client),
@@ -1584,8 +1671,9 @@ def test_ticket_type_validation_replay_and_legacy_client(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:
     operator = seed_user(ticket_engine, "operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "type_validation_engineer", Role.ENGINEER)
     snapshot, _ = seed_snapshot(ticket_engine, operator)
-    login(ticket_client, operator.login)
+    login(ticket_client, engineer.login)
     for kind in ("MANUAL", "INTERNAL"):
         request_id = str(uuid4())
         payload = {
@@ -1669,6 +1757,7 @@ def test_ticket_type_validation_replay_and_legacy_client(
         ).status_code
         == 422
     )
+    login(ticket_client, operator.login)
     legacy_id = uuid4()
     legacy = create(ticket_client, snapshot, request_id=legacy_id)
     assert legacy.status_code == 201, legacy.text
@@ -1809,9 +1898,10 @@ def test_own_ticket_edit_scope_conflict_and_history(
         "/api/v1/tickets",
         headers=csrf(ticket_client),
         json={
-            "ticket_type": "INTERNAL",
+            "ticket_type": "MANUAL",
             "subject": "Other task",
             "description": "Other description",
+            **MANUAL_CONTACT,
             "client_request_id": str(uuid4()),
         },
     )
@@ -2498,6 +2588,8 @@ def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup
         assert result.status_code == 201, result.text
         linked_numbers[result.json()["number"]] = snapshot.account_no
     for kind in ("MANUAL", "INTERNAL"):
+        if kind == "INTERNAL":
+            login(ticket_client, engineer.login)
         result = ticket_client.post(
             "/api/v1/tickets",
             headers=csrf(ticket_client),
@@ -2510,6 +2602,8 @@ def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup
             },
         )
         assert result.status_code == 201, result.text
+        if kind == "INTERNAL":
+            login(ticket_client, operator.login)
 
     def unavailable_provider():
         pytest.fail("Ticket list must not initialize a BillingProvider")
@@ -2528,7 +2622,7 @@ def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup
         event.remove(ticket_engine, "before_cursor_execute", count_snapshot_selects)
     assert page.status_code == 200, page.text
     assert page.headers["cache-control"] == "no-store"
-    assert page.json()["total"] == 5
+    assert page.json()["total"] == 4
     assert len(snapshot_selects) == 1
     items = {item["account_no"]: item for item in page.json()["items"] if item["account_no"]}
     assert items["000123"]["subscriber_name"] == "Synthetic Subscriber"
@@ -2543,8 +2637,9 @@ def test_ticket_list_uses_historical_subscriber_snapshots_without_billing_lookup
     for kind in ("MANUAL", "INTERNAL"):
         filtered = ticket_client.get("/api/v1/tickets", params={"ticket_type": kind, "size": 1})
         assert filtered.status_code == 200
-        assert filtered.json()["total"] == 1
-        assert filtered.json()["items"][0]["ticket_type"] == kind
+        assert filtered.json()["total"] == (0 if kind == "INTERNAL" else 1)
+        if kind != "INTERNAL":
+            assert filtered.json()["items"][0]["ticket_type"] == kind
     linked_page = ticket_client.get(
         "/api/v1/tickets", params={"ticket_type": "SUBSCRIBER_LINKED", "size": 1, "page": 2}
     )

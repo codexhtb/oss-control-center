@@ -32,9 +32,9 @@ const session: MeResponse = {
   permissions: ['tickets.create'],
 }
 
-function renderCreate() {
+function renderCreate(role: 'operator' | 'engineer' = 'operator') {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/tickets/new']}><Routes><Route path="/tickets/new" element={<TicketCreatePage session={session} />} /><Route path="/tickets/:id" element={<div>Карточка открыта</div>} /></Routes></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/tickets/new']}><Routes><Route path="/tickets/new" element={<TicketCreatePage session={{ ...session, user: { ...session.user, role } }} />} /><Route path="/tickets/:id" element={<div>Карточка открыта</div>} /></Routes></MemoryRouter></QueryClientProvider>)
 }
 
 beforeEach(() => {
@@ -71,7 +71,7 @@ it.each([
   ['INTERNAL', 'Внутренняя'],
 ] as const)('creates %s through the real form state and idempotency payload', async (kind, label) => {
   vi.mocked(ticketApi.create).mockResolvedValue({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
-  renderCreate()
+  renderCreate(kind === 'INTERNAL' ? 'engineer' : 'operator')
   fireEvent.click(screen.getByRole('button', { name: new RegExp(label) }))
   if (kind === 'MANUAL') {
     fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: '__custom__' } })
@@ -87,6 +87,14 @@ it.each([
     client_request_id: expect.any(String),
   })))
   expect(await screen.findByText('Карточка открыта')).toBeInTheDocument()
+})
+
+it('hides the internal ticket type from an operator', () => {
+  renderCreate()
+  expect(screen.queryByRole('button', { name: /Внутренняя/ })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Ручная/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /По абоненту/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Ошибочный платёж/ })).toBeInTheDocument()
 })
 
 it('requires explicit service and connection choices for an ambiguous subscriber card', async () => {

@@ -31,10 +31,25 @@ const ticket: Ticket = {
   version: 1, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
 }
 
-function renderList(initial = '/tickets') {
+function renderList(initial = '/tickets', role: 'operator' | 'engineer' = 'operator') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initial]}><TicketListPage session={session} /></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initial]}><TicketListPage session={{ ...session, user: { ...session.user, role } }} /></MemoryRouter></QueryClientProvider>)
 }
+
+it('hides the internal type filter for operators and keeps it for engineers', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({ items: [], page: 1, size: 20, total: 0 })
+  const view = renderList('/tickets?ticket_type=INTERNAL')
+  expect(await screen.findByRole('combobox', { name: 'Тип' })).not.toHaveTextContent('Внутренняя')
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    expect.not.objectContaining({ ticket_type: 'INTERNAL' }), expect.anything(),
+  ))
+  view.unmount()
+  renderList('/tickets?ticket_type=INTERNAL', 'engineer')
+  expect(await screen.findByRole('combobox', { name: 'Тип' })).toHaveTextContent('Внутренняя')
+  await waitFor(() => expect(ticketApi.list).toHaveBeenCalledWith(
+    expect.objectContaining({ ticket_type: 'INTERNAL' }), expect.anything(),
+  ))
+})
 
 beforeEach(() => {
   window.localStorage.clear()

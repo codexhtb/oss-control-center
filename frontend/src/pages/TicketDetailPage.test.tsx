@@ -6,6 +6,7 @@ import { ticketApi } from '../features/tickets/ticket-api'
 import { settingsApi } from '../features/tickets/settings-api'
 import type { Page, TicketDetail } from '../features/tickets/types'
 import type { MeResponse } from '../shared/api/types'
+import { ApiError } from '../shared/api/client'
 import { TicketDetailPage } from './TicketDetailPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
@@ -78,6 +79,13 @@ beforeEach(() => {
     availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
     limitations: ['onu_source_not_configured'], time_basis: 'SOURCE_LOCAL_UNVERIFIED',
   })
+})
+
+it('shows a neutral unavailable state for a direct link to a hidden ticket', async () => {
+  vi.mocked(ticketApi.get).mockRejectedValue(new ApiError(404, 'ticket_not_found'))
+  renderDetail('operator')
+  expect(await screen.findByText('Заявка не найдена или недоступна.')).toBeInTheDocument()
+  expect(screen.queryByText('Проверка OSS')).not.toBeInTheDocument()
 })
 
 it('loads previous subscriber tickets only in the requests tab, after current-ticket history', async () => {

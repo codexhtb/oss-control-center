@@ -161,7 +161,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
           <div className="form-section-heading"><span className="step-number">01</span><div><h2>Тип заявки</h2><p>Общий workflow для обращений и внутренних задач.</p></div></div>
           <div className="type-picker" role="group" aria-label="Тип заявки">
             <button type="button" className={`type-option ${type === 'MANUAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('MANUAL'); setManualPhone(''); setCity(''); edited() }}><FilePlus2 size={20} /><strong>Ручная</strong><span>Обращение без привязки к NetUP</span></button>
-            <button type="button" className={`type-option ${type === 'INTERNAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('INTERNAL'); edited() }}><Layers3 size={20} /><strong>Внутренняя</strong><span>Задача команды OSS</span></button>
+            {session.user.role !== 'operator' && <button type="button" className={`type-option ${type === 'INTERNAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('INTERNAL'); edited() }}><Layers3 size={20} /><strong>Внутренняя</strong><span>Задача команды OSS</span></button>}
             <button type="button" className={`type-option ${linked ? 'type-option--selected' : ''}`} onClick={() => { setType('SUBSCRIBER_LINKED'); setPhoneChoice(''); setManualPhone(''); edited() }}><UserRound size={20} /><strong>По абоненту</strong><span>Из Subscriber 360</span></button>
             <button type="button" className={`type-option ${type === 'ERRONEOUS_PAYMENT' ? 'type-option--selected' : ''}`} onClick={() => { setType('ERRONEOUS_PAYMENT'); edited() }}><CreditCard size={20} /><strong>Ошибочный платёж</strong><span>Перевод на неверный лицевой счёт</span></button>
           </div>

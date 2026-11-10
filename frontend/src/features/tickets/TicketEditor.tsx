@@ -30,8 +30,8 @@ function initial(ticket: TicketDetail): Draft {
   }
 }
 
-export function TicketEditor({ ticket, busy, basicOnly, onSave, onCancel, onDirtyChange }: {
-  ticket: TicketDetail; busy: boolean; basicOnly?: boolean; onSave: (payload: EditTicketInput) => void; onCancel: () => void; onDirtyChange?: (dirty: boolean) => void
+export function TicketEditor({ ticket, busy, basicOnly, allowInternal = true, onSave, onCancel, onDirtyChange }: {
+  ticket: TicketDetail; busy: boolean; basicOnly?: boolean; allowInternal?: boolean; onSave: (payload: EditTicketInput) => void; onCancel: () => void; onDirtyChange?: (dirty: boolean) => void
 }) {
   const baseline = initial(ticket)
   const [draft, setDraft] = useState<Draft>(() => baseline)
@@ -124,7 +124,7 @@ export function TicketEditor({ ticket, busy, basicOnly, onSave, onCancel, onDirt
       <fieldset className="ticket-editor__group"><legend>Обращение</legend>
         <label className="field"><span>Тип заявки</span><select value={draft.ticket_type} disabled={!canChangeType} onChange={(event) => {
           update('ticket_type', event.target.value as TicketType); setLookup(null)
-        }}>{(['MANUAL', 'SUBSCRIBER_LINKED', 'INTERNAL'] as const).map((kind) => <option key={kind} value={kind}>{typeLabel[kind]}</option>)}{ticket.ticket_type === 'ERRONEOUS_PAYMENT' && <option value="ERRONEOUS_PAYMENT">{typeLabel.ERRONEOUS_PAYMENT}</option>}</select></label>
+        }}>{(['MANUAL', 'SUBSCRIBER_LINKED', ...(allowInternal ? ['INTERNAL'] : [])] as TicketType[]).map((kind) => <option key={kind} value={kind}>{typeLabel[kind]}</option>)}{ticket.ticket_type === 'ERRONEOUS_PAYMENT' && <option value="ERRONEOUS_PAYMENT">{typeLabel.ERRONEOUS_PAYMENT}</option>}</select></label>
         {draft.ticket_type !== 'ERRONEOUS_PAYMENT' && <><label className="field"><span>Категория</span><select value={draft.category_id} onChange={(event) => {
           const id = event.target.value; setDraft((current) => ({ ...current, category_id: id, subject: categories.data?.find((item) => item.id === id && !item.is_other)?.name || current.subject }))
         }}><option value="">Своя тема / без категории</option>{categories.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>

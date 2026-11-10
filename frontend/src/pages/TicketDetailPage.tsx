@@ -197,7 +197,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   }
 
   if (ticketQuery.isPending) return <div className="desk-state" role="status">Открываем заявку…</div>
-  if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to={listDestination}><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{errorText(ticketQuery.error)}</Notice></div>
+  if (ticketQuery.isError) return <div className="page desk-page"><Link className="back-link" to={listDestination}><ArrowLeft size={15} /> К реестру</Link><Notice tone="error">{ticketQuery.error instanceof ApiError && ticketQuery.error.status === 404 ? 'Заявка не найдена или недоступна.' : errorText(ticketQuery.error)}</Notice></div>
   const ticket = ticketQuery.data
   const primaryPhone = ticket.caller_phone || ticket.subscriber?.phone || null
   const hasTicketAddress = !!(ticket.address_override || ticket.subscriber?.actual_address)?.trim()
@@ -328,7 +328,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         }}>{tab.label}</button>)}
       </nav>
       {activeTab === 'work' && <div id="ticket-panel-work" className="ticket-detail-main" role="tabpanel" aria-labelledby="ticket-tab-work">
-        {editing && <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Редактирование заявки</h2></div><TicketEditor key={`${ticket.id}:${ticket.version}`} ticket={ticket} busy={!!busy} basicOnly={!canEditAll} onDirtyChange={(dirty) => { editDirty.current = dirty }} onSave={(payload) => void runAction('edit', () => ticketApi.edit(id, ticket.version, payload), () => { editDirty.current = false; setEditing(false) })} onCancel={() => { editDirty.current = false; setEditing(false) }} /></section>}
+        {editing && <section className="detail-panel ticket-work-panel"><div className="detail-panel__heading"><h2>Редактирование заявки</h2></div><TicketEditor key={`${ticket.id}:${ticket.version}`} ticket={ticket} busy={!!busy} basicOnly={!canEditAll} allowInternal={session.user.role !== 'operator'} onDirtyChange={(dirty) => { editDirty.current = dirty }} onSave={(payload) => void runAction('edit', () => ticketApi.edit(id, ticket.version, payload), () => { editDirty.current = false; setEditing(false) })} onCancel={() => { editDirty.current = false; setEditing(false) }} /></section>}
         <section className="detail-panel ticket-work-panel" aria-label="Управление заявкой">
           <div className="detail-panel__heading"><h2>Работа с заявкой</h2><span>Автор, исполнитель и текущий этап</span></div>
             <dl className="ticket-meta">

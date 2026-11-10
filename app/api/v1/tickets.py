@@ -97,6 +97,7 @@ from app.modules.tickets.service import (
     restore_ticket,
     start_ticket,
     ticket_detail,
+    ticket_role_visible,
 )
 from app.modules.tickets.status import TicketPriority, TicketStatus, TicketType
 from app.modules.tickets.subscriber_history import matching_subscriber
@@ -392,7 +393,10 @@ def _ticket_views(db: Session, items: list[Ticket]) -> list[TicketListView]:
 
 def _readable(db: Session, identity: AuthContext, ticket_id: UUID) -> Ticket:
     ticket = db.get(Ticket, ticket_id)
-    if ticket is None or ticket.deleted_at is not None:
+    if (
+        ticket is None or ticket.deleted_at is not None
+        or not ticket_role_visible(identity.user, ticket)
+    ):
         raise ApiError(404, "ticket_not_found", "Ticket not found")
     if not has_permission(db, identity.user, Permission.TICKET_READ) and not (
         has_permission(db, identity.user, Permission.TICKET_READ_OWN)
@@ -479,6 +483,7 @@ def listing(
         created_before=created_before,
         active_only=active_only,
         callback_queue=callback_queue,
+        exclude_internal=identity.user.role == Role.OPERATOR,
         visible_to=None
         if has_permission(db, identity.user, Permission.TICKET_READ)
         else identity.user.id,
@@ -499,6 +504,8 @@ def trash(
     ):
         raise ApiError(403, "forbidden", "Permission denied")
     condition = Ticket.deleted_at.is_not(None)
+    if identity.user.role == Role.OPERATOR:
+        condition = and_(condition, Ticket.ticket_type != TicketType.INTERNAL)
     total = db.scalar(select(func.count()).select_from(Ticket).where(condition)) or 0
     rows = db.scalars(
         select(Ticket)
@@ -566,6 +573,8 @@ def recent_events(
         else [Ticket.created_by == identity.user.id]
     )
     conditions.append(Ticket.deleted_at.is_(None))
+    if identity.user.role == Role.OPERATOR:
+        conditions.append(Ticket.ticket_type != TicketType.INTERNAL)
     total = (
         db.scalar(
             select(func.count())

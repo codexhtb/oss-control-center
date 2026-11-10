@@ -126,6 +126,8 @@ def edit_ticket(
     if actor is None or not actor.is_active:
         raise ApiError(403, "forbidden", "Permission denied")
     ticket = _ticket(db, ticket_id, lock=True)
+    if not ticket_role_visible(actor, ticket):
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
     can_edit_all = has_permission(db, actor, Permission.TICKET_EDIT_ALL)
     can_edit_own = has_permission(db, actor, Permission.TICKET_EDIT_OWN)
     if not can_edit_all and not (can_edit_own and ticket.created_by == actor_id):
@@ -142,6 +144,8 @@ def edit_ticket(
     _version(ticket, version)
     fields = payload.model_fields_set
     target_type = payload.ticket_type if "ticket_type" in fields else ticket.ticket_type
+    if actor.role == Role.OPERATOR and target_type == TicketType.INTERNAL:
+        raise ApiError(403, "forbidden", "Permission denied")
     source_fields = {"lookup_id", "selected_service_id", "connection_snapshot_id"}
     source_requested = bool(fields & source_fields)
     type_changed = target_type != ticket.ticket_type
@@ -301,9 +305,14 @@ def edit_ticket(
     return ticket
 
 
+def ticket_role_visible(actor: User, ticket: Ticket) -> bool:
+    return actor.role != Role.OPERATOR or ticket.ticket_type != TicketType.INTERNAL
+
+
 def _can_read_ticket(db: Session, actor: User, ticket: Ticket) -> bool:
-    return has_permission(db, actor, Permission.TICKET_READ) or (
-        has_permission(db, actor, Permission.TICKET_READ_OWN) and ticket.created_by == actor.id
+    return ticket_role_visible(actor, ticket) and (
+        has_permission(db, actor, Permission.TICKET_READ)
+        or (has_permission(db, actor, Permission.TICKET_READ_OWN) and ticket.created_by == actor.id)
     )
 
 
@@ -319,6 +328,8 @@ def delete_ticket(
     if actor is None or not actor.is_active:
         raise ApiError(403, "forbidden", "Permission denied")
     ticket = _ticket(db, ticket_id, lock=True, include_deleted=True)
+    if not ticket_role_visible(actor, ticket):
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
     if ticket.deleted_at is not None:
         raise ApiError(409, "already_deleted", "Ticket is already deleted")
     if not _can_read_ticket(db, actor, ticket):
@@ -349,6 +360,8 @@ def restore_ticket(db: Session, actor_id: UUID, ticket_id: UUID, version: int | 
     if not has_permission(db, actor, Permission.TICKET_READ):
         raise ApiError(403, "forbidden", "Permission denied")
     ticket = _ticket(db, ticket_id, lock=True, include_deleted=True)
+    if not ticket_role_visible(actor, ticket):
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
     if ticket.deleted_at is None:
         raise ApiError(409, "not_deleted", "Ticket is not deleted")
     _version(ticket, version)
@@ -369,6 +382,8 @@ def purge_ticket(
     if not has_permission(db, actor, Permission.TICKET_READ):
         raise ApiError(403, "forbidden", "Permission denied")
     ticket = _ticket(db, ticket_id, lock=True, include_deleted=True)
+    if not ticket_role_visible(actor, ticket):
+        raise ApiError(404, "ticket_not_found", "Ticket not found")
     if ticket.deleted_at is None:
         raise ApiError(409, "not_deleted", "Delete the ticket before purging it")
     _version(ticket, version)
@@ -435,7 +450,9 @@ def purge_ticket(
 
 
 def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[Ticket, bool]:
-    _actor(db, actor_id, Permission.TICKET_CREATE)
+    actor = _actor(db, actor_id, Permission.TICKET_CREATE)
+    if actor.role == Role.OPERATOR and payload.ticket_type == TicketType.INTERNAL:
+        raise ApiError(403, "forbidden", "Permission denied")
     existing = db.scalar(
         select(Ticket).where(
             Ticket.created_by == actor_id, Ticket.client_request_id == payload.client_request_id
@@ -735,8 +752,11 @@ def list_tickets(
     created_before: datetime | None = None,
     active_only: bool = False,
     callback_queue: bool = False,
+    exclude_internal: bool = False,
 ) -> tuple[list[Ticket], int]:
     conditions = [Ticket.deleted_at.is_(None)]
+    if exclude_internal:
+        conditions.append(Ticket.ticket_type != TicketType.INTERNAL)
     if visible_to is not None:
         conditions.append(Ticket.created_by == visible_to)
     if status is not None:
@@ -852,7 +872,11 @@ def assign_engineer(
         raise ApiError(422, "invalid_engineer", "Assignee must be allowed to work on tickets")
     ticket = _ticket(db, ticket_id, lock=True)
     if not _can_read_ticket(db, actor, ticket):
+        if not ticket_role_visible(actor, ticket):
+            raise ApiError(404, "ticket_not_found", "Ticket not found")
         raise ApiError(403, "forbidden", "Permission denied")
+    if ticket.ticket_type == TicketType.INTERNAL and engineer.role == Role.OPERATOR:
+        raise ApiError(422, "invalid_engineer", "Operator cannot be assigned internal tickets")
     _version(ticket, version)
     if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
         raise ApiError(409, "invalid_transition", "Only active work can be assigned")

@@ -25,7 +25,7 @@ from app.modules.tickets.models import (
     Ticket,
 )
 from app.modules.tickets.schemas import DiagnosticView
-from app.modules.tickets.service import confirm_monitoring_check
+from app.modules.tickets.service import confirm_monitoring_check, ticket_role_visible
 
 router = APIRouter(tags=["diagnostics"])
 
@@ -89,7 +89,7 @@ def _still_engineer(db: SessionDep, actor_id: UUID) -> None:
 
 
 def _ticket_visible(db: SessionDep, user: User, ticket: Ticket) -> None:
-    if ticket.deleted_at is not None:
+    if ticket.deleted_at is not None or not ticket_role_visible(user, ticket):
         raise ApiError(404, "ticket_not_found", "Ticket not found")
     if has_permission(db, user, Permission.TICKET_READ):
         return

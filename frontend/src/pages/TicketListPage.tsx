@@ -76,6 +76,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   }, [categoryText, urlCategory, setParams])
   const canReadEngineers = session.permissions.some((permission) => ['tickets.read.all', 'tickets.read.own', 'tickets.assign'].includes(permission))
   const showQueues = session.permissions.includes('tickets.read.all')
+  const availableTypes = session.user.role === 'operator' ? types.filter((item) => item !== 'INTERNAL') : types
   const queue: TicketQueue = showQueues && params.size === 0 ? readDefaultQueue(session.user.id)
     : showQueues && ['waiting', 'mine', 'callback'].includes(params.get('queue') || '') ? params.get('queue') as TicketQueue : 'all'
   const page = Math.max(1, Number(params.get('page')) || 1)
@@ -92,7 +93,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
   if (createdBefore) filters.created_before = createdBefore
   if (params.get('active_only') === 'true') filters.active_only = true
   if (statuses.includes(status as TicketStatus)) filters.status = status as TicketStatus
-  if (types.includes(type as TicketType)) filters.ticket_type = type as TicketType
+  if (availableTypes.includes(type as TicketType)) filters.ticket_type = type as TicketType
   if (priorities.includes(priority as TicketPriority)) filters.priority = priority as TicketPriority
   if (params.get('unassigned') === 'true') filters.unassigned = true
   if (assignee && !filters.unassigned) filters.assignee = assignee
@@ -224,7 +225,7 @@ export function TicketListPage({ session }: { session: MeResponse }) {
         <div className="desk-toolbar__title"><ListFilter size={17} /><span>Фильтры</span></div>
         <label className="compact-field"><span>Статус</span><select aria-label="Статус" value={filters.status || (filters.active_only ? 'ACTIVE' : '')} disabled={queue === 'callback'} onChange={(event) => setStatus(event.target.value)}><option value="">Все</option><option value="ACTIVE">Не закрыты</option>{statuses.map((item) => <option value={item} key={item}>{statusLabel[item]}</option>)}</select></label>
         <label className="compact-field compact-field--wide"><span>Категория</span><input aria-label="Категория" value={categoryText} maxLength={160} placeholder="Название категории" onChange={(event) => setCategoryText(event.target.value)} /></label>
-        <label className="compact-field"><span>Тип</span><select aria-label="Тип" value={filters.ticket_type || ''} disabled={queue === 'callback'} onChange={(event) => setFilter('ticket_type', event.target.value)}><option value="">Все</option>{types.map((item) => <option value={item} key={item}>{typeLabel[item]}</option>)}</select></label>
+        <label className="compact-field"><span>Тип</span><select aria-label="Тип" value={filters.ticket_type || ''} disabled={queue === 'callback'} onChange={(event) => setFilter('ticket_type', event.target.value)}><option value="">Все</option>{availableTypes.map((item) => <option value={item} key={item}>{typeLabel[item]}</option>)}</select></label>
         <label className="compact-field"><span>Приоритет</span><select aria-label="Приоритет" value={filters.priority || ''} disabled={queue === 'callback'} onChange={(event) => setFilter('priority', event.target.value)}><option value="">Все</option>{priorities.map((item) => <option value={item} key={item}>{priorityLabel[item]}</option>)}</select></label>
         {canReadEngineers && <label className="compact-field compact-field--wide"><span>Исполнитель</span><select aria-label="Исполнитель" value={filters.assignee || ''} disabled={queue !== 'all'} onChange={(event) => setFilter('assignee', event.target.value)}><option value="">Все</option>{queue === 'mine' && <option value={session.user.id}>Я</option>}{engineers.data?.items.filter((item) => item.id !== (queue === 'mine' ? session.user.id : '')).map((item) => <option value={item.id} key={item.id}>{item.display_name}</option>)}</select></label>}
         <label className="desk-check"><input type="checkbox" checked={!!filters.unassigned} disabled={queue !== 'all'} onChange={(event) => setFilter('unassigned', event.target.checked ? 'true' : '')} /><span>Без исполнителя</span></label>
