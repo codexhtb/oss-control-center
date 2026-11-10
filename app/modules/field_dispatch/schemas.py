@@ -14,6 +14,7 @@ class SendFieldWork(BaseModel):
     client_request_id: UUID
     visit_address: str | None = Field(default=None, max_length=500)
     message_text: str | None = Field(default=None, max_length=4096)
+    direction: Literal["SUKHUM", "OCHAMCHIRA"] | None = None
 
     @field_validator("visit_address")
     @classmethod
@@ -34,6 +35,8 @@ class FieldWorkHandoffView(BaseModel):
     delivery_status: Literal["DRAFT", "SENDING", "SENT", "FAILED", "UNCERTAIN"]
     work_status: Literal["AWAITING_REPORT", "REPORTED", "VERIFIED"]
     chat_id: str
+    direction: Literal["SUKHUM", "OCHAMCHIRA"] | None = None
+    group_name: str | None = None
     telegram_message_id: int | None
     message_preview: str | None = None
     generated_preview: str | None = None

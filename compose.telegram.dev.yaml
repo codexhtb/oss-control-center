@@ -36,6 +36,7 @@ services:
     user: "1001:1001"
     environment:
       TELEGRAM_BOT_TOKEN_FILE: /run/telegram/telegram-bot-token
+      TELEGRAM_OCHAMCHIRA_CHAT_ID: "-1004473201977"
     volumes:
       - telegram_secret_runtime:/run/telegram:ro
     depends_on:

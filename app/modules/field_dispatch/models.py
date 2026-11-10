@@ -36,6 +36,10 @@ class FieldWorkHandoff(Base):
         ),
         CheckConstraint("length(btrim(reason)) > 0", name="ck_field_handoffs_reason"),
         CheckConstraint(
+            "direction IS NULL OR direction IN ('SUKHUM', 'OCHAMCHIRA')",
+            name="ck_field_handoffs_direction",
+        ),
+        CheckConstraint(
             "(delivery_status = 'SENT' AND telegram_message_id IS NOT NULL "
             "AND sent_at IS NOT NULL AND sent_by IS NOT NULL) OR "
             "(delivery_status <> 'SENT' AND telegram_message_id IS NULL "
@@ -77,6 +81,7 @@ class FieldWorkHandoff(Base):
         String(24), nullable=False, server_default="AWAITING_REPORT"
     )
     chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    direction: Mapped[str | None] = mapped_column(String(16))
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     message_text: Mapped[str | None] = mapped_column(Text)
     visit_address: Mapped[str | None] = mapped_column(String(500))

@@ -277,6 +277,9 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
   ))
   expect(ticketApi.sendFieldWork).not.toHaveBeenCalled()
   const send = await screen.findByRole('button', { name: 'Отправить боту' })
+  expect(send).toBeDisabled()
+  fireEvent.change(screen.getByRole('combobox', { name: 'Монтажное направление' }), { target: { value: 'SUKHUM' } })
+  expect(send).toBeEnabled()
   const message = screen.getByRole('textbox', { name: 'Текст сообщения для Telegram' })
   expect(message).toHaveValue(handoff.message_preview)
   expect(screen.queryByRole('textbox', { name: 'Адрес для выезда' })).not.toBeInTheDocument()
@@ -286,7 +289,7 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
   fireEvent.change(message, { target: { value: 'Исправленный текст для монтажников' } })
   fireEvent.click(send)
   await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
-    ticketId, handoff.id, expect.any(String), undefined, 'Исправленный текст для монтажников',
+    ticketId, handoff.id, expect.any(String), undefined, 'Исправленный текст для монтажников', 'SUKHUM',
   ))
 })
 
@@ -319,10 +322,11 @@ it.each([
   renderDetail('engineer', privileged)
   const field = await screen.findByRole('textbox', { name: 'Адрес для выезда' })
   fireEvent.change(field, { target: { value: input } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Монтажное направление' }), { target: { value: 'OCHAMCHIRA' } })
   expect((screen.getByRole('textbox', { name: 'Текст сообщения для Telegram' }) as HTMLTextAreaElement).value).toContain(`Адрес: ${address}`)
   fireEvent.click(screen.getByRole('button', { name: 'Отправить боту' }))
   await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
-    ticketId, handoff.id, expect.any(String), input || null, expect.stringContaining(`Адрес: ${address}`),
+    ticketId, handoff.id, expect.any(String), input || null, expect.stringContaining(`Адрес: ${address}`), 'OCHAMCHIRA',
   ))
 })
 

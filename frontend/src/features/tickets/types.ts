@@ -260,6 +260,8 @@ export interface FieldWorkHandoff {
   delivery_status: 'DRAFT' | 'SENDING' | 'SENT' | 'FAILED' | 'UNCERTAIN'
   work_status: 'AWAITING_REPORT' | 'REPORTED' | 'VERIFIED'
   chat_id: string
+  direction?: 'SUKHUM' | 'OCHAMCHIRA' | null
+  group_name?: string | null
   telegram_message_id: number | null
   message_preview: string | null
   generated_preview?: string | null

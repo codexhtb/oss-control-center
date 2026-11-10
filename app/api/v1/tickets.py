@@ -825,6 +825,7 @@ def send_field_work(
         payload.visit_address,
         "visit_address" in payload.model_fields_set,
         payload.message_text,
+        payload.direction,
     )
     return handoff_view(db, item, identity.user)
 

@@ -11,6 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
 from app.modules.field_dispatch.binding import destination_chat_id, mark_bot_unavailable
+from app.modules.field_dispatch.directions import (
+    Direction,
+    destination_for_direction,
+    direction_title,
+)
 from app.modules.field_dispatch.gateway import (
     DispatchReceipt,
     DispatchRejected,
@@ -109,11 +114,17 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
 
 
 def create_handoff(db: Session, ticket: Ticket, actor_id: UUID, reason: str) -> FieldWorkHandoff:
+    try:
+        initial_chat_id = destination_chat_id(db)
+    except ApiError as exc:
+        if exc.code not in {"telegram_group_not_bound", "telegram_bot_not_in_bound_group"}:
+            raise
+        initial_chat_id = destination_for_direction(db, "OCHAMCHIRA")
     handoff = FieldWorkHandoff(
         ticket_id=ticket.id,
         ticket_version=ticket.version,
         reason=reason,
-        chat_id=destination_chat_id(db),
+        chat_id=initial_chat_id,
         created_by=actor_id,
     )
     db.add(handoff)
@@ -151,6 +162,7 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
     return FieldWorkHandoffView.model_validate(handoff).model_copy(
         update={
             "message_preview": handoff.message_text or data.text,
+            "group_name": direction_title(handoff.direction),
             "generated_preview": data.text,
             "ready_to_send": not data.missing and handoff.delivery_status in {"DRAFT", "FAILED"},
             "missing_fields": list(data.missing),
@@ -180,6 +192,7 @@ def prepare_send(
     visit_address: str | None = None,
     update_visit_address: bool = False,
     message_text: str | None = None,
+    direction: Direction | None = None,
 ) -> PreparedSend | FieldWorkHandoff:
     actor = _actor(db, actor_id)
     handoff = db.execute(
@@ -204,6 +217,10 @@ def prepare_send(
         )
     )
     if prior is not None:
+        if direction is not None and direction != handoff.direction:
+            raise ApiError(
+                409, "field_send_request_conflict", "Request destination differs from prior send"
+            )
         if message_text is not None and message_text != handoff.message_text:
             raise ApiError(
                 409, "field_send_request_conflict", "Request text differs from prior send"
@@ -212,6 +229,8 @@ def prepare_send(
             raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
         return handoff
     if handoff.delivery_status == "SENT":
+        if direction is not None and direction != handoff.direction:
+            raise ApiError(409, "field_send_locked", "Sent destination cannot be changed")
         if message_text is not None and message_text != handoff.message_text:
             raise ApiError(409, "field_send_locked", "Sent text cannot be changed")
         return handoff
@@ -219,6 +238,10 @@ def prepare_send(
         raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
     if handoff.delivery_status == "UNCERTAIN":
         raise ApiError(409, "field_send_uncertain", "Telegram delivery outcome is uncertain")
+    if direction is None:
+        raise ApiError(422, "field_direction_required", "Select a field work destination")
+    if handoff.direction is not None and handoff.direction != direction:
+        raise ApiError(409, "field_direction_locked", "Field work destination cannot be changed")
     snapshot = (
         db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
         if ticket.subscriber_snapshot_id is not None
@@ -231,7 +254,8 @@ def prepare_send(
         ):
             raise ApiError(422, "field_address_from_snapshot", "Address is already in snapshot")
         handoff.visit_address = visit_address
-    handoff.chat_id = destination_chat_id(db)
+    handoff.chat_id = destination_for_direction(db, direction)
+    handoff.direction = direction
     message = _message(db, handoff, actor)
     if message.missing:
         raise ApiError(409, "field_dispatch_incomplete", "Required dispatch data is missing")
@@ -339,10 +363,11 @@ def send_handoff(
     visit_address: str | None = None,
     update_visit_address: bool = False,
     message_text: str | None = None,
+    direction: Direction | None = None,
 ) -> FieldWorkHandoff:
     prepared = prepare_send(
         db, actor_id, ticket_id, handoff_id, request_id, visit_address,
-        update_visit_address, message_text,
+        update_visit_address, message_text, direction,
     )
     if isinstance(prepared, FieldWorkHandoff):
         return prepared

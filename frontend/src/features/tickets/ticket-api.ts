@@ -111,9 +111,9 @@ export const ticketApi = {
     }),
   latestFieldWork: (id: string, signal?: AbortSignal) =>
     apiRequest<{ handoff: FieldWorkHandoff | null }>(`${ticketPath(id)}/field-work-handoffs/latest`, { signal }),
-  sendFieldWork: (id: string, handoffId: string, requestId: string, visitAddress?: string | null, messageText?: string) =>
+  sendFieldWork: (id: string, handoffId: string, requestId: string, visitAddress: string | null | undefined, messageText: string, direction: 'SUKHUM' | 'OCHAMCHIRA') =>
     apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/send`, {
-      method: 'POST', json: { client_request_id: requestId, visit_address: visitAddress, message_text: messageText },
+      method: 'POST', json: { client_request_id: requestId, visit_address: visitAddress, message_text: messageText, direction },
     }),
   fieldWorkMessages: (id: string, handoffId: string, signal?: AbortSignal) =>
     apiRequest<Page<FieldExternalMessage>>(
