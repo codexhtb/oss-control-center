@@ -264,7 +264,9 @@ export interface FieldWorkHandoff {
   group_name?: string | null
   schedule_status?: 'ORIGINAL' | 'DATE_PENDING' | 'SCHEDULED'
   scheduled_for?: string | null
+  scheduled_date?: string | null
   schedule_version?: number
+  schedule_card_status?: 'NOT_REQUIRED' | 'PENDING' | 'SENDING' | 'DONE' | 'FAILED'
   schedule_reason?: string | null
   scheduled_by_name?: string | null
   schedule_changed_at?: string | null
@@ -306,6 +308,7 @@ export interface FieldWorkReschedule {
   schedule_version: number
   reason: string
   scheduled_for: string | null
+  scheduled_date?: string | null
   source: 'TELEGRAM' | 'OSS'
   author_name: string
   created_at: string

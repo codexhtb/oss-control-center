@@ -17,8 +17,17 @@ from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
     FieldReportNotification,
+    FieldRescheduleDialog,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
+)
+from app.modules.field_dispatch.reschedule_dialog import (
+    TEXT_STAGES,
+    accept_text,
+    active_dialog,
+    advance,
+    scheduled_instant,
+    touch,
 )
 from app.modules.field_dispatch.rescheduling import parse_telegram_reschedule, record_reschedule
 from app.modules.identity import models as identity_models  # noqa: F401 - register audit FK metadata
@@ -28,6 +37,7 @@ from app.modules.tickets.status import TicketStatus
 BOT_IDENTITY = "oss_field_service_bot"
 COMPLETION_PREFIX = "field_done:"
 RESCHEDULE_PREFIX = "field_reschedule:"
+RESCHEDULE_STEP_PREFIX = "rs:"
 ACTIVE_PROMPT_STATUSES = ("REQUESTING", "WAITING", "UNCERTAIN")
 
 
@@ -41,6 +51,7 @@ class InboundResult:
     sender_name: str | None = None
     duplicate: bool = False
     prompt_id: UUID | None = None
+    dialog_id: UUID | None = None
 
 
 def _integer(value: object) -> int | None:
@@ -125,6 +136,176 @@ def _ignored(db: Session, update_id: int, kind: str, outcome: str, code: str) ->
     )
 
 
+def _inline_reschedule(
+    db: Session,
+    update_id: int,
+    callback: dict[str, Any],
+    source_message_id: int,
+    sender_id: int,
+    sender_name: str,
+    accepted_chat_ids: set[str],
+) -> InboundResult:
+    callback_id = callback["id"]
+    data = callback.get("data")
+    if not isinstance(data, str):
+        return _ignored(
+            db, update_id, "RESCHEDULE_CALLBACK", "IGNORED", "telegram_callback_invalid"
+        )
+    starting = data.startswith(RESCHEDULE_PREFIX)
+    if starting:
+        try:
+            handoff_id = UUID(data[len(RESCHEDULE_PREFIX) :])
+        except ValueError:
+            return _ignored(
+                db, update_id, "RESCHEDULE_CALLBACK", "IGNORED", "telegram_callback_invalid"
+            )
+        dialog_id = None
+    else:
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return _ignored(
+                db, update_id, "RESCHEDULE_CALLBACK", "IGNORED", "telegram_callback_invalid"
+            )
+        try:
+            dialog_id = UUID(parts[1])
+        except ValueError:
+            return _ignored(
+                db, update_id, "RESCHEDULE_CALLBACK", "IGNORED", "telegram_callback_invalid"
+            )
+        handoff_id = db.scalar(
+            select(FieldRescheduleDialog.handoff_id).where(FieldRescheduleDialog.id == dialog_id)
+        )
+        if handoff_id is None:
+            return _ignored(
+                db, update_id, "RESCHEDULE_CALLBACK", "DENIED", "field_reschedule_dialog_missing"
+            )
+    handoff = db.scalar(
+        select(FieldWorkHandoff).where(FieldWorkHandoff.id == handoff_id).with_for_update()
+    )
+    source_chat = callback.get("message", {}).get("chat", {})
+    if (
+        handoff is None
+        or handoff.delivery_status != "SENT"
+        or handoff.work_status != "AWAITING_REPORT"
+        or handoff.chat_id not in accepted_chat_ids
+        or handoff.telegram_message_id != source_message_id
+        or str(source_chat.get("id")) not in accepted_chat_ids
+    ):
+        return _ignored(db, update_id, "RESCHEDULE_CALLBACK", "DENIED", "telegram_handoff_mismatch")
+    ticket = db.get(Ticket, handoff.ticket_id)
+    if ticket is None or ticket.deleted_at is not None or ticket.status != TicketStatus.IN_PROGRESS:
+        return _ignored(
+            db, update_id, "RESCHEDULE_CALLBACK", "DENIED", "field_reschedule_not_permitted"
+        )
+    if starting:
+        completion = db.scalar(
+            select(FieldWorkCompletionPrompt.id).where(
+                FieldWorkCompletionPrompt.handoff_id == handoff.id,
+                FieldWorkCompletionPrompt.status.in_(ACTIVE_PROMPT_STATUSES),
+            )
+        )
+        if completion is not None:
+            return _ignored(
+                db, update_id, "RESCHEDULE_CALLBACK", "DENIED", "field_reschedule_dialog_busy"
+            )
+        dialog = active_dialog(db, handoff.id, lock=True)
+        if dialog is not None and dialog.sender_telegram_id != sender_id:
+            return _ignored(
+                db, update_id, "RESCHEDULE_CALLBACK", "DENIED", "field_reschedule_dialog_busy"
+            )
+        receipt, created = _receipt(
+            db,
+            update_id,
+            "RESCHEDULE_CALLBACK",
+            "PROCESSED",
+            handoff_id=handoff.id,
+        )
+        if not created:
+            db.rollback()
+            return InboundResult(
+                update_id, "DUPLICATE", "RESCHEDULE_CALLBACK", handoff.id, duplicate=True
+            )
+        if dialog is None:
+            dialog = FieldRescheduleDialog(
+                handoff_id=handoff.id,
+                chat_id=handoff.chat_id,
+                sender_telegram_id=sender_id,
+                sender_name=sender_name,
+                stage="REASON",
+            )
+            db.add(dialog)
+        else:
+            touch(dialog)
+        db.commit()
+        return InboundResult(
+            update_id,
+            "PROCESSED",
+            "RESCHEDULE_CALLBACK",
+            handoff.id,
+            callback_id,
+            sender_name,
+            prompt_id=None,
+            dialog_id=dialog.id,
+        )
+    dialog = db.scalar(
+        select(FieldRescheduleDialog).where(FieldRescheduleDialog.id == dialog_id).with_for_update()
+    )
+    if (
+        dialog is None
+        or dialog.handoff_id != handoff.id
+        or dialog.chat_id not in accepted_chat_ids
+        or dialog.sender_telegram_id != sender_id
+        or dialog.stage in {"FINISHED", "CANCELED"}
+    ):
+        return _ignored(
+            db, update_id, "RESCHEDULE_CALLBACK", "DENIED", "field_reschedule_dialog_mismatch"
+        )
+    try:
+        outcome = advance(dialog, parts[2])
+    except ValueError as exc:
+        db.rollback()
+        return _ignored(db, update_id, "RESCHEDULE_CALLBACK", "DENIED", str(exc))
+    kind = (
+        "RESCHEDULE_REPORT"
+        if outcome == "CONFIRM"
+        else ("RESCHEDULE_CANCEL" if outcome == "CANCEL" else "RESCHEDULE_CALLBACK")
+    )
+    receipt, created = _receipt(
+        db,
+        update_id,
+        kind,
+        "PROCESSED",
+        handoff_id=handoff.id,
+    )
+    if not created:
+        db.rollback()
+        return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+    if outcome == "CONFIRM":
+        try:
+            instant = scheduled_instant(dialog)
+            record_reschedule(
+                db,
+                handoff,
+                reason=dialog.reason or "",
+                scheduled_for=instant,
+                scheduled_date=dialog.local_date,
+                source="TELEGRAM",
+                author_name=dialog.sender_name,
+                telegram_user_id=sender_id,
+                telegram_chat_id=handoff.chat_id,
+                update_record_id=receipt.id,
+            )
+        except (ApiError, ValueError):
+            db.rollback()
+            return _ignored(db, update_id, kind, "DENIED", "field_reschedule_not_permitted")
+        dialog.stage = "FINISHED"
+        dialog.updated_at = datetime.now(UTC)
+    db.commit()
+    return InboundResult(
+        update_id, "PROCESSED", kind, handoff.id, callback_id, sender_name, dialog_id=dialog.id
+    )
+
+
 def _callback(
     db: Session,
     update_id: int,
@@ -172,6 +353,8 @@ def _callback(
         return InboundResult(
             update_id, "DUPLICATE", kind, handoff.id, callback_id, sender_name, True
         )
+    if prompt_type == "COMPLETION" and active_dialog(db, handoff.id) is not None:
+        return _ignored(db, update_id, kind, "DENIED", "field_reschedule_dialog_busy")
     if prompt_type == "RESCHEDULE":
         ticket = db.get(Ticket, handoff.ticket_id)
         if (
@@ -268,6 +451,31 @@ def _text_reply(
     body = text.strip()
     if len(body) > 4000 or any(char == "\x00" for char in body):
         return _ignored(db, update_id, "TEXT_REPLY", "IGNORED", "telegram_reply_invalid")
+
+    card = db.scalar(select(FieldWorkHandoff).where(
+        FieldWorkHandoff.chat_id.in_(accepted_chat_ids),
+        FieldWorkHandoff.telegram_message_id == reply_message_id,
+    ).with_for_update())
+    dialog = active_dialog(db, card.id, lock=True) if card is not None else None
+    if dialog is not None and dialog.stage in TEXT_STAGES:
+        if dialog.sender_telegram_id != sender_id:
+            return _ignored(
+                db, update_id, "TEXT_REPLY", "DENIED", "field_reschedule_sender_mismatch"
+            )
+        if card.work_status != "AWAITING_REPORT" or card.delivery_status != "SENT":
+            return _ignored(db, update_id, "TEXT_REPLY", "DENIED", "field_reschedule_not_active")
+        accept_text(dialog, body)
+        kind = "RESCHEDULE_INVALID" if dialog.input_error else "TEXT_REPLY"
+        receipt, created = _receipt(
+            db, update_id, kind, "DENIED" if dialog.input_error else "PROCESSED",
+            handoff_id=card.id, error_code=dialog.input_error,
+        )
+        if not created:
+            db.rollback()
+            return InboundResult(update_id, "DUPLICATE", kind, card.id, duplicate=True)
+        db.commit()
+        return InboundResult(update_id, receipt.outcome, kind, card.id,
+                             sender_name=sender_name, dialog_id=dialog.id)
 
     imported = db.scalar(
         select(FieldExternalMessage).where(
@@ -574,6 +782,14 @@ def process_update(
         return _ignored(db, update_id, kind, "IGNORED", "telegram_message_invalid")
 
     if isinstance(callback, dict):
+        data = callback.get("data")
+        if isinstance(data, str) and (
+            data.startswith(RESCHEDULE_PREFIX) or data.startswith(RESCHEDULE_STEP_PREFIX)
+        ):
+            return _inline_reschedule(
+                db, update_id, callback, source_message_id, sender_id, sender_name,
+                accepted_chat_ids,
+            )
         return _callback(
             db,
             update_id,

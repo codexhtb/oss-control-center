@@ -29,6 +29,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
     FieldWorkReschedule,
 )
+from app.modules.field_dispatch.reschedule_dialog import active_dialog
 from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
 from app.modules.field_dispatch.schemas import FieldWorkHandoffView
 from app.modules.identity.access import has_permission
@@ -473,7 +474,7 @@ def reschedule_handoff(
     ).with_for_update())
     if handoff is None:
         raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
-    if active_prompt(db, handoff.id) is not None:
+    if active_prompt(db, handoff.id) is not None or active_dialog(db, handoff.id) is not None:
         raise ApiError(409, "field_dialog_active", "A Telegram dialog is still active")
     record_reschedule(
         db, handoff, reason=reason, scheduled_for=scheduled_for,

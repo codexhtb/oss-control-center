@@ -387,7 +387,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-label="Планирование выезда">
                     <strong>{fieldHandoff.data.handoff.work_status !== 'AWAITING_REPORT' ? 'Выезд выполнен' : fieldHandoff.data.handoff.schedule_status === 'DATE_PENDING' ? 'Выезд перенесён — дата не согласована' : fieldHandoff.data.handoff.schedule_status === 'SCHEDULED' ? 'Выезд перенесён' : 'Выезд ожидает выполнения'}</strong>
                     {fieldHandoff.data.handoff.scheduled_for && <span>Согласованное время: {formatAbkhazia(fieldHandoff.data.handoff.scheduled_for)} (Абхазия, UTC+3)</span>}
+                    {!fieldHandoff.data.handoff.scheduled_for && fieldHandoff.data.handoff.scheduled_date && <span>Согласованная дата: {fieldHandoff.data.handoff.scheduled_date.split('-').reverse().join('.')} · время не согласовано</span>}
                     {fieldHandoff.data.handoff.schedule_reason && <span>Причина: {fieldHandoff.data.handoff.schedule_reason}</span>}
+                    {fieldHandoff.data.handoff.schedule_card_status === 'FAILED' && <span>Не удалось обновить карточку в Telegram. Бот повторит попытку.</span>}
                     {fieldHandoff.data.handoff.scheduled_by_name && fieldHandoff.data.handoff.schedule_changed_at && <span>Перенёс: {fieldHandoff.data.handoff.scheduled_by_name}, {formatAbkhazia(fieldHandoff.data.handoff.schedule_changed_at)} (UTC+3)</span>}
                   </div>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && <div className="ticket-action-form">
@@ -401,7 +403,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                     {fieldReschedules.isPending && <p className="rail-note">Загружаем историю переносов…</p>}
                     {fieldReschedules.isError && <Notice tone="error">Не удалось загрузить историю переносов.</Notice>}
                     {fieldReschedules.data?.items.length === 0 && <p className="rail-note">Переносов пока нет.</p>}
-                    {fieldReschedules.data?.items.map((entry) => <article key={entry.id}><div><strong>{entry.scheduled_for ? formatAbkhazia(entry.scheduled_for) : 'Дата не согласована'}</strong><time dateTime={entry.created_at}>{formatAbkhazia(entry.created_at)} (UTC+3)</time></div><p>{entry.reason} · {entry.author_name}</p></article>)}
+                    {fieldReschedules.data?.items.map((entry) => <article key={entry.id}><div><strong>{entry.scheduled_for ? formatAbkhazia(entry.scheduled_for) : entry.scheduled_date ? `${entry.scheduled_date.split('-').reverse().join('.')} · время не согласовано` : 'Дата не согласована'}</strong><time dateTime={entry.created_at}>{formatAbkhazia(entry.created_at)} (UTC+3)</time></div><p>{entry.reason} · {entry.author_name}</p></article>)}
                     <Pager page={schedulePage} total={fieldReschedules.data?.total ?? 0} change={setSchedulePage} />
                   </div>}
                   {fieldMessages.isPending && fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Загружаем ответы монтажников…</p>}

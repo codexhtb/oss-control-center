@@ -24,9 +24,16 @@ from app.modules.field_dispatch.inbound import process_update
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldRescheduleDialog,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
     FieldWorkReschedule,
+)
+from app.modules.field_dispatch.reschedule_dialog import (
+    active_dialog,
+    card_text,
+    normal_keyboard,
+    render,
 )
 from app.modules.field_dispatch.rescheduling import ABKHAZIA
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
@@ -404,7 +411,174 @@ def _sync_invalid_reschedule(db: Session, gateway: TelegramBotGateway, update_id
         pass
 
 
+def _sync_dialog(db: Session, gateway: TelegramBotGateway, dialog_id: UUID) -> None:
+    dialog = db.scalar(
+        select(FieldRescheduleDialog).where(FieldRescheduleDialog.id == dialog_id).with_for_update()
+    )
+    if dialog is None or dialog.stage == "FINISHED" or dialog.sync_status == "SYNCED":
+        db.rollback()
+        return
+    if dialog.sync_attempts >= 5:
+        db.rollback()
+        return
+    now = datetime.now(UTC)
+    if dialog.sync_attempted_at and dialog.sync_status != "PENDING":
+        delay = timedelta(seconds=30 * 2 ** min(dialog.sync_attempts, 5))
+        if now - dialog.sync_attempted_at < delay:
+            db.rollback()
+            return
+    handoff = db.get(FieldWorkHandoff, dialog.handoff_id)
+    if handoff is None or handoff.telegram_message_id is None:
+        db.rollback()
+        return
+    if handoff.work_status != "AWAITING_REPORT" or (
+        dialog.stage == "CANCELED"
+        and (current := active_dialog(db, handoff.id)) is not None
+        and current.id != dialog.id
+    ):
+        dialog.sync_status = "SYNCED"
+        dialog.synced_revision = dialog.render_revision
+        db.commit()
+        return
+    latest = db.scalar(
+        select(FieldWorkReschedule)
+        .where(FieldWorkReschedule.handoff_id == handoff.id)
+        .order_by(FieldWorkReschedule.schedule_version.desc())
+        .limit(1)
+    )
+    text, markup = render(dialog, handoff, latest)
+    revision = dialog.render_revision
+    dialog.sync_status = "SENDING"
+    dialog.sync_attempts += 1
+    dialog.sync_attempted_at = now
+    db.commit()
+    try:
+        gateway.edit_reschedule_card(
+            current_chat_id(db, handoff.chat_id), handoff.telegram_message_id, text, markup
+        )
+    except DispatchRejected as exc:
+        success = exc.code == "telegram_message_not_modified"
+        error = None if success else exc.code
+    except DispatchUncertain:
+        success, error = False, "telegram_transport_uncertain"
+    else:
+        success, error = True, None
+    dialog = db.scalar(
+        select(FieldRescheduleDialog).where(FieldRescheduleDialog.id == dialog_id).with_for_update()
+    )
+    if dialog is None:
+        db.rollback()
+        return
+    if dialog.render_revision == revision:
+        dialog.sync_status = "SYNCED" if success else "FAILED"
+        dialog.sync_error_code = error
+        if success:
+            dialog.synced_revision = revision
+    db.commit()
+
+
+def _sync_schedule_card(db: Session, gateway: TelegramBotGateway, handoff_id: UUID) -> None:
+    handoff = db.scalar(
+        select(FieldWorkHandoff).where(FieldWorkHandoff.id == handoff_id).with_for_update()
+    )
+    if handoff is None or handoff.schedule_card_version >= handoff.schedule_version:
+        db.rollback()
+        return
+    if active_dialog(db, handoff.id) is not None:
+        db.rollback()
+        return
+    if handoff.work_status != "AWAITING_REPORT":
+        handoff.schedule_card_version = handoff.schedule_version
+        handoff.schedule_card_status = "DONE"
+        db.commit()
+        return
+    if handoff.telegram_message_id is None or handoff.schedule_card_attempts >= 5:
+        db.rollback()
+        return
+    now = datetime.now(UTC)
+    if handoff.schedule_card_attempted_at and handoff.schedule_card_status != "PENDING":
+        delay = timedelta(seconds=30 * 2 ** min(handoff.schedule_card_attempts, 5))
+        if now - handoff.schedule_card_attempted_at < delay:
+            db.rollback()
+            return
+    latest = db.scalar(
+        select(FieldWorkReschedule)
+        .where(FieldWorkReschedule.handoff_id == handoff.id)
+        .order_by(FieldWorkReschedule.schedule_version.desc())
+        .limit(1)
+    )
+    if latest is None:
+        db.rollback()
+        return
+    target = handoff.schedule_version
+    text = card_text(handoff, latest)
+    handoff.schedule_card_status = "SENDING"
+    handoff.schedule_card_attempts += 1
+    handoff.schedule_card_attempted_at = now
+    db.commit()
+    try:
+        gateway.edit_reschedule_card(
+            current_chat_id(db, handoff.chat_id),
+            handoff.telegram_message_id,
+            text,
+            normal_keyboard(handoff.id),
+        )
+    except DispatchRejected as exc:
+        success = exc.code == "telegram_message_not_modified"
+        error = None if success else exc.code
+    except DispatchUncertain:
+        success, error = False, "telegram_transport_uncertain"
+    else:
+        success, error = True, None
+    handoff = db.scalar(
+        select(FieldWorkHandoff).where(FieldWorkHandoff.id == handoff_id).with_for_update()
+    )
+    if handoff is None:
+        db.rollback()
+        return
+    if handoff.schedule_version == target:
+        handoff.schedule_card_status = "DONE" if success else "FAILED"
+        handoff.schedule_card_error_code = error
+        if success:
+            handoff.schedule_card_version = target
+    db.commit()
+
+
 def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
+    dialog_ids = db.scalars(
+        select(FieldRescheduleDialog.id)
+        .where(
+            FieldRescheduleDialog.stage != "FINISHED",
+            FieldRescheduleDialog.sync_status.in_(("PENDING", "SENDING", "FAILED")),
+            FieldRescheduleDialog.sync_attempts < 5,
+        )
+        .order_by(FieldRescheduleDialog.updated_at.asc())
+        .limit(50)
+    ).all()
+    for dialog_id in dialog_ids:
+        try:
+            _sync_dialog(db, gateway, dialog_id)
+        except Exception as exc:
+            db.rollback()
+            logger.error("telegram_reschedule_dialog_sync_failed error_type=%s", type(exc).__name__)
+
+    card_ids = db.scalars(
+        select(FieldWorkHandoff.id)
+        .where(
+            FieldWorkHandoff.schedule_version > FieldWorkHandoff.schedule_card_version,
+            FieldWorkHandoff.schedule_card_status.in_(("PENDING", "SENDING", "FAILED")),
+            FieldWorkHandoff.schedule_card_attempts < 5,
+        )
+        .order_by(FieldWorkHandoff.updated_at.asc())
+        .limit(50)
+    ).all()
+    for handoff_id in card_ids:
+        try:
+            _sync_schedule_card(db, gateway, handoff_id)
+        except Exception as exc:
+            db.rollback()
+            logger.error("telegram_schedule_card_sync_failed error_type=%s", type(exc).__name__)
+
     cleanup_ids = db.scalars(
         select(FieldWorkCompletionPrompt.id)
         .where(
@@ -464,11 +638,16 @@ def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
     for record in records:
         _sync_completion(db, gateway, record.update_id)
 
-    confirmations = db.scalars(select(FieldDispatchUpdate).where(
-        FieldDispatchUpdate.kind.in_(("RESCHEDULE_REPORT", "RESCHEDULE_CANCEL")),
-        FieldDispatchUpdate.outcome == "PROCESSED",
-        FieldDispatchUpdate.confirmation_status == "PENDING",
-    ).order_by(FieldDispatchUpdate.received_at.asc()).limit(50)).all()
+    confirmations = db.scalars(
+        select(FieldDispatchUpdate)
+        .where(
+            FieldDispatchUpdate.kind.in_(("RESCHEDULE_REPORT", "RESCHEDULE_CANCEL")),
+            FieldDispatchUpdate.outcome == "PROCESSED",
+            FieldDispatchUpdate.confirmation_status == "PENDING",
+        )
+        .order_by(FieldDispatchUpdate.received_at.asc())
+        .limit(50)
+    ).all()
     for record in confirmations:
         _sync_reschedule(db, gateway, record.update_id)
 
@@ -486,6 +665,23 @@ def poll_once() -> int:
             result = process_group_control(db, gateway, update)
             if result is None:
                 result = process_update(db, update)
+            if result.dialog_id is not None:
+                if result.callback_query_id:
+                    try:
+                        gateway.acknowledge_callback(result.callback_query_id, "Выбор принят")
+                    except (DispatchRejected, DispatchUncertain):
+                        pass
+                try:
+                    if result.kind == "RESCHEDULE_REPORT" and result.outcome == "PROCESSED":
+                        _sync_schedule_card(db, gateway, result.handoff_id)
+                    else:
+                        _sync_dialog(db, gateway, result.dialog_id)
+                except Exception as exc:
+                    db.rollback()
+                    logger.error(
+                        "telegram_reschedule_sync_failed error_type=%s", type(exc).__name__
+                    )
+                continue
             if (
                 result.kind in {"COMPLETION_CALLBACK", "RESCHEDULE_CALLBACK"}
                 and result.outcome == "PROCESSED"

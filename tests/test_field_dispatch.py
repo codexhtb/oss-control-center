@@ -167,6 +167,30 @@ def test_gateway_acknowledges_callback_and_edits_card_without_button(
         gateway.edit_handoff_card("-5319791765", 71, completed_text)
 
 
+def test_gateway_edits_only_original_reschedule_card_with_inline_buttons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = token_file(tmp_path)
+    monkeypatch.setattr("http.client.HTTPSConnection", FakeConnection)
+    gateway = TelegramBotGateway(TelegramGatewayConfig(path))
+    text = "Заявка #1\n\n📅 ПЕРЕНЕСЕНА\nНовая дата: 12.11.2026"
+    markup = {"inline_keyboard": [[{"text": "📅 Перенести", "callback_data": "test"}]]}
+    FakeConnection.response = FakeResponse(200, {"ok": True, "result": {
+        "message_id": 71, "chat": {"id": -5319791765}, "text": text,
+    }})
+    gateway.edit_reschedule_card("-5319791765", 71, text, markup)
+    args, kwargs = FakeConnection.request_args or ((), {})
+    assert args[1].endswith("/editMessageText")
+    body = json.loads(kwargs["body"])
+    assert body["chat_id"] == "-5319791765" and body["message_id"] == 71
+    assert body["reply_markup"] == markup and body["text"] == text
+    FakeConnection.response = FakeResponse(200, {"ok": True, "result": {
+        "message_id": 72, "chat": {"id": -5319791765}, "text": text,
+    }})
+    with pytest.raises(DispatchUncertain):
+        gateway.edit_reschedule_card("-5319791765", 71, text, markup)
+
+
 def test_gateway_asks_for_completion_description_with_force_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

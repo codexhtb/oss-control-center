@@ -1,6 +1,6 @@
 """Public outbound field dispatch contracts."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 from unicodedata import category
 from uuid import UUID
@@ -39,7 +39,11 @@ class FieldWorkHandoffView(BaseModel):
     group_name: str | None = None
     schedule_status: Literal["ORIGINAL", "DATE_PENDING", "SCHEDULED"]
     scheduled_for: datetime | None
+    scheduled_date: date | None = None
     schedule_version: int
+    schedule_card_status: Literal[
+        "NOT_REQUIRED", "PENDING", "SENDING", "DONE", "FAILED"
+    ] = "NOT_REQUIRED"
     schedule_reason: str | None = None
     scheduled_by_name: str | None = None
     schedule_changed_at: datetime | None = None
@@ -97,6 +101,7 @@ class FieldWorkRescheduleView(BaseModel):
     schedule_version: int
     reason: str
     scheduled_for: datetime | None
+    scheduled_date: date | None = None
     source: Literal["TELEGRAM", "OSS"]
     author_name: str
     created_at: datetime

@@ -1,17 +1,19 @@
 """Persistent Telegram field work delivery, replies and completion state."""
 
-from datetime import datetime
+from datetime import date, datetime, time
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
     text,
@@ -44,11 +46,16 @@ class FieldWorkHandoff(Base):
             name="ck_field_handoffs_schedule_status",
         ),
         CheckConstraint(
-            "(schedule_status = 'SCHEDULED' AND scheduled_for IS NOT NULL) OR "
-            "(schedule_status <> 'SCHEDULED' AND scheduled_for IS NULL)",
+            "(schedule_status = 'SCHEDULED' AND "
+            "(scheduled_for IS NOT NULL OR scheduled_date IS NOT NULL)) OR "
+            "(schedule_status <> 'SCHEDULED' AND scheduled_for IS NULL AND scheduled_date IS NULL)",
             name="ck_field_handoffs_schedule_date",
         ),
         CheckConstraint("schedule_version >= 0", name="ck_field_handoffs_schedule_version"),
+        CheckConstraint(
+            "schedule_card_status IN ('NOT_REQUIRED','PENDING','SENDING','DONE','FAILED')",
+            name="ck_field_handoffs_schedule_card_status",
+        ),
         CheckConstraint(
             "(delivery_status = 'SENT' AND telegram_message_id IS NOT NULL "
             "AND sent_at IS NOT NULL AND sent_by IS NOT NULL) OR "
@@ -96,7 +103,15 @@ class FieldWorkHandoff(Base):
         String(16), nullable=False, server_default="ORIGINAL"
     )
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
     schedule_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    schedule_card_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    schedule_card_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="NOT_REQUIRED"
+    )
+    schedule_card_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    schedule_card_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    schedule_card_error_code: Mapped[str | None] = mapped_column(String(80))
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     message_text: Mapped[str | None] = mapped_column(Text)
     visit_address: Mapped[str | None] = mapped_column(String(500))
@@ -397,6 +412,7 @@ class FieldWorkReschedule(Base):
     schedule_version: Mapped[int] = mapped_column(Integer, nullable=False)
     reason: Mapped[str] = mapped_column(String(2000), nullable=False)
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     author_name: Mapped[str] = mapped_column(String(160), nullable=False)
     actor_id: Mapped[UUID | None] = mapped_column(
@@ -409,6 +425,57 @@ class FieldWorkReschedule(Base):
         PGUUID(as_uuid=True), ForeignKey("field_dispatch_updates.id", ondelete="RESTRICT")
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldRescheduleDialog(Base):
+    """One sender-bound flow, retaining finished rows to reject stale callbacks."""
+
+    __tablename__ = "field_reschedule_dialogs"
+    __table_args__ = (
+        CheckConstraint(
+            "stage IN ('REASON','REASON_TEXT','DATE','CALENDAR','DATE_TEXT',"
+            "'TIME','TIME_TEXT','CONFIRM','FINISHED','CANCELED')",
+            name="ck_field_reschedule_dialog_stage",
+        ),
+        CheckConstraint(
+            "sync_status IN ('PENDING','SENDING','SYNCED','FAILED')",
+            name="ck_field_reschedule_dialog_sync",
+        ),
+        Index(
+            "uq_field_reschedule_dialog_active",
+            "handoff_id",
+            unique=True,
+            postgresql_where=text("stage NOT IN ('FINISHED','CANCELED')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    handoff_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    sender_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sender_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(2000))
+    local_date: Mapped[date | None] = mapped_column(Date)
+    local_time: Mapped[time | None] = mapped_column(Time)
+    calendar_month: Mapped[date | None] = mapped_column(Date)
+    input_error: Mapped[str | None] = mapped_column(String(80))
+    render_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    synced_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    sync_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="PENDING")
+    sync_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    sync_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 

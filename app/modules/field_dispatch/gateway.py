@@ -274,6 +274,29 @@ class TelegramBotGateway:
         ):
             raise DispatchUncertain from None
 
+    def edit_reschedule_card(
+        self, chat_id: str, message_id: int, text: str, reply_markup: dict[str, Any]
+    ) -> None:
+        """Replace only the identified original card; safe to retry after an uncertain response."""
+        _validate_chat_id(chat_id)
+        if message_id <= 0 or not text or len(text) > 4096:
+            raise ValueError("telegram_card_invalid")
+        result = self._call("editMessageText", {
+            "chat_id": chat_id, "message_id": message_id, "text": text,
+            "reply_markup": reply_markup,
+            "link_preview_options": {"is_disabled": True},
+        })
+        if not isinstance(result, dict):
+            raise DispatchUncertain from None
+        response_chat = result.get("chat")
+        if (
+            not isinstance(response_chat, dict)
+            or str(response_chat.get("id")) != chat_id
+            or result.get("message_id") != message_id
+            or result.get("text") != text
+        ):
+            raise DispatchUncertain from None
+
 
 def _validate_chat_id(chat_id: str) -> None:
     if not isinstance(chat_id, str) or re.fullmatch(r"-?[1-9][0-9]{0,31}", chat_id) is None:

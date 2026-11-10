@@ -1,7 +1,7 @@
 """Visit schedule transitions, independent from Service Desk and work completion."""
 
 import re
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -47,6 +47,7 @@ def record_reschedule(
     *,
     reason: str,
     scheduled_for: datetime | None,
+    scheduled_date: date | None = None,
     source: str,
     author_name: str,
     actor_id: UUID | None = None,
@@ -70,16 +71,24 @@ def record_reschedule(
             raise ApiError(422, "field_schedule_date_invalid", "Date must include timezone")
         if scheduled_for.astimezone(UTC) <= datetime.now(UTC):
             raise ApiError(422, "field_schedule_date_past", "Date must be in the future")
+        scheduled_date = scheduled_for.astimezone(ABKHAZIA).date()
+    elif scheduled_date is not None and scheduled_date <= datetime.now(ABKHAZIA).date():
+        raise ApiError(422, "field_schedule_date_past", "Date must be in the future")
     now = datetime.now(UTC)
     handoff.schedule_version += 1
-    handoff.schedule_status = "SCHEDULED" if scheduled_for is not None else "DATE_PENDING"
+    handoff.schedule_status = "SCHEDULED" if scheduled_date is not None else "DATE_PENDING"
     handoff.scheduled_for = scheduled_for.astimezone(UTC) if scheduled_for else None
+    handoff.scheduled_date = scheduled_date
+    handoff.schedule_card_status = "PENDING"
+    handoff.schedule_card_attempts = 0
+    handoff.schedule_card_error_code = None
     handoff.updated_at = now
     item = FieldWorkReschedule(
         handoff_id=handoff.id,
         schedule_version=handoff.schedule_version,
         reason=reason.strip(),
         scheduled_for=handoff.scheduled_for,
+        scheduled_date=scheduled_date,
         source=source,
         author_name=author_name,
         actor_id=actor_id,

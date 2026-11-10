@@ -1,5 +1,7 @@
 # API contracts — Phase 1
 
+**Telegram UX переноса (`0041`):** latest handoff и история переносов дополнены `scheduled_date` (дата без точного времени); latest handoff сообщает `schedule_card_status`. Существующий OSS POST с обязательным точным `scheduled_for` не меняется. Кнопочный Telegram-диалог сохраняет перенос через тот же доменный сервис с проверкой chat/message ID и инициатора.
+
 **Доступ к внутренним заявкам:** профиль `operator` не может создать `INTERNAL` (`403`) даже с индивидуальным `tickets.create`. Для любого ID внутренней заявки чтение и изменение возвращают `404 ticket_not_found` до выдачи содержимого; это распространяется на историю, комментарии, решения, диагностику и выездные работы. Реестр, поиск, фильтры, лента событий и их `total` исключают `INTERNAL` для оператора. Инженер и администратор сохраняют доступ согласно своим персональным разрешениям. Исторические записи не меняются.
 
 **График выездных работ (`0040`):** `GET /api/v1/tickets/{ticket_id}/field-work-handoffs/latest` дополнен `schedule_status`, `scheduled_for`, `schedule_version`, причиной, автором и временем последней смены. `GET /api/v1/tickets/{ticket_id}/field-work-handoffs/{handoff_id}/reschedules?page=&size=` возвращает постраничную историю при доступе к заявке и `tickets.field_work`. `POST` на тот же путь принимает `{reason, scheduled_for, expected_version}` с явным UTC+03:00, требует `tickets.field_work` и CSRF, блокирует уже завершённую передачу, активный Telegram-диалог и устаревшую версию (`409`). Причина и время не меняют заявку или Telegram-карточку.

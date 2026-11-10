@@ -393,7 +393,7 @@ it('shows visit schedule history and lets a permitted engineer agree a new date'
     reason: 'Проверка', delivery_status: 'SENT' as const,
     work_status: 'AWAITING_REPORT' as const, chat_id: '-1004473201977',
     direction: 'OCHAMCHIRA' as const, group_name: 'OSS Ochamchira',
-    schedule_status: 'DATE_PENDING' as const, scheduled_for: null, schedule_version: 1,
+    schedule_status: 'DATE_PENDING' as const, scheduled_for: null, schedule_version: 2,
     schedule_reason: 'Абонент попросил перенести', scheduled_by_name: 'Монтажник',
     schedule_changed_at: base.created_at, telegram_message_id: 701,
     message_preview: 'Заявка #73', ready_to_send: false, missing_fields: [],
@@ -405,20 +405,25 @@ it('shows visit schedule history and lets a permitted engineer agree a new date'
   vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff })
   vi.mocked(ticketApi.fieldWorkReschedules).mockResolvedValue({
     items: [{ id: '00000000-0000-4000-8000-000000000041', handoff_id: handoff.id,
-      schedule_version: 1, reason: 'Абонент попросил перенести', scheduled_for: null,
+      schedule_version: 1, reason: 'Согласована дата', scheduled_for: null,
+      scheduled_date: '2030-06-15',
+      source: 'TELEGRAM', author_name: 'Монтажник', created_at: base.created_at },
+    { id: '00000000-0000-4000-8000-000000000042', handoff_id: handoff.id,
+      schedule_version: 2, reason: 'Абонент попросил перенести', scheduled_for: null,
       source: 'TELEGRAM', author_name: 'Монтажник', created_at: base.created_at }],
-    page: 1, size: 20, total: 1,
+    page: 1, size: 20, total: 2,
   })
-  vi.mocked(ticketApi.rescheduleFieldWork).mockResolvedValue({ ...handoff, schedule_version: 2, schedule_status: 'SCHEDULED' })
+  vi.mocked(ticketApi.rescheduleFieldWork).mockResolvedValue({ ...handoff, schedule_version: 3, schedule_status: 'SCHEDULED' })
   renderDetail('engineer', privileged)
   expect(await screen.findByText('Выезд перенесён — дата не согласована')).toBeInTheDocument()
   expect(screen.getByText('Группа: OSS Ochamchira')).toBeInTheDocument()
   expect(await screen.findByText(/Абонент попросил перенести · Монтажник/)).toBeInTheDocument()
+  expect(screen.getByText('15.06.2030 · время не согласовано')).toBeInTheDocument()
   fireEvent.change(screen.getByRole('textbox', { name: 'Причина изменения даты' }), { target: { value: 'Согласовано с абонентом' } })
   fireEvent.change(screen.getByLabelText('Новая дата и время выезда'), { target: { value: '2030-06-15T15:30' } })
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить дату' }))
   await waitFor(() => expect(ticketApi.rescheduleFieldWork).toHaveBeenCalledWith(
-    ticketId, handoff.id, 'Согласовано с абонентом', '2030-06-15T15:30:00+03:00', 1,
+    ticketId, handoff.id, 'Согласовано с абонентом', '2030-06-15T15:30:00+03:00', 2,
   ))
 })
 

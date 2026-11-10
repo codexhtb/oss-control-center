@@ -38,12 +38,18 @@ from app.modules.field_dispatch.models import (
     FieldExternalMessage,
     FieldReportNotification,
     FieldReportNotificationRead,
+    FieldRescheduleDialog,
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
     FieldWorkReschedule,
 )
-from app.modules.field_dispatch.poller import _send_prompt, _sync_completion, _sync_reschedule
+from app.modules.field_dispatch.poller import (
+    _send_prompt,
+    _sync_completion,
+    _sync_dialog,
+    _sync_schedule_card,
+)
 from app.modules.field_dispatch.rescheduling import (
     ABKHAZIA,
     parse_telegram_reschedule,
@@ -3909,155 +3915,242 @@ def test_ochamchira_dispatch_and_callback_are_bound_to_saved_chat(
         assert db.scalar(select(func.count()).select_from(FieldReportNotification)) == 1
 
 
-@pytest.mark.parametrize("direction,chat_id", [
-    ("SUKHUM", -5319791765), ("OCHAMCHIRA", -1004473201977),
-])
+@pytest.mark.parametrize(
+    "direction,chat_id",
+    [
+        ("SUKHUM", -5319791765),
+        ("OCHAMCHIRA", -1004473201977),
+    ],
+)
 def test_field_work_rescheduling_telegram_and_oss(
-    ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch,
-    direction: str, chat_id: int,
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    chat_id: int,
 ) -> None:
     monkeypatch.setenv("TELEGRAM_OCHAMCHIRA_CHAT_ID", "-1004473201977")
     engineer = seed_user(ticket_engine, f"schedule_{direction.lower()}", Role.ENGINEER)
     snapshot, connections = seed_snapshot(ticket_engine, engineer, phone="+000000000")
-    gateway = RecordingFieldGateway()
-    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    sender = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: sender
     login(ticket_client, engineer.login)
     created = create(ticket_client, snapshot, connections[0])
     assert created.status_code == 201, created.text
     path = f"/api/v1/tickets/{created.json()['id']}"
-    assert ticket_client.post(
-        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
-    ).status_code == 200
-    assert ticket_client.post(
-        path + "/field-work-request", headers={**csrf(ticket_client), "If-Match": '"2"'},
-        json={"reason": "Synthetic visit"},
-    ).status_code == 200
+    assert (
+        ticket_client.post(
+            path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+        ).status_code
+        == 200
+    )
+    assert (
+        ticket_client.post(
+            path + "/field-work-request",
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"reason": "Synthetic visit"},
+        ).status_code
+        == 200
+    )
     handoff = ticket_client.get(path + "/field-work-handoffs/latest").json()["handoff"]
     assert handoff["schedule_status"] == "ORIGINAL" and handoff["schedule_version"] == 0
     sent = ticket_client.post(
-        path + f"/field-work-handoffs/{handoff['id']}/send", headers=csrf(ticket_client),
+        path + f"/field-work-handoffs/{handoff['id']}/send",
+        headers=csrf(ticket_client),
         json={"client_request_id": str(uuid4()), "direction": direction},
     )
-    assert sent.status_code == 200 and gateway.calls[0][0] == str(chat_id)
+    assert sent.status_code == 200 and sender.calls[0][0] == str(chat_id)
     history_path = path + f"/field-work-handoffs/{handoff['id']}/reschedules"
 
     def callback(
-        update_id: int, source_chat: int, source_message: int = 701,
-        action: str = "field_reschedule",
+        update_id: int,
+        data: str,
+        *,
+        author: int = 777,
+        source_chat: int | None = None,
+        source_message: int = 701,
     ) -> dict:
-        return {"update_id": update_id, "callback_query": {
-            "id": f"schedule-callback-{update_id}",
-            "from": {"id": 777, "is_bot": False, "first_name": "Synthetic Installer"},
-            "data": f"{action}:{handoff['id']}",
-            "message": {"message_id": source_message, "date": 1_800_000_000,
-                        "chat": {"id": source_chat, "type": "supergroup"}},
-        }}
+        return {
+            "update_id": update_id,
+            "callback_query": {
+                "id": f"schedule-callback-{update_id}",
+                "from": {"id": author, "is_bot": False, "first_name": "Synthetic Installer"},
+                "data": data,
+                "message": {
+                    "message_id": source_message,
+                    "date": 1_800_000_000,
+                    "chat": {
+                        "id": chat_id if source_chat is None else source_chat,
+                        "type": "supergroup",
+                    },
+                },
+            },
+        }
 
-    def answer(update_id: int, prompt_id: int, body: str, sender: int = 777) -> dict:
-        return {"update_id": update_id, "message": {
-            "message_id": update_id, "date": 1_800_000_010,
-            "from": {"id": sender, "is_bot": False, "first_name": "Synthetic Installer"},
-            "chat": {"id": chat_id, "type": "supergroup"},
-            "reply_to_message": {"message_id": prompt_id}, "text": body,
-        }}
+    def answer(update_id: int, body: str, *, author: int = 777) -> dict:
+        return {
+            "update_id": update_id,
+            "message": {
+                "message_id": update_id,
+                "date": 1_800_000_010,
+                "from": {"id": author, "is_bot": False, "first_name": "Synthetic Installer"},
+                "chat": {"id": chat_id, "type": "supergroup"},
+                "reply_to_message": {"message_id": 701},
+                "text": body,
+            },
+        }
 
-    class PromptGateway:
-        next_id = 704
-        confirmations: list[str] = []
+    class CardGateway:
+        edits: list[tuple[str, int, str, dict]]
+        fail_once: bool
 
-        def send_message(self, destination: str, body: str) -> DispatchReceipt:
-            assert destination == str(chat_id)
-            self.confirmations.append(body)
-            return DispatchReceipt(destination, "800")
+        def __init__(self) -> None:
+            self.edits = []
+            self.fail_once = False
 
-        def send_reschedule_prompt(
-            self, destination: str, message_id: int, *, username: str | None = None
-        ) -> DispatchReceipt:
+        def edit_reschedule_card(
+            self, destination: str, message_id: int, body: str, markup: dict
+        ) -> None:
             assert destination == str(chat_id) and message_id == 701
-            result = DispatchReceipt(destination, str(self.next_id))
-            self.next_id += 1
-            return result
+            self.edits.append((destination, message_id, body, markup))
+            if self.fail_once:
+                self.fail_once = False
+                raise DispatchRejected("telegram_http_500")
 
-        def send_completion_prompt(
-            self, destination: str, message_id: int, *, username: str | None = None
-        ) -> DispatchReceipt:
-            return self.send_reschedule_prompt(destination, message_id, username=username)
+        def send_message(self, *_args, **_kwargs) -> None:
+            pytest.fail("Inline rescheduling must not send a separate message")
 
-    prompt_gateway = PromptGateway()
+    gateway = CardGateway()
+    start_data = f"field_reschedule:{handoff['id']}"
     with Session(ticket_engine) as db:
-        assert process_update(db, callback(98001, -999999)).outcome == "DENIED"
-        assert process_update(db, callback(98002, chat_id, 999)).outcome == "DENIED"
-        first = process_update(db, callback(98003, chat_id))
-        assert first.outcome == "PROCESSED" and first.prompt_id is not None
-        assert process_update(db, callback(98003, chat_id)).duplicate
-        assert process_update(db, callback(98014, chat_id)).outcome == "DUPLICATE"
         assert (
-            process_update(db, callback(98015, chat_id, action="field_done")).outcome
-            == "DUPLICATE"
+            process_update(db, callback(98001, start_data, source_chat=-999999)).outcome == "DENIED"
         )
-        _send_prompt(db, prompt_gateway, first.prompt_id)
-        wrong_author = answer(98004, 704, "Причина: чужой\nДата: не согласована", 888)
-        assert process_update(db, wrong_author).outcome == "DENIED"
-        assert process_update(db, answer(98005, 704, "без формата")).outcome == "DENIED"
-        assert db.get(FieldWorkCompletionPrompt, first.prompt_id).status == "WAITING"
-        no_date = answer(98006, 704, "Причина: Абонент попросил перенести\nДата: не согласована")
-        assert process_update(db, no_date).outcome == "PROCESSED"
-        assert process_update(db, no_date).duplicate
-        _sync_reschedule(db, prompt_gateway, 98006)
-        assert "дата не согласована" in prompt_gateway.confirmations[-1]
+        assert (
+            process_update(db, callback(98002, start_data, source_message=999)).outcome == "DENIED"
+        )
+        first = process_update(db, callback(98003, start_data))
+        assert first.outcome == "PROCESSED" and first.dialog_id is not None
+        assert process_update(db, callback(98003, start_data)).duplicate
+        _sync_dialog(db, gateway, first.dialog_id)
+        assert "Причина переноса" in gateway.edits[-1][2]
+        assert gateway.edits[-1][2].startswith(sender.calls[0][1])
+        def step(dialog: UUID, code: str) -> str:
+            return f"rs:{dialog}:{code}"
+        assert (
+            process_update(db, callback(98004, step(first.dialog_id, "r1"), author=888)).outcome
+            == "DENIED"
+        )
+        assert (
+            process_update(db, callback(98005, f"field_done:{handoff['id']}")).outcome == "DENIED"
+        )
+        choice = process_update(db, callback(98006, step(first.dialog_id, "r1")))
+        assert choice.outcome == "PROCESSED"
+        _sync_dialog(db, gateway, first.dialog_id)
+        assert "Новая дата" in gateway.edits[-1][2]
+        assert (
+            process_update(db, callback(98007, step(first.dialog_id, "dtn"))).outcome == "PROCESSED"
+        )
+        _sync_dialog(db, gateway, first.dialog_id)
+        saved = process_update(db, callback(98008, step(first.dialog_id, "ok")))
+        assert saved.outcome == "PROCESSED" and saved.dialog_id == first.dialog_id
+        assert process_update(db, callback(98008, step(first.dialog_id, "ok"))).duplicate
+        _sync_schedule_card(db, gateway, UUID(handoff["id"]))
         current = db.get(FieldWorkHandoff, UUID(handoff["id"]))
         assert current.schedule_status == "DATE_PENDING" and current.scheduled_for is None
-        assert current.work_status == "AWAITING_REPORT"
+        assert current.schedule_card_status == "DONE"
+        assert "📅 ПЕРЕНЕСЕНА" in gateway.edits[-1][2]
+        assert "дата не согласована" in gateway.edits[-1][2]
         assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 1
 
-        second = process_update(db, callback(98007, chat_id))
-        assert second.outcome == "PROCESSED" and second.prompt_id is not None
-        _send_prompt(db, prompt_gateway, second.prompt_id)
-        date = (datetime.now(UTC) + timedelta(days=5)).astimezone(ABKHAZIA)
-        date_text = date.strftime("%d.%m.%Y %H:%M")
-        agreed = answer(98008, 705, f"Причина: Согласовали время\nДата: {date_text}")
-        assert process_update(db, agreed).outcome == "PROCESSED"
+        second = process_update(db, callback(98009, start_data))
+        assert second.dialog_id is not None and second.dialog_id != first.dialog_id
+        process_update(db, callback(98010, step(second.dialog_id, "r0")))
+        assert (
+            process_update(db, callback(98011, step(second.dialog_id, "back"))).outcome
+            == "PROCESSED"
+        )
+        assert db.get(FieldRescheduleDialog, second.dialog_id).stage == "REASON"
+        process_update(db, callback(98012, step(second.dialog_id, "r0")))
+        process_update(db, callback(98013, step(second.dialog_id, "dtx")))
+        invalid = process_update(db, answer(98014, "31.02.2027"))
+        assert invalid.kind == "RESCHEDULE_INVALID" and invalid.dialog_id == second.dialog_id
+        _sync_dialog(db, gateway, second.dialog_id)
+        assert "Укажите дату" in gateway.edits[-1][2]
+        agreed_day = (datetime.now(ABKHAZIA) + timedelta(days=5)).date()
+        valid = process_update(db, answer(98015, agreed_day.strftime("%d.%m.%Y")))
+        assert valid.outcome == "PROCESSED" and valid.dialog_id == second.dialog_id
+        assert (
+            process_update(db, callback(98016, step(second.dialog_id, "tn"))).outcome == "PROCESSED"
+        )
+        assert (
+            process_update(db, callback(98017, step(second.dialog_id, "ok"))).outcome == "PROCESSED"
+        )
+        gateway.fail_once = True
+        _sync_schedule_card(db, gateway, UUID(handoff["id"]))
         current = db.get(FieldWorkHandoff, UUID(handoff["id"]))
-        assert current.schedule_status == "SCHEDULED" and current.schedule_version == 2
-        assert current.scheduled_for is not None and current.work_status == "AWAITING_REPORT"
+        assert current.schedule_status == "SCHEDULED" and current.scheduled_for is None
+        assert current.scheduled_date == agreed_day and current.schedule_card_status == "FAILED"
+        current.schedule_card_attempted_at = datetime.now(UTC) - timedelta(days=1)
+        db.commit()
+        _sync_schedule_card(db, gateway, UUID(handoff["id"]))
+        assert current.schedule_card_status == "DONE"
+        assert "время не согласовано" in gateway.edits[-1][2]
         assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 2
 
-        third = process_update(db, callback(98009, chat_id))
-        assert third.outcome == "PROCESSED" and third.prompt_id is not None
-        _send_prompt(db, prompt_gateway, third.prompt_id)
-        assert process_update(db, answer(98010, 706, "/cancel")).outcome == "PROCESSED"
-        assert db.get(FieldWorkCompletionPrompt, third.prompt_id).status == "CANCELED"
-        assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 2
+        third = process_update(db, callback(98018, start_data))
+        process_update(db, callback(98019, step(third.dialog_id, "r2")))
+        process_update(db, callback(98020, step(third.dialog_id, "cal")))
+        _sync_dialog(db, gateway, third.dialog_id)
+        assert "Выберите дату" in gateway.edits[-1][2]
+        tomorrow = (datetime.now(ABKHAZIA) + timedelta(days=1)).date()
+        month = db.get(FieldRescheduleDialog, third.dialog_id).calendar_month
+        if tomorrow.month != month.month or tomorrow.year != month.year:
+            process_update(db, callback(98021, step(third.dialog_id, "mn")))
+        date_code = f"d{tomorrow:%Y%m%d}"
+        process_update(db, callback(98022, step(third.dialog_id, date_code)))
+        process_update(db, callback(98023, step(third.dialog_id, "tx")))
+        assert process_update(db, answer(98024, "25:99")).kind == "RESCHEDULE_INVALID"
+        assert process_update(db, answer(98025, "14:30")).outcome == "PROCESSED"
+        assert (
+            process_update(db, callback(98026, step(third.dialog_id, "ok"))).outcome == "PROCESSED"
+        )
+        _sync_schedule_card(db, gateway, UUID(handoff["id"]))
+        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).scheduled_for is not None
+        assert "14:30" in gateway.edits[-1][2]
+        assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 3
+
+        fourth = process_update(db, callback(98027, start_data))
+        assert (
+            process_update(db, callback(98028, step(fourth.dialog_id, "cancel"))).outcome
+            == "PROCESSED"
+        )
+        _sync_dialog(db, gateway, fourth.dialog_id)
+        assert gateway.edits[-1][3]["inline_keyboard"][0][1]["text"] == "📅 Перенести"
+        assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 3
 
     page = ticket_client.get(history_path)
-    assert page.status_code == 200 and page.json()["total"] == 2
-    assert page.json()["items"][0]["reason"] == "Согласовали время"
-    assert page.json()["items"][1]["scheduled_for"] is None
+    assert page.status_code == 200 and page.json()["total"] == 3
+    assert page.json()["items"][1]["scheduled_date"] == agreed_day.isoformat()
     changed_date = (datetime.now(UTC) + timedelta(days=7)).astimezone(ABKHAZIA)
-    payload = {"reason": "Новая договорённость", "scheduled_for": changed_date.isoformat(),
-               "expected_version": 2}
+    payload = {
+        "reason": "Новая договорённость",
+        "scheduled_for": changed_date.isoformat(),
+        "expected_version": 3,
+    }
     updated = ticket_client.post(history_path, headers=csrf(ticket_client), json=payload)
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["schedule_version"] == 3
-    assert updated.json()["work_status"] == "AWAITING_REPORT"
-    conflict = ticket_client.post(history_path, headers=csrf(ticket_client), json=payload)
-    assert conflict.status_code == 409
-    assert ticket_client.get(history_path).json()["total"] == 3
+    assert updated.status_code == 200 and updated.json()["schedule_version"] == 4
+    assert (
+        ticket_client.post(history_path, headers=csrf(ticket_client), json=payload).status_code
+        == 409
+    )
     with Session(ticket_engine) as db:
-        assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 3
-        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "AWAITING_REPORT"
-        completed = process_update(db, callback(98011, chat_id, action="field_done"))
+        _sync_schedule_card(db, gateway, UUID(handoff["id"]))
+        assert "Новая договорённость" in gateway.edits[-1][2]
+        assert db.scalar(select(func.count()).select_from(FieldWorkReschedule)) == 4
+        completed = process_update(db, callback(98029, f"field_done:{handoff['id']}"))
         assert completed.outcome == "PROCESSED" and completed.prompt_id is not None
-        _send_prompt(db, prompt_gateway, completed.prompt_id)
-        assert process_update(db, answer(98012, 707, "Линия восстановлена")).outcome == "PROCESSED"
-        assert db.get(FieldWorkHandoff, UUID(handoff["id"])).work_status == "REPORTED"
-        assert process_update(db, callback(98013, chat_id)).outcome == "DUPLICATE"
-    after_completion = ticket_client.post(history_path, headers=csrf(ticket_client), json={
-        **payload, "expected_version": 3,
-    })
-    assert after_completion.status_code == 409
-    assert ticket_client.get(history_path).json()["total"] == 3
-
+        assert process_update(db, callback(98030, start_data)).outcome == "DENIED"
 
 def test_reschedule_date_validation() -> None:
     for value in (
