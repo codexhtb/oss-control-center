@@ -21,9 +21,12 @@ from app.modules.billing.provider import (
     BillingIncomplete,
     BillingInvalidAccount,
     BillingUnavailable,
+    SubscriberSearchItem,
+    SubscriberSearchResult,
 )
 
 MAX_ACCOUNTS = 50
+MAX_SEARCH_RESULTS = 20
 MAX_SERVICES = 50
 MAX_GROUPS_PER_SERVICE = 20
 MAX_ROWS_PER_GROUP = 100
@@ -35,6 +38,10 @@ MAX_POOLS = 100
 LOOKUP_DEADLINE_SECONDS = 15
 LOOKUP_SLOTS = BoundedSemaphore(8)
 CANONICAL_ACCOUNT = re.compile(r"[1-9][0-9]*\Z", re.ASCII)
+
+
+def _like(value: str) -> str:
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
 def parse_account_no(account_no: str) -> int:
@@ -80,6 +87,103 @@ class NetupRepository:
                     connection.close()
         finally:
             LOOKUP_SLOTS.release()
+
+    def search_subscribers(self, query: str) -> SubscriberSearchResult:
+        term = " ".join(query.split())
+        if not term or len(term) > 100 or any(ord(char) < 32 for char in term):
+            raise ValueError("invalid_subscriber_search")
+        deadline = monotonic() + LOOKUP_DEADLINE_SECONDS
+        if not LOOKUP_SLOTS.acquire(timeout=1):
+            raise BillingUnavailable from None
+        try:
+            connection = self._connection_factory()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SET SESSION max_statement_time=%s", (self._max_statement_ms / 1000,)
+                    )
+                    cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                    cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                    return self._search(cursor, term, deadline)
+            finally:
+                try:
+                    connection.rollback()
+                finally:
+                    connection.close()
+        finally:
+            LOOKUP_SLOTS.release()
+
+    def _search(self, cursor: Any, term: str, deadline: float) -> SubscriberSearchResult:
+        select = self._select
+        found: dict[int, dict] = {}
+        if CANONICAL_ACCOUNT.fullmatch(term) and len(term) <= 10 and int(term) <= 2_147_483_647:
+            rows = select(
+                cursor,
+                "SELECT u.id,u.full_name,u.login FROM accounts a "
+                "JOIN users_accounts ua ON ua.account_id=a.id AND ua.is_deleted=0 "
+                "JOIN users u ON u.id=ua.uid AND u.is_deleted=0 "
+                "WHERE a.id=%s AND a.is_deleted=0 ORDER BY u.id LIMIT 21",
+                (int(term),),
+                deadline,
+            )
+            found.update((int(row["id"]), row) for row in rows)
+
+        predicates = ["u.login=%s"]
+        params: list[Any] = [term]
+        if len(term) >= 3:
+            predicates.append("u.login LIKE %s ESCAPE '!' ")
+            params.append(_like(term) + "%")
+            tokens = term.split()
+            if len(tokens) <= 5:
+                predicates.extend(["u.full_name LIKE %s ESCAPE '!' "] * len(tokens))
+                params.extend("%" + _like(token) + "%" for token in tokens)
+                name_clause = " AND ".join(predicates[2:])
+                predicates = predicates[:2] + [f"({name_clause})"]
+        rows = select(
+            cursor,
+            "SELECT u.id,u.full_name,u.login FROM users u "
+            "WHERE u.is_deleted=0 AND EXISTS ("
+            "SELECT 1 FROM users_accounts ua JOIN accounts a ON a.id=ua.account_id "
+            "AND a.is_deleted=0 WHERE ua.uid=u.id AND ua.is_deleted=0) "
+            f"AND ({' OR '.join(predicates)}) "
+            "ORDER BY CASE WHEN u.login=%s THEN 0 "
+            "WHEN u.login LIKE %s ESCAPE '!' THEN 1 ELSE 2 END,u.id LIMIT 21",
+            (*params, term, _like(term) + "%"),
+            deadline,
+        )
+        found.update((int(row["id"]), row) for row in rows)
+        has_more = len(rows) > MAX_SEARCH_RESULTS or len(found) > MAX_SEARCH_RESULTS
+        users = list(found.values())[:MAX_SEARCH_RESULTS]
+        if not users:
+            return SubscriberSearchResult(items=[])
+        user_ids = [int(row["id"]) for row in users]
+        account_rows = select(
+            cursor,
+            "SELECT DISTINCT ua.uid,a.id AS account_id FROM users_accounts ua "
+            "JOIN accounts a ON a.id=ua.account_id AND a.is_deleted=0 "
+            f"WHERE ua.uid IN ({self._placeholders(user_ids)}) AND ua.is_deleted=0 "
+            "ORDER BY ua.uid,a.id LIMIT 1001",
+            tuple(user_ids),
+            deadline,
+        )
+        if len(account_rows) > 1000:
+            raise BillingIncomplete from None
+        account_map: dict[int, list[str]] = defaultdict(list)
+        for row in account_rows:
+            account_map[int(row["uid"])].append(str(row["account_id"]))
+        return SubscriberSearchResult(
+            items=[
+                SubscriberSearchItem(
+                    subscriber_id=str(row["id"]),
+                    full_name=row["full_name"],
+                    login=row["login"],
+                    account_nos=account_map[int(row["id"])],
+                )
+                for row in users
+                if account_map[int(row["id"])]
+            ],
+            has_more=has_more,
+        )
 
     @staticmethod
     def _select(cursor: Any, sql: str, params: tuple[Any, ...], deadline: float) -> list[dict]:

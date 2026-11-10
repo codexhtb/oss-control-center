@@ -3,7 +3,12 @@
 from datetime import UTC, datetime, timedelta
 
 from app.modules.billing.normalizer import normalize_source
-from app.modules.billing.provider import BillingUnavailable, Subscriber360
+from app.modules.billing.provider import (
+    BillingUnavailable,
+    Subscriber360,
+    SubscriberSearchItem,
+    SubscriberSearchResult,
+)
 from app.modules.billing.quality import DataQuality
 from app.modules.billing.source_dto import (
     SourceConnection,
@@ -83,6 +88,25 @@ class MockBillingProvider:
         now = datetime.now(UTC)
         raw = self._scenario(account_no, now)
         return normalize_source(raw) if raw is not None else None
+
+    def search_subscribers(self, query: str) -> SubscriberSearchResult:
+        term = " ".join(query.split()).casefold()
+        candidates = (
+            ("MOCK-ETH-001", "Синтетический Ethernet", "mock-ethernet"),
+            ("MOCK-EPON-001", "Синтетический EPON", "mock-epon"),
+            ("MOCK-GPON-001", "Синтетический GPON", "mock-gpon"),
+        )
+        return SubscriberSearchResult(items=[
+            SubscriberSearchItem(
+                subscriber_id=account,
+                full_name=name,
+                login=login,
+                account_nos=[account],
+            )
+            for account, name, login in candidates
+            if term in name.casefold() or login.casefold().startswith(term)
+            or account.casefold() == term
+        ])
 
     def _scenario(self, account_no: str, now: datetime) -> SourceSubscriber | None:
         if account_no == "MOCK-ETH-001":

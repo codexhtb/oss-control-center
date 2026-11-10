@@ -9,6 +9,7 @@ from app.modules.billing.provider import (
     BillingInvalidAccount,
     BillingUnavailable,
     Subscriber360,
+    SubscriberSearchResult,
 )
 
 
@@ -28,4 +29,12 @@ class NetUPBillingProvider:
             raise
         except Exception:
             # DBAPI exceptions may include SQL parameters or credentials.
+            raise BillingUnavailable from None
+
+    def search_subscribers(self, query: str) -> SubscriberSearchResult:
+        try:
+            return self.repository.search_subscribers(query)
+        except (BillingInvalidAccount, BillingAmbiguous, BillingIncomplete):
+            raise
+        except Exception:
             raise BillingUnavailable from None

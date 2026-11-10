@@ -107,6 +107,22 @@ class Subscriber360(BaseModel):
         return value.astimezone(UTC)
 
 
+class SubscriberSearchItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subscriber_id: str
+    full_name: str | None
+    login: str | None
+    account_nos: list[str]
+
+
+class SubscriberSearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SubscriberSearchItem]
+    has_more: bool = False
+
+
 class BillingUnavailable(Exception):
     """The provider cannot be queried; distinct from a missing subscriber."""
 
@@ -126,9 +142,14 @@ class BillingInvalidAccount(Exception):
 class BillingProvider(Protocol):
     def lookup_by_account(self, account_no: str) -> Subscriber360 | None: ...
 
+    def search_subscribers(self, query: str) -> SubscriberSearchResult: ...
+
 
 class UnavailableBillingProvider:
     """Safe failure when an explicitly selected source lacks runtime configuration."""
 
     def lookup_by_account(self, account_no: str) -> Subscriber360 | None:
+        raise BillingUnavailable from None
+
+    def search_subscribers(self, query: str) -> SubscriberSearchResult:
         raise BillingUnavailable from None

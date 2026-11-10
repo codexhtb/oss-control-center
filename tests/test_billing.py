@@ -30,7 +30,12 @@ from app.modules.billing.netup.dto import (
     NetupSubscriber,
 )
 from app.modules.billing.netup.provider import NetUPBillingProvider
-from app.modules.billing.provider import BillingAccount, BillingUnavailable, FinancialAccount
+from app.modules.billing.provider import (
+    BillingAccount,
+    BillingUnavailable,
+    FinancialAccount,
+    UnavailableBillingProvider,
+)
 from app.modules.billing.quality import DataQuality, FieldOrigin
 from app.modules.billing.service import create_lookup
 from app.modules.identity.crypto import hash_password
@@ -126,6 +131,34 @@ def lookup(client: TestClient, account: str):
     return client.post(
         "/api/v1/subscriber-lookups", headers=csrf(client), json={"account_no": account}
     )
+
+
+def test_subscriber_search_api_requires_session_and_preserves_lookup_flow(
+    billing_engine: Engine, billing_client: TestClient
+) -> None:
+    assert billing_client.get("/api/v1/subscriber-lookups/search?q=mock").status_code == 401
+    actor = seed_user(billing_engine, "search_operator", Role.OPERATOR)
+    login(billing_client, actor.login)
+    found = billing_client.get("/api/v1/subscriber-lookups/search?q=  Синтетический  ")
+    assert found.status_code == 200 and found.headers["cache-control"] == "no-store"
+    assert len(found.json()["items"]) == 3
+    assert billing_client.get("/api/v1/subscriber-lookups/search?q=nomatch").json() == {
+        "items": [], "has_more": False,
+    }
+    assert billing_client.get("/api/v1/subscriber-lookups/search?q=%20%20").status_code == 422
+    billing_client.app.dependency_overrides[get_billing_provider] = UnavailableBillingProvider
+    assert billing_client.get("/api/v1/subscriber-lookups/search?q=mock").status_code == 503
+    billing_client.app.dependency_overrides.pop(get_billing_provider)
+    opened = lookup(billing_client, "MOCK-ETH-001")
+    assert opened.status_code == 200
+    assert opened.json()["subscriber"]["billing_account"] == "MOCK-ETH-001"
+    with Session(billing_engine) as db:
+        assert db.scalar(select(func.count()).select_from(TicketAudit).where(
+            TicketAudit.action == "subscriber_search"
+        )) == 3
+        db.get(User, actor.id).permissions_customized = True
+        db.commit()
+    assert billing_client.get("/api/v1/subscriber-lookups/search?q=mock").status_code == 403
 
 
 def ticket_payload(card: dict, *, request_id: UUID | None = None) -> dict:

@@ -198,6 +198,11 @@ export interface SubscriberFinancePage {
   total: number; page: number; size: number; start: string; end: string
 }
 
+export interface SubscriberSearchResult {
+  items: Array<{ subscriber_id: string; full_name: string | null; login: string | null; account_nos: string[] }>
+  has_more: boolean
+}
+
 export interface SubscriberCard {
   lookup_id: string
   source: string

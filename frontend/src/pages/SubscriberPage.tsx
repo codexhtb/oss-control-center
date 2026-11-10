@@ -11,7 +11,7 @@ import { SubscriberServices } from '../features/tickets/SubscriberServices'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow, SubscriberService } from '../features/tickets/types'
 import { configuredIpv4, formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import type { MeResponse } from '../shared/api/types'
-import { errorText } from '../shared/api/client'
+import { ApiError, errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 
@@ -180,14 +180,29 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
 export function SubscriberPage({ session }: { session: MeResponse }) {
   const { lookupId } = useParams()
   const navigate = useNavigate()
-  const [accountNo, setAccountNo] = useState('')
-  const lookup = useMutation({ mutationFn: ticketApi.lookup, onSuccess: (card) => navigate(`/subscribers/${card.lookup_id}`) })
+  const [query, setQuery] = useState('')
+  const [submittedQuery, setSubmittedQuery] = useState('')
+  const search = useMutation({ mutationFn: ticketApi.searchSubscribers })
+  const lookup = useMutation({ mutationFn: ticketApi.lookup, onSuccess: (card) => { setSubmittedQuery(''); navigate(`/subscribers/${card.lookup_id}`) } })
   const card = useQuery({ queryKey: ['subscriber', lookupId], queryFn: ({ signal }) => ticketApi.getLookup(lookupId!, signal), enabled: !!lookupId })
-  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (accountNo.trim() && !lookup.isPending) lookup.mutate(accountNo.trim()) }
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const normalized = query.trim().replace(/\s+/g, ' ')
+    if (!normalized || search.isPending || lookup.isPending) return
+    setSubmittedQuery(normalized)
+    search.mutate(normalized)
+  }
+  const results = submittedQuery && submittedQuery === query.trim().replace(/\s+/g, ' ') ? search.data : null
   return <div className="page desk-page subscriber-page">
-    <form className="subscriber-search" onSubmit={submit}><label className="field" htmlFor="subscriber-account"><span>Поиск по лицевому счёту</span><input id="subscriber-account" name="account_no" value={accountNo} onChange={(event) => setAccountNo(event.target.value)} maxLength={100} autoComplete="off" placeholder="Введите номер ЛС" /></label><Button type="submit" variant="primary" icon={<Search size={16} />} disabled={!accountNo.trim() || lookup.isPending}>{lookup.isPending ? 'Поиск…' : 'Найти'}</Button></form>
+    <form className="subscriber-search" onSubmit={submit}><label className="field" htmlFor="subscriber-account"><span>ФИО, логин или лицевой счёт</span><input id="subscriber-account" name="subscriber_query" value={query} onChange={(event) => { setQuery(event.target.value); setSubmittedQuery('') }} maxLength={100} autoComplete="off" placeholder="Введите ФИО, логин или ЛС" /></label><Button type="submit" variant="primary" icon={<Search size={16} />} disabled={!query.trim() || search.isPending || lookup.isPending}>{search.isPending ? 'Поиск…' : 'Найти'}</Button></form>
+    {search.isPending && <p role="status" className="muted">Ищем абонентов в NetUP…</p>}
+    {search.isError && submittedQuery && <Notice tone="error">{search.error instanceof ApiError && search.error.status === 503 ? 'NetUP сейчас недоступен. Повторите поиск позже.' : errorText(search.error)}</Notice>}
+    {results && <section className="subscriber-search-results" aria-label="Результаты поиска"><h2>Найденные абоненты</h2>
+      {results.items.length === 0 ? <p className="muted">{submittedQuery.length < 3 && /\D/.test(submittedQuery) ? 'Для поиска по части ФИО или логина введите минимум 3 символа.' : 'Совпадений не найдено.'}</p> : <div className="subscriber-search-results__list">{results.items.map((item) => <div className="subscriber-search-result" key={item.subscriber_id}><div><strong>{item.full_name || 'ФИО не указано'}</strong><span>Логин: {item.login || 'не указан'}</span></div><div className="subscriber-search-result__accounts">{item.account_nos.map((account) => <Button key={account} variant="secondary" onClick={() => lookup.mutate(account)} disabled={lookup.isPending}>Открыть ЛС {account}</Button>)}</div></div>)}</div>}
+      {results.has_more && <p className="muted">Показаны первые 20 абонентов. Уточните запрос.</p>}
+    </section>}
     {lookup.isError && <Notice tone="error">{errorText(lookup.error)}</Notice>}
-    {!lookupId && <div className="subscriber-empty"><Search size={28} /><h1>Subscriber 360</h1><p>Введите лицевой счёт, чтобы открыть карточку абонента.</p></div>}
+    {!lookupId && !submittedQuery && <div className="subscriber-empty"><Search size={28} /><h1>Subscriber 360</h1><p>Найдите абонента по ФИО, логину или лицевому счёту.</p></div>}
     {lookupId && (card.isPending ? <p role="status" className="muted">Загружаем карточку…</p> : card.isError ? <Notice tone="error">{errorText(card.error)}</Notice> : card.data ? <SubscriberDetails key={lookupId} card={card.data} session={session} /> : null)}
   </div>
 }

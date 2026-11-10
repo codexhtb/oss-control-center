@@ -17,8 +17,11 @@ from app.modules.billing.netup.provider import NetUPBillingProvider
 from app.modules.billing.netup.repository import parse_account_no
 from app.modules.billing.netup.services import load_services, load_tariff_history
 from app.modules.billing.provider import (
+    BillingIncomplete,
     BillingInvalidAccount,
     BillingProvider,
+    BillingUnavailable,
+    SubscriberSearchResult,
     UnavailableBillingProvider,
 )
 from app.modules.billing.schemas import LookupRequest, SubscriberCard
@@ -28,7 +31,7 @@ from app.modules.identity.models import User
 from app.modules.identity.roles import Permission
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.duplicates import active_count, active_query
-from app.modules.tickets.models import SubscriberSnapshot, Ticket
+from app.modules.tickets.models import SubscriberSnapshot, Ticket, TicketAudit
 from app.modules.tickets.schemas import ActiveTickets, Page, TicketView
 from app.modules.tickets.subscriber_history import matching_subscriber
 
@@ -201,6 +204,31 @@ def lookup(
     snapshot = create_lookup(db, identity.user.id, payload.account_no, provider)
     response.headers["Cache-Control"] = "no-store"
     return stored_card(db, identity.user.id, snapshot.id)
+
+
+@router.get("/search", response_model=SubscriberSearchResult)
+def search_subscribers(
+    q: str, response: Response, identity: LookupReadDep, db: SessionDep, provider: ProviderDep
+) -> SubscriberSearchResult:
+    query = " ".join(q.split())
+    if not query or len(query) > 100 or any(ord(char) < 32 for char in q):
+        raise ApiError(422, "subscriber_search_invalid", "Invalid subscriber search")
+    db.rollback()  # Do not hold a PostgreSQL connection during the NetUP read.
+    try:
+        result = provider.search_subscribers(query)
+    except (BillingUnavailable, BillingIncomplete):
+        db.add(TicketAudit(
+            actor_id=identity.user.id, action="subscriber_search",
+            outcome="unavailable", origin="API",
+        ))
+        db.commit()
+        raise ApiError(503, "billing_unavailable", "Billing source UNAVAILABLE") from None
+    db.add(TicketAudit(
+        actor_id=identity.user.id, action="subscriber_search", outcome="success", origin="API",
+    ))
+    db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/{lookup_id}", response_model=SubscriberCard)

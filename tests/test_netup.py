@@ -425,6 +425,87 @@ class FakeConnection:
         self.closed = True
 
 
+def test_subscriber_search_uses_read_only_bounded_queries_and_keeps_numeric_matches() -> None:
+    class SearchCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple | None = None) -> None:
+            self.calls.append((sql, params))
+            if sql.startswith(("SET SESSION", "SET TRANSACTION", "START TRANSACTION")):
+                self.rows = []
+            elif sql.startswith("SELECT u.id,u.full_name,u.login FROM accounts"):
+                self.rows = [{"id": 1, "full_name": "Абонент А", "login": "alpha"}]
+            elif sql.startswith("SELECT u.id,u.full_name,u.login FROM users u"):
+                self.rows = [{"id": 2, "full_name": "Абонент Б", "login": "4951"}]
+            elif sql.startswith("SELECT DISTINCT ua.uid,a.id AS account_id"):
+                self.rows = [
+                    {"uid": 1, "account_id": 4951},
+                    {"uid": 1, "account_id": 4952},
+                    {"uid": 2, "account_id": 7000},
+                ]
+            else:
+                raise AssertionError("Unexpected search query")
+
+    cursor = SearchCursor([])
+    connection = FakeConnection(cursor)
+    result = NetupRepository(lambda: connection).search_subscribers("  4951  ")
+    assert [(item.login, item.account_nos) for item in result.items] == [
+        ("alpha", ["4951", "4952"]), ("4951", ["7000"]),
+    ]
+    assert connection.rolled_back and connection.closed
+    assert cursor.calls[0] == ("SET SESSION max_statement_time=%s", (3.0,))
+    assert cursor.calls[2][0] == "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY"
+    assert cursor.calls[3][1] == (4951,)
+    assert cursor.calls[4][1][0] == "4951"
+    assert "LIMIT 21" in cursor.calls[4][0]
+    assert "LIMIT 1001" in cursor.calls[5][0]
+
+
+def test_subscriber_search_name_tokens_and_login_prefix_are_parameterized() -> None:
+    class SearchCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple | None = None) -> None:
+            self.calls.append((sql, params))
+            if sql.startswith("SELECT u.id,u.full_name,u.login FROM users u"):
+                self.rows = [{"id": 3, "full_name": "Иван  Петров", "login": "ivan-p"}]
+            elif sql.startswith("SELECT DISTINCT ua.uid,a.id AS account_id"):
+                self.rows = [{"uid": 3, "account_id": 123}]
+            elif sql.startswith(("SET SESSION", "SET TRANSACTION", "START TRANSACTION")):
+                self.rows = []
+            else:
+                raise AssertionError("Unexpected search query")
+
+    cursor = SearchCursor([])
+    result = NetupRepository(lambda: FakeConnection(cursor)).search_subscribers("  иВан   пеТР ")
+    assert result.items[0].account_nos == ["123"]
+    assert cursor.calls[3][1] == (
+        "иВан пеТР", "иВан пеТР%", "%иВан%", "%пеТР%", "иВан пеТР", "иВан пеТР%",
+    )
+    assert "u.full_name LIKE %s" in cursor.calls[3][0]
+    cursor2 = SearchCursor([])
+    NetupRepository(lambda: FakeConnection(cursor2)).search_subscribers("ivan")
+    assert cursor2.calls[3][1][1] == "ivan%"
+
+
+def test_subscriber_search_caps_ambiguous_results() -> None:
+    class ManyCursor(FakeCursor):
+        def execute(self, sql: str, params: tuple | None = None) -> None:
+            if sql.startswith("SELECT u.id,u.full_name,u.login FROM users u"):
+                self.rows = [
+                    {"id": number, "full_name": "Общее имя", "login": f"user{number}"}
+                    for number in range(1, 22)
+                ]
+            elif sql.startswith("SELECT DISTINCT ua.uid,a.id AS account_id"):
+                self.rows = [
+                    {"uid": number, "account_id": number + 1000}
+                    for number in range(1, 21)
+                ]
+            elif sql.startswith(("SET SESSION", "SET TRANSACTION", "START TRANSACTION")):
+                self.rows = []
+            else:
+                raise AssertionError("Unexpected search query")
+
+    result = NetupRepository(lambda: FakeConnection(ManyCursor([]))).search_subscribers("Общее")
+    assert len(result.items) == 20 and result.has_more
+
+
 @pytest.mark.parametrize(
     ("account_exists", "owners", "expected"),
     [

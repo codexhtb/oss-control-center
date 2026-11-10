@@ -4,12 +4,13 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ticketApi } from '../features/tickets/ticket-api'
+import { ApiError } from '../shared/api/client'
 import type { SubscriberCard } from '../features/tickets/types'
 import type { MeResponse } from '../shared/api/types'
 import { SubscriberPage } from './SubscriberPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({
-  ticketApi: { lookup: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), subscriberServices: vi.fn(), subscriberTariffHistory: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
+  ticketApi: { lookup: vi.fn(), searchSubscribers: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), subscriberServices: vi.fn(), subscriberTariffHistory: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
 }))
 
 const timestamp = '2026-01-01T00:00:00Z'
@@ -64,6 +65,7 @@ function renderPage(role: 'operator' | 'engineer', initial = `/subscribers/${car
 
 beforeEach(() => {
   vi.mocked(ticketApi.lookup).mockReset()
+  vi.mocked(ticketApi.searchSubscribers).mockReset().mockResolvedValue({ items: [], has_more: false })
   vi.mocked(ticketApi.getLookup).mockReset().mockResolvedValue(card)
   vi.mocked(ticketApi.subscriberTickets).mockReset().mockResolvedValue({ items: [], page: 1, size: 10, total: 0 })
   vi.mocked(ticketApi.subscriberFinance).mockReset().mockResolvedValue({
@@ -210,13 +212,45 @@ it('shows source time once without confirmed dots or repeated labels', async () 
 
 it('hides finance from engineer and searches without account number in browser URL', async () => {
   vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  vi.mocked(ticketApi.searchSubscribers).mockResolvedValue({ items: [{ subscriber_id: 'synthetic-id', full_name: 'Синтетический абонент', login: 'synthetic-login', account_nos: ['synthetic-account'] }], has_more: false })
   renderPage('engineer', '/subscribers')
-  fireEvent.change(screen.getByRole('textbox', { name: 'Поиск по лицевому счёту' }), { target: { value: 'synthetic-account' } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'ФИО, логин или лицевой счёт' }), { target: { value: 'synthetic-account' } })
   fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  await waitFor(() => expect(ticketApi.searchSubscribers).toHaveBeenCalledWith('synthetic-account', expect.anything()))
+  fireEvent.click(await screen.findByRole('button', { name: 'Открыть ЛС synthetic-account' }))
   await waitFor(() => expect(ticketApi.lookup).toHaveBeenCalledWith('synthetic-account', expect.anything()))
   expect(await screen.findByRole('heading', { name: 'Синтетический абонент' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Платежи' })).not.toBeInTheDocument()
   expect(screen.queryByLabelText('Финансы абонента')).not.toBeInTheDocument()
+})
+
+it('keeps numeric login and account matches separate and lets staff choose an account', async () => {
+  vi.mocked(ticketApi.searchSubscribers).mockResolvedValue({ items: [
+    { subscriber_id: '1', full_name: 'Первый абонент', login: 'alpha', account_nos: ['4951', '4952'] },
+    { subscriber_id: '2', full_name: 'Второй абонент', login: '4951', account_nos: ['7000'] },
+  ], has_more: false })
+  vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  renderPage('operator', '/subscribers')
+  fireEvent.change(screen.getByRole('textbox', { name: 'ФИО, логин или лицевой счёт' }), { target: { value: '4951' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByText('Первый абонент')).toBeInTheDocument()
+  expect(screen.getByText('Второй абонент')).toBeInTheDocument()
+  expect(ticketApi.lookup).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Открыть ЛС 4952' }))
+  await waitFor(() => expect(ticketApi.lookup).toHaveBeenCalledWith('4952', expect.anything()))
+})
+
+it('shows empty and unavailable NetUP search states', async () => {
+  const view = renderPage('operator', '/subscribers')
+  fireEvent.change(screen.getByRole('textbox', { name: 'ФИО, логин или лицевой счёт' }), { target: { value: 'Неизвестный' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByText('Совпадений не найдено.')).toBeInTheDocument()
+  view.unmount()
+  vi.mocked(ticketApi.searchSubscribers).mockRejectedValue(new ApiError(503, 'billing_unavailable'))
+  renderPage('operator', '/subscribers')
+  fireEvent.change(screen.getByRole('textbox', { name: 'ФИО, логин или лицевой счёт' }), { target: { value: 'Иван' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByText('NetUP сейчас недоступен. Повторите поиск позже.')).toBeInTheDocument()
 })
 
 it('does not invent currency or calculate an unreliable available balance', async () => {
