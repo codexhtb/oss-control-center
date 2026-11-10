@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, LayoutGrid, LogOut, MessageCircle, PanelLeftClose, Search, Settings, Ticket, Trash2 } from 'lucide-react'
+import { ArrowRight, BarChart3, LayoutGrid, LogOut, MessageCircle, PanelLeftClose, Search, Settings, Ticket, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import type { MeResponse, Role } from '../shared/api/types'
@@ -51,6 +51,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
             <LayoutGrid size={18} /> <span>Обзор</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>
           {(session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own')) && <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Ticket size={18} /> <span>Заявки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
+          {(session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own')) && <NavLink to="/reports" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><BarChart3 size={18} /> <span>Отчёты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           {session.permissions.includes('subscribers.read') && <NavLink to="/subscribers" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Search size={18} /> <span>Абоненты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><MessageCircle size={18} /> <span>Чат</span>{!!chat.data?.unread_count && <span className="chat-nav-count" aria-label={`Непрочитанных: ${chat.data.unread_count}`}>{chat.data.unread_count > 99 ? '99+' : chat.data.unread_count}</span>}</NavLink>
           {(session.permissions.includes('users.manage') || session.permissions.includes('settings.manage') || session.permissions.includes('tickets.read.all')) && <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Settings size={18} /> <span>Настройки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}

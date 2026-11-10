@@ -17,6 +17,7 @@
 - [OSS Diagnostics — read-only мониторинг](oss-diagnostics.md)
 - [Текущий Identity, Permissions & Ticket Editing](phase3-identity-ticket-editing.md)
 - [Удаление и корзина заявок](ticket-deletion.md)
+- [Reports Phase 1: общая статистика Service Desk](reports-phase-1.md)
 - [Phase 5.1: предупреждение о повторных обращениях](phase-5.1-duplicate-tickets.md)
 - [Категории обращений и телефон звонящего](ticket-categories-caller-phone.md)
 - [Phase 5.7: контрольный обзвон и закрытие](phase-5.7-callback.md)

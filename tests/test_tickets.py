@@ -4805,3 +4805,119 @@ def test_completion_prompt_failure_never_retries_automatically(
         receipt = db.get(FieldDispatchUpdate, update.id)
         assert receipt is not None and receipt.sync_status == "FAILED"
         assert receipt.sync_error_code == expected_code
+
+def test_general_report_period_events_and_operator_scope(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+) -> None:
+    """Events count once, even after a second resolution; INTERNAL never leaks."""
+    from datetime import date
+
+    from app.modules.reports.service import utc_bounds
+
+    assert utc_bounds(date(2026, 11, 10), date(2026, 11, 10)) == (
+        datetime(2026, 11, 9, 21, tzinfo=UTC),
+        datetime(2026, 11, 10, 21, tzinfo=UTC),
+    )
+    engineer = seed_user(ticket_engine, "report_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "report_operator", Role.OPERATOR)
+    login(ticket_client, engineer.login)
+    internal = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_type": "INTERNAL",
+            "subject": "Private synthetic report",
+            "description": "Synthetic",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert internal.status_code == 201, internal.text
+    login(ticket_client, operator.login)
+    manual = make_manual_ticket(ticket_client, subject="Visible synthetic report")
+    current = datetime.now(UTC)
+    start = (current + timedelta(hours=3)).date()
+    with Session(ticket_engine) as db:
+        db.add_all(
+            [
+                TicketEvent(
+                    ticket_id=UUID(manual["id"]),
+                    event_type=kind,
+                    actor_id=engineer.id,
+                    event_data={},
+                    ticket_version=index + 2,
+                    occurred_at=current + timedelta(minutes=index),
+                )
+                for index, kind in enumerate(
+                    (
+                        "ticket_resolved",
+                        "callback_returned_engineers",
+                        "ticket_resolved",
+                        "callback_confirmed_closed",
+                    )
+                )
+            ]
+        )
+        db.commit()
+    params = {"start": start.isoformat(), "end": start.isoformat(), "page": 1, "size": 1}
+    response = ticket_client.get("/api/v1/reports/general", params=params)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["metrics"]["created"] == 1
+    assert body["metrics"]["resolved_events"] == 2
+    assert body["metrics"]["returned_events"] == 1
+    assert body["metrics"]["closed_events"] == 1
+    assert body["metrics"]["average_resolution_seconds"] is not None
+    assert 0 <= body["metrics"]["average_resolution_seconds"] < 120
+    assert body["metrics"]["average_closure_seconds"] is not None
+    assert body["details"]["total"] == 1
+    assert body["details"]["items"][0]["id"] == manual["id"]
+    assert body["distribution"]["types"] == {"MANUAL": 1}
+    assert body["daily"][0]["closed"] == 1
+    assert (
+        ticket_client.get(
+            "/api/v1/reports/general",
+            params={
+                **params,
+                "start": (start + timedelta(days=1)).isoformat(),
+            },
+        ).status_code
+        == 422
+    )
+    assert ticket_client.get(
+        "/api/v1/reports/general", params={**params, "start": "9999-12-31", "end": "9999-12-31"}
+    ).status_code == 422
+    empty = ticket_client.get(
+        "/api/v1/reports/general",
+        params={
+            **params,
+            "start": (start - timedelta(days=20)).isoformat(),
+            "end": (start - timedelta(days=20)).isoformat(),
+        },
+    ).json()
+    assert empty["metrics"]["created"] == 0
+    assert empty["metrics"]["average_resolution_seconds"] is None
+    assert empty["metrics"]["active_now"] == 1
+    login(ticket_client, engineer.login)
+    visible = ticket_client.get("/api/v1/reports/general", params=params).json()
+    assert visible["metrics"]["created"] == 2
+    assert visible["metrics"]["active_now"] == 2
+    assert visible["details"]["total"] == 2
+    assert ticket_client.get("/api/v1/reports/general", params={**params, "page": 2}).json()[
+        "details"
+    ]["items"]
+
+    restricted = seed_user(ticket_engine, "report_restricted", Role.ENGINEER)
+    with Session(ticket_engine) as db:
+        user = db.get(User, restricted.id)
+        assert user is not None
+        user.permissions_customized = True
+        db.add(UserPermission(user_id=user.id, permission=Permission.TICKET_READ_OWN))
+        db.commit()
+    login(ticket_client, restricted.login)
+    own = ticket_client.get("/api/v1/reports/general", params=params)
+    assert own.status_code == 200 and own.json()["metrics"]["created"] == 0
+    with Session(ticket_engine) as db:
+        db.query(UserPermission).filter(UserPermission.user_id == restricted.id).delete()
+        db.commit()
+    assert ticket_client.get("/api/v1/reports/general", params=params).status_code == 403
