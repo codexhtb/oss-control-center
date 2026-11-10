@@ -14,7 +14,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
   assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
-  fieldWorkMessages: vi.fn(), verifyFieldWork: vi.fn(),
+  fieldWorkMessages: vi.fn(), fieldWorkReschedules: vi.fn(), rescheduleFieldWork: vi.fn(), verifyFieldWork: vi.fn(),
   addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
 vi.mock('../features/tickets/settings-api', () => ({ settingsApi: { reasons: vi.fn(), templates: vi.fn() } }))
@@ -72,6 +72,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.engineers).mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
   vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff: null })
   vi.mocked(ticketApi.fieldWorkMessages).mockResolvedValue(empty)
+  vi.mocked(ticketApi.fieldWorkReschedules).mockResolvedValue(empty)
   vi.mocked(ticketApi.ticketOnu).mockResolvedValue({
     source: 'BDCOM', retrieved_at: base.created_at,
     availability: 'UNAVAILABLE', association: 'UNCONFIRMED', candidates: [],
@@ -373,6 +374,44 @@ it.each(['SENDING', 'SENT', 'UNCERTAIN'] as const)('locks Telegram text in %s', 
   expect(screen.queryByRole('textbox', { name: 'Текст сообщения для Telegram' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Восстановить исходный текст' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Отправить боту' })).not.toBeInTheDocument()
+})
+
+it('shows visit schedule history and lets a permitted engineer agree a new date', async () => {
+  const staff = session('engineer')
+  const privileged: MeResponse = { ...staff, permissions: [...staff.permissions, 'tickets.field_work'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  const handoff = {
+    id: '00000000-0000-4000-8000-000000000040', ticket_id: ticketId,
+    reason: 'Проверка', delivery_status: 'SENT' as const,
+    work_status: 'AWAITING_REPORT' as const, chat_id: '-1004473201977',
+    direction: 'OCHAMCHIRA' as const, group_name: 'OSS Ochamchira',
+    schedule_status: 'DATE_PENDING' as const, scheduled_for: null, schedule_version: 1,
+    schedule_reason: 'Абонент попросил перенести', scheduled_by_name: 'Монтажник',
+    schedule_changed_at: base.created_at, telegram_message_id: 701,
+    message_preview: 'Заявка #73', ready_to_send: false, missing_fields: [],
+    created_by: staff.user.id, sent_by: staff.user.id, sent_by_name: null,
+    last_error_code: null, created_at: base.created_at, send_started_at: base.created_at,
+    sent_at: base.created_at, reported_at: null, verified_by: null,
+    verified_by_name: null, verified_at: null, updated_at: base.updated_at,
+  }
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff })
+  vi.mocked(ticketApi.fieldWorkReschedules).mockResolvedValue({
+    items: [{ id: '00000000-0000-4000-8000-000000000041', handoff_id: handoff.id,
+      schedule_version: 1, reason: 'Абонент попросил перенести', scheduled_for: null,
+      source: 'TELEGRAM', author_name: 'Монтажник', created_at: base.created_at }],
+    page: 1, size: 20, total: 1,
+  })
+  vi.mocked(ticketApi.rescheduleFieldWork).mockResolvedValue({ ...handoff, schedule_version: 2, schedule_status: 'SCHEDULED' })
+  renderDetail('engineer', privileged)
+  expect(await screen.findByText('Выезд перенесён — дата не согласована')).toBeInTheDocument()
+  expect(screen.getByText('Группа: OSS Ochamchira')).toBeInTheDocument()
+  expect(await screen.findByText(/Абонент попросил перенести · Монтажник/)).toBeInTheDocument()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Причина изменения даты' }), { target: { value: 'Согласовано с абонентом' } })
+  fireEvent.change(screen.getByLabelText('Новая дата и время выезда'), { target: { value: '2030-06-15T15:30' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить дату' }))
+  await waitFor(() => expect(ticketApi.rescheduleFieldWork).toHaveBeenCalledWith(
+    ticketId, handoff.id, 'Согласовано с абонентом', '2030-06-15T15:30:00+03:00', 1,
+  ))
 })
 
 it('offers explicit takeover of another engineer ticket only with assignment rights', async () => {

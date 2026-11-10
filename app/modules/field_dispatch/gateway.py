@@ -36,6 +36,17 @@ def completion_prompt_text(username: str | None) -> str:
     return f"Что было сделано?\n@{username}" if username else "Что было сделано?"
 
 
+def reschedule_prompt_text(username: str | None) -> str:
+    base = (
+        "Укажите перенос одним ответом на это сообщение:\n"
+        "Причина: <почему переносится выезд>\n"
+        "Дата: ДД.ММ.ГГГГ ЧЧ:ММ (время Абхазии)\n"
+        "Если дату не согласовали: Дата: не согласована\n"
+        "Для отмены ответьте /cancel."
+    )
+    return f"{base}\n@{username}" if username else base
+
+
 @dataclass(frozen=True)
 class TelegramGatewayConfig:
     token_file: Path
@@ -113,9 +124,15 @@ class TelegramBotGateway:
             "disable_web_page_preview": True,
         }
         if completion_callback_data is not None:
+            reschedule_data = completion_callback_data.replace(
+                "field_done:", "field_reschedule:", 1
+            )
             parameters["reply_markup"] = {
                 "inline_keyboard": [
-                    [{"text": "✅ Выполнено", "callback_data": completion_callback_data}]
+                    [
+                        {"text": "✅ Выполнено", "callback_data": completion_callback_data},
+                        {"text": "📅 Перенести", "callback_data": reschedule_data},
+                    ]
                 ]
             }
         result = self._call("sendMessage", parameters)
@@ -178,6 +195,34 @@ class TelegramBotGateway:
             "reply_markup": {
                 "force_reply": True,
                 "input_field_placeholder": "Опишите выполненные работы",
+            },
+        }
+        if username:
+            parameters["reply_markup"]["selective"] = True
+        result = self._call("sendMessage", parameters)
+        if not isinstance(result, dict):
+            raise DispatchUncertain from None
+        result_chat = result.get("chat")
+        message_id = result.get("message_id")
+        confirmed_chat = result_chat.get("id") if isinstance(result_chat, dict) else None
+        if str(confirmed_chat) != chat_id or not isinstance(message_id, int):
+            raise DispatchUncertain from None
+        return DispatchReceipt(chat_id=chat_id, message_id=str(message_id))
+
+    def send_reschedule_prompt(
+        self, chat_id: str, handoff_message_id: int, *, username: str | None = None
+    ) -> DispatchReceipt:
+        _validate_chat_id(chat_id)
+        parameters: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": reschedule_prompt_text(username),
+            "reply_parameters": {
+                "message_id": handoff_message_id,
+                "allow_sending_without_reply": False,
+            },
+            "reply_markup": {
+                "force_reply": True,
+                "input_field_placeholder": "Причина и новая дата или «не согласована»",
             },
         }
         if username:

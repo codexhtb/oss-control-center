@@ -16,6 +16,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
+    FieldWorkReschedule,
 )
 from app.modules.field_dispatch.service import create_handoff
 from app.modules.identity.access import has_permission
@@ -407,6 +408,7 @@ def purge_ticket(
         delete(FieldReportNotification).where(FieldReportNotification.id.in_(notification_ids))
     )
     db.execute(delete(FieldExternalMessage).where(FieldExternalMessage.handoff_id.in_(handoff_ids)))
+    db.execute(delete(FieldWorkReschedule).where(FieldWorkReschedule.handoff_id.in_(handoff_ids)))
     db.execute(
         delete(FieldWorkCompletionPrompt).where(
             FieldWorkCompletionPrompt.handoff_id.in_(handoff_ids)

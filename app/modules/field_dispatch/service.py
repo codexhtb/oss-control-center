@@ -27,7 +27,9 @@ from app.modules.field_dispatch.models import (
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
+    FieldWorkReschedule,
 )
+from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
 from app.modules.field_dispatch.schemas import FieldWorkHandoffView
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
@@ -155,14 +157,23 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
     )
     completion_prompt = db.scalar(
         select(FieldWorkCompletionPrompt)
-        .where(FieldWorkCompletionPrompt.handoff_id == handoff.id)
+        .where(
+            FieldWorkCompletionPrompt.handoff_id == handoff.id,
+            FieldWorkCompletionPrompt.prompt_type == "COMPLETION",
+        )
         .order_by(FieldWorkCompletionPrompt.created_at.desc(), FieldWorkCompletionPrompt.id.desc())
         .limit(1)
     )
+    latest_schedule = db.scalar(select(FieldWorkReschedule).where(
+        FieldWorkReschedule.handoff_id == handoff.id
+    ).order_by(FieldWorkReschedule.schedule_version.desc()).limit(1))
     return FieldWorkHandoffView.model_validate(handoff).model_copy(
         update={
             "message_preview": handoff.message_text or data.text,
             "group_name": direction_title(handoff.direction),
+            "schedule_reason": latest_schedule.reason if latest_schedule else None,
+            "scheduled_by_name": latest_schedule.author_name if latest_schedule else None,
+            "schedule_changed_at": latest_schedule.created_at if latest_schedule else None,
             "generated_preview": data.text,
             "ready_to_send": not data.missing and handoff.delivery_status in {"DRAFT", "FAILED"},
             "missing_fields": list(data.missing),
@@ -448,4 +459,38 @@ def handoff_messages(
             .limit(size)
         )
     )
+    return items, total
+
+
+def reschedule_handoff(
+    db: Session, actor_id: UUID, ticket_id: UUID, handoff_id: UUID,
+    reason: str, scheduled_for: datetime, expected_version: int,
+) -> FieldWorkHandoff:
+    actor = _actor(db, actor_id)
+    handoff = db.scalar(select(FieldWorkHandoff).where(
+        FieldWorkHandoff.id == handoff_id,
+        FieldWorkHandoff.ticket_id == ticket_id,
+    ).with_for_update())
+    if handoff is None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    if active_prompt(db, handoff.id) is not None:
+        raise ApiError(409, "field_dialog_active", "A Telegram dialog is still active")
+    record_reschedule(
+        db, handoff, reason=reason, scheduled_for=scheduled_for,
+        source="OSS", author_name=actor.display_name, actor_id=actor.id,
+        expected_version=expected_version,
+    )
+    db.commit()
+    db.refresh(handoff)
+    return handoff
+
+
+def handoff_reschedules(
+    db: Session, handoff_id: UUID, page: int, size: int,
+) -> tuple[list[FieldWorkReschedule], int]:
+    where = FieldWorkReschedule.handoff_id == handoff_id
+    total = db.scalar(select(func.count()).select_from(FieldWorkReschedule).where(where)) or 0
+    items = list(db.scalars(select(FieldWorkReschedule).where(where)
+        .order_by(FieldWorkReschedule.schedule_version.desc())
+        .offset((page - 1) * size).limit(size)))
     return items, total

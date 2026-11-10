@@ -1,5 +1,7 @@
 # API contracts — Phase 1
 
+**График выездных работ (`0040`):** `GET /api/v1/tickets/{ticket_id}/field-work-handoffs/latest` дополнен `schedule_status`, `scheduled_for`, `schedule_version`, причиной, автором и временем последней смены. `GET /api/v1/tickets/{ticket_id}/field-work-handoffs/{handoff_id}/reschedules?page=&size=` возвращает постраничную историю при доступе к заявке и `tickets.field_work`. `POST` на тот же путь принимает `{reason, scheduled_for, expected_version}` с явным UTC+03:00, требует `tickets.field_work` и CSRF, блокирует уже завершённую передачу, активный Telegram-диалог и устаревшую версию (`409`). Причина и время не меняют заявку или Telegram-карточку.
+
 **Дополнение `0035_erroneous_payment_ticket`:** `POST /api/v1/tickets` принимает
 `{ticket_type:"ERRONEOUS_PAYMENT", caller_full_name, correct_account_no,
 erroneous_account_no, payment_occurred_at, payment_amount, description?,

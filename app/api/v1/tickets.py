@@ -22,13 +22,17 @@ from app.modules.field_dispatch.models import FieldWorkHandoff
 from app.modules.field_dispatch.schemas import (
     FieldExternalMessagePage,
     FieldWorkHandoffView,
+    FieldWorkReschedulePage,
     LatestFieldWorkHandoff,
+    RescheduleFieldWork,
     SendFieldWork,
 )
 from app.modules.field_dispatch.service import (
     handoff_messages,
+    handoff_reschedules,
     handoff_view,
     latest_handoff,
+    reschedule_handoff,
     send_handoff,
     verify_handoff,
 )
@@ -852,6 +856,40 @@ def field_work_messages(
         raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
     items, total = handoff_messages(db, handoff_id, page, size)
     return {"items": items, "page": page, "size": size, "total": total}
+
+
+@router.get(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/reschedules",
+    response_model=FieldWorkReschedulePage,
+)
+def field_work_reschedules(
+    ticket_id: UUID, handoff_id: UUID, identity: FieldReadDep, db: SessionDep,
+    page: PageNumber = 1, size: PageSize = 20,
+):
+    _mutation_scope(db, identity, ticket_id)
+    handoff = db.scalar(select(FieldWorkHandoff.id).where(
+        FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id
+    ))
+    if handoff is None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    items, total = handoff_reschedules(db, handoff_id, page, size)
+    return {"items": items, "page": page, "size": size, "total": total}
+
+
+@router.post(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/reschedules",
+    response_model=FieldWorkHandoffView,
+)
+def set_field_work_schedule(
+    ticket_id: UUID, handoff_id: UUID, payload: RescheduleFieldWork,
+    identity: FieldDep, db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = reschedule_handoff(
+        db, identity.user.id, ticket_id, handoff_id, payload.reason,
+        payload.scheduled_for, payload.expected_version,
+    )
+    return handoff_view(db, item, identity.user)
 
 
 @router.post(

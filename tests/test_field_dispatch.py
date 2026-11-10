@@ -93,6 +93,10 @@ def test_gateway_accepts_dynamic_group_and_requires_confirmed_receipt(
         "text": "✅ Выполнено",
         "callback_data": "field_done:00000000-0000-4000-8000-000000000001",
     }
+    assert request_body["reply_markup"]["inline_keyboard"][0][1] == {
+        "text": "📅 Перенести",
+        "callback_data": "field_reschedule:00000000-0000-4000-8000-000000000001",
+    }
     FakeConnection.response = FakeResponse(
         200, {"ok": True, "result": {"message_id": 72, "chat": {"id": -7654321}}}
     )
@@ -221,6 +225,27 @@ def test_gateway_deletes_only_requested_message(
         TelegramBotGateway(TelegramGatewayConfig(path)).edit_handoff_card(
             "-5319791765", 701, "✅ Выполнено"
         )
+
+
+def test_gateway_asks_reschedule_only_for_confirmed_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = token_file(tmp_path)
+    monkeypatch.setattr("http.client.HTTPSConnection", FakeConnection)
+    FakeConnection.response = FakeResponse(
+        200, {"ok": True, "result": {"message_id": 704, "chat": {"id": -5319791765}}}
+    )
+    receipt = TelegramBotGateway(TelegramGatewayConfig(path)).send_reschedule_prompt(
+        "-5319791765", 701, username="installer_1"
+    )
+    assert receipt.message_id == "704"
+    args, kwargs = FakeConnection.request_args or ((), {})
+    assert args[1].endswith("/sendMessage")
+    body = json.loads(kwargs["body"])
+    assert body["reply_parameters"]["message_id"] == 701
+    assert body["reply_markup"]["force_reply"] is True
+    assert body["reply_markup"]["selective"] is True
+    assert "Дата: не согласована" in body["text"]
 
 
 @pytest.mark.integration

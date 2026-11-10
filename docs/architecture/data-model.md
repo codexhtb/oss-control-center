@@ -1,5 +1,7 @@
 # Модель данных и ERD
 
+**`0040_field_work_rescheduling`:** `field_work_handoffs.schedule_status` (`ORIGINAL`/`DATE_PENDING`/`SCHEDULED`), `scheduled_for` и `schedule_version` хранят актуальный график независимо от состояния работ. `field_work_reschedules` хранит неизменяемые версии причины, даты, автора, источника OSS/Telegram и связанных Telegram ID; уникальный `update_record_id` защищает импорт от дублей. Исторические передачи получают `ORIGINAL`, версию `0` и пустую дату. `field_work_completion_prompts.prompt_type` разделяет завершение и перенос, `CANCELED` закрывает отменённый диалог. Статус заявки, отчёт и подтверждение инженером остаются независимыми.
+
 **Дополнение `0035_erroneous_payment_ticket`:** `tickets.ticket_type` допускает
 `ERRONEOUS_PAYMENT`; nullable поля `correct_account_no`, `erroneous_account_no`
 (`varchar(100)`), `payment_occurred_at` (`timestamptz`), `payment_amount`

@@ -26,7 +26,9 @@ from app.modules.field_dispatch.models import (
     FieldExternalMessage,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
+    FieldWorkReschedule,
 )
+from app.modules.field_dispatch.rescheduling import ABKHAZIA
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 
 logger = logging.getLogger(__name__)
@@ -88,7 +90,12 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     db.commit()
     try:
         destination = current_chat_id(db, prompt.chat_id)
-        if prompt.recipient_username:
+        if prompt.prompt_type == "RESCHEDULE":
+            receipt = gateway.send_reschedule_prompt(
+                destination, handoff.telegram_message_id,
+                username=prompt.recipient_username,
+            )
+        elif prompt.recipient_username:
             receipt = gateway.send_completion_prompt(
                 destination, handoff.telegram_message_id, username=prompt.recipient_username
             )
@@ -127,7 +134,8 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
         db.add(
             TicketEvent(
                 ticket_id=handoff.ticket_id,
-                event_type="field_work_description_requested",
+                event_type=("field_work_reschedule_requested" if prompt.prompt_type == "RESCHEDULE"
+                            else "field_work_description_requested"),
                 actor_id=None,
                 event_data={"handoff_id": str(handoff.id)},
                 ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
@@ -137,7 +145,8 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
             TicketAudit(
                 ticket_id=handoff.ticket_id,
                 actor_id=None,
-                action="field_work_description_requested",
+                action=("field_work_reschedule_requested" if prompt.prompt_type == "RESCHEDULE"
+                        else "field_work_description_requested"),
                 outcome="success",
                 origin="SYSTEM",
             )
@@ -157,7 +166,12 @@ def _sync_callback(
     prompt_id: UUID,
 ) -> None:
     try:
-        gateway.acknowledge_callback(callback_id, "Опишите выполненные работы в ответе боту")
+        prompt = db.get(FieldWorkCompletionPrompt, prompt_id)
+        gateway.acknowledge_callback(
+            callback_id,
+            "Укажите причину и дату в ответе боту" if prompt and prompt.prompt_type == "RESCHEDULE"
+            else "Опишите выполненные работы в ответе боту",
+        )
     except (DispatchRejected, DispatchUncertain):
         # The durable prompt is still sent even if Telegram could not display the toast.
         pass
@@ -172,7 +186,7 @@ def _delete_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) ->
     )
     if (
         prompt is None
-        or prompt.status != "COMPLETED"
+        or prompt.status not in {"COMPLETED", "CANCELED"}
         or prompt.telegram_message_id is None
         or prompt.deletion_status not in {"PENDING", "SENDING", "FAILED"}
         or prompt.deletion_attempts >= 5
@@ -305,6 +319,7 @@ def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -
     prompt_id = db.scalar(
         select(FieldWorkCompletionPrompt.id).where(
             FieldWorkCompletionPrompt.handoff_id == record.handoff_id,
+            FieldWorkCompletionPrompt.prompt_type == "COMPLETION",
             FieldWorkCompletionPrompt.status == "COMPLETED",
             FieldWorkCompletionPrompt.deletion_status != "NOT_REQUIRED",
         )
@@ -325,11 +340,75 @@ def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -
             )
 
 
+def _sync_reschedule(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
+    record = db.scalar(select(FieldDispatchUpdate).where(
+        FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
+        FieldDispatchUpdate.update_id == update_id,
+        FieldDispatchUpdate.kind.in_(("RESCHEDULE_REPORT", "RESCHEDULE_CANCEL")),
+        FieldDispatchUpdate.outcome == "PROCESSED",
+    ).with_for_update())
+    if record is None or record.handoff_id is None or record.confirmation_status != "PENDING":
+        db.rollback()
+        return
+    handoff = db.get(FieldWorkHandoff, record.handoff_id)
+    if handoff is None:
+        db.rollback()
+        return
+    if record.kind == "RESCHEDULE_CANCEL":
+        text = "📅 Диалог переноса отменён. Выезд не изменён."
+    else:
+        item = db.scalar(select(FieldWorkReschedule).where(
+            FieldWorkReschedule.update_record_id == record.id
+        ))
+        if item is None:
+            db.rollback()
+            return
+        date_text = (
+            item.scheduled_for.astimezone(ABKHAZIA).strftime("%d.%m.%Y %H:%M")
+            if item.scheduled_for else "дата не согласована"
+        )
+        text = f"📅 Перенос выезда сохранён. {date_text} (время Абхазии)."
+    record.confirmation_status = "SENDING"
+    db.commit()
+    try:
+        gateway.send_message(current_chat_id(db, handoff.chat_id), text)
+    except DispatchRejected as exc:
+        record.confirmation_status = "FAILED"
+        record.confirmation_error_code = exc.code
+    except DispatchUncertain:
+        record.confirmation_status = "UNCERTAIN"
+        record.confirmation_error_code = "telegram_transport_uncertain"
+    else:
+        record.confirmation_status = "SENT"
+        record.confirmation_error_code = None
+    db.commit()
+
+
+def _sync_invalid_reschedule(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
+    record = db.scalar(select(FieldDispatchUpdate).where(
+        FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
+        FieldDispatchUpdate.update_id == update_id,
+        FieldDispatchUpdate.kind == "RESCHEDULE_INVALID",
+    ))
+    handoff = db.get(FieldWorkHandoff, record.handoff_id) if record and record.handoff_id else None
+    if handoff is None:
+        return
+    try:
+        gateway.send_message(
+            current_chat_id(db, handoff.chat_id),
+            "Не удалось сохранить перенос. Ответьте на вопрос бота строго в формате:\n"
+            "Причина: ...\nДата: ДД.ММ.ГГГГ ЧЧ:ММ или Дата: не согласована "
+            "(время Абхазии; дата должна быть в будущем).",
+        )
+    except (DispatchRejected, DispatchUncertain):
+        pass
+
+
 def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
     cleanup_ids = db.scalars(
         select(FieldWorkCompletionPrompt.id)
         .where(
-            FieldWorkCompletionPrompt.status == "COMPLETED",
+            FieldWorkCompletionPrompt.status.in_(("COMPLETED", "CANCELED")),
             FieldWorkCompletionPrompt.deletion_status.in_(("PENDING", "SENDING", "FAILED")),
             FieldWorkCompletionPrompt.deletion_attempts < 5,
         )
@@ -385,6 +464,14 @@ def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
     for record in records:
         _sync_completion(db, gateway, record.update_id)
 
+    confirmations = db.scalars(select(FieldDispatchUpdate).where(
+        FieldDispatchUpdate.kind.in_(("RESCHEDULE_REPORT", "RESCHEDULE_CANCEL")),
+        FieldDispatchUpdate.outcome == "PROCESSED",
+        FieldDispatchUpdate.confirmation_status == "PENDING",
+    ).order_by(FieldDispatchUpdate.received_at.asc()).limit(50)).all()
+    for record in confirmations:
+        _sync_reschedule(db, gateway, record.update_id)
+
 
 def poll_once() -> int:
     token_file = os.environ.get("TELEGRAM_BOT_TOKEN_FILE")
@@ -400,13 +487,16 @@ def poll_once() -> int:
             if result is None:
                 result = process_update(db, update)
             if (
-                result.kind == "COMPLETION_CALLBACK"
+                result.kind in {"COMPLETION_CALLBACK", "RESCHEDULE_CALLBACK"}
                 and result.outcome == "PROCESSED"
                 and result.callback_query_id
                 and result.prompt_id
             ):
                 _sync_callback(db, gateway, result.callback_query_id, result.prompt_id)
-            elif result.kind == "COMPLETION_CALLBACK" and result.callback_query_id:
+            elif (
+                result.kind in {"COMPLETION_CALLBACK", "RESCHEDULE_CALLBACK"}
+                and result.callback_query_id
+            ):
                 try:
                     active_prompt = (
                         db.get(FieldWorkCompletionPrompt, result.prompt_id)
@@ -417,6 +507,8 @@ def poll_once() -> int:
                         text = "Доставка вопроса не подтверждена, сообщите инженеру"
                     elif active_prompt is not None:
                         text = "Ответьте на вопрос бота"
+                    elif result.kind == "RESCHEDULE_CALLBACK":
+                        text = "Перенос сейчас недоступен"
                     elif result.handoff_id is not None:
                         text = "Отчёт уже получен"
                     else:
@@ -426,6 +518,16 @@ def poll_once() -> int:
                     pass
             elif result.kind == "COMPLETION_REPORT" and result.outcome == "PROCESSED":
                 _sync_completion(db, gateway, result.update_id)
+            elif (
+                result.kind in {"RESCHEDULE_REPORT", "RESCHEDULE_CANCEL"}
+                and result.outcome == "PROCESSED"
+            ):
+                _sync_reschedule(db, gateway, result.update_id)
+            elif (
+                result.kind == "RESCHEDULE_INVALID" and result.outcome == "DENIED"
+                and not result.duplicate
+            ):
+                _sync_invalid_reschedule(db, gateway, result.update_id)
         return len(updates)
 
 

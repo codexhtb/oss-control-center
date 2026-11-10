@@ -40,6 +40,16 @@ class FieldWorkHandoff(Base):
             name="ck_field_handoffs_direction",
         ),
         CheckConstraint(
+            "schedule_status IN ('ORIGINAL','DATE_PENDING','SCHEDULED')",
+            name="ck_field_handoffs_schedule_status",
+        ),
+        CheckConstraint(
+            "(schedule_status = 'SCHEDULED' AND scheduled_for IS NOT NULL) OR "
+            "(schedule_status <> 'SCHEDULED' AND scheduled_for IS NULL)",
+            name="ck_field_handoffs_schedule_date",
+        ),
+        CheckConstraint("schedule_version >= 0", name="ck_field_handoffs_schedule_version"),
+        CheckConstraint(
             "(delivery_status = 'SENT' AND telegram_message_id IS NOT NULL "
             "AND sent_at IS NOT NULL AND sent_by IS NOT NULL) OR "
             "(delivery_status <> 'SENT' AND telegram_message_id IS NULL "
@@ -82,6 +92,11 @@ class FieldWorkHandoff(Base):
     )
     chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
     direction: Mapped[str | None] = mapped_column(String(16))
+    schedule_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="ORIGINAL"
+    )
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     message_text: Mapped[str | None] = mapped_column(Text)
     visit_address: Mapped[str | None] = mapped_column(String(500))
@@ -159,6 +174,7 @@ class FieldDispatchUpdate(Base):
         UniqueConstraint("bot_identity", "update_id", name="uq_field_updates_bot_update"),
         CheckConstraint(
             "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT',"
+            "'RESCHEDULE_CALLBACK','RESCHEDULE_REPORT','RESCHEDULE_CANCEL','RESCHEDULE_INVALID',"
             "'GROUP_BIND','GROUP_STATUS','GROUP_EVENT','UNSUPPORTED')",
             name="ck_field_updates_kind",
         ),
@@ -289,8 +305,11 @@ class FieldWorkCompletionPrompt(Base):
     __table_args__ = (
         UniqueConstraint("callback_update_id", name="uq_field_prompts_callback_update"),
         CheckConstraint(
-            "status IN ('REQUESTING','WAITING','FAILED','UNCERTAIN','COMPLETED')",
+            "status IN ('REQUESTING','WAITING','FAILED','UNCERTAIN','COMPLETED','CANCELED')",
             name="ck_field_prompts_status",
+        ),
+        CheckConstraint(
+            "prompt_type IN ('COMPLETION','RESCHEDULE')", name="ck_field_prompts_type"
         ),
         CheckConstraint(
             "(status = 'REQUESTING' AND telegram_message_id IS NULL AND sent_at IS NULL "
@@ -299,7 +318,8 @@ class FieldWorkCompletionPrompt(Base):
             "AND completed_at IS NULL AND error_code IS NULL) OR "
             "(status IN ('FAILED','UNCERTAIN') AND telegram_message_id IS NULL "
             "AND sent_at IS NULL AND completed_at IS NULL AND error_code IS NOT NULL) OR "
-            "(status = 'COMPLETED' AND telegram_message_id IS NOT NULL AND sent_at IS NOT NULL "
+            "(status IN ('COMPLETED','CANCELED') AND telegram_message_id IS NOT NULL "
+            "AND sent_at IS NOT NULL "
             "AND completed_at IS NOT NULL AND error_code IS NULL)",
             name="ck_field_prompts_receipt",
         ),
@@ -339,6 +359,9 @@ class FieldWorkCompletionPrompt(Base):
     sender_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sender_name: Mapped[str] = mapped_column(String(160), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+    prompt_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="COMPLETION"
+    )
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     error_code: Mapped[str | None] = mapped_column(String(80))
     recipient_username: Mapped[str | None] = mapped_column(String(32))
@@ -353,6 +376,41 @@ class FieldWorkCompletionPrompt(Base):
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FieldWorkReschedule(Base):
+    """Append-only history of agreed and pending visit changes."""
+
+    __tablename__ = "field_work_reschedules"
+    __table_args__ = (
+        CheckConstraint("source IN ('TELEGRAM','OSS')", name="ck_field_reschedules_source"),
+        CheckConstraint("length(btrim(reason)) > 0", name="ck_field_reschedules_reason"),
+        Index("ix_field_reschedules_handoff_created", "handoff_id", "created_at", "id"),
+        UniqueConstraint("update_record_id", name="uq_field_reschedules_update"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    handoff_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(2000), nullable=False)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    author_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    actor_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(32))
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    update_record_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("field_dispatch_updates.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class FieldDispatchGroupBinding(Base):

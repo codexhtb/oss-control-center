@@ -10,8 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.errors import ApiError
 from app.modules.field_dispatch.binding import chat_id_aliases, current_binding
-from app.modules.field_dispatch.gateway import completion_prompt_text
+from app.modules.field_dispatch.gateway import completion_prompt_text, reschedule_prompt_text
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
@@ -19,11 +20,14 @@ from app.modules.field_dispatch.models import (
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
 )
+from app.modules.field_dispatch.rescheduling import parse_telegram_reschedule, record_reschedule
 from app.modules.identity import models as identity_models  # noqa: F401 - register audit FK metadata
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
+from app.modules.tickets.status import TicketStatus
 
 BOT_IDENTITY = "oss_field_service_bot"
 COMPLETION_PREFIX = "field_done:"
+RESCHEDULE_PREFIX = "field_reschedule:"
 ACTIVE_PROMPT_STATUSES = ("REQUESTING", "WAITING", "UNCERTAIN")
 
 
@@ -131,13 +135,18 @@ def _callback(
     sender_name: str,
     accepted_chat_ids: set[str],
 ) -> InboundResult:
-    kind = "COMPLETION_CALLBACK"
     callback_id = callback.get("id")
     callback_data = callback.get("data")
-    if not isinstance(callback_data, str) or not callback_data.startswith(COMPLETION_PREFIX):
-        return _ignored(db, update_id, kind, "IGNORED", "telegram_callback_unknown")
+    if isinstance(callback_data, str) and callback_data.startswith(COMPLETION_PREFIX):
+        kind, prompt_type, prefix = "COMPLETION_CALLBACK", "COMPLETION", COMPLETION_PREFIX
+    elif isinstance(callback_data, str) and callback_data.startswith(RESCHEDULE_PREFIX):
+        kind, prompt_type, prefix = "RESCHEDULE_CALLBACK", "RESCHEDULE", RESCHEDULE_PREFIX
+    else:
+        return _ignored(
+            db, update_id, "COMPLETION_CALLBACK", "IGNORED", "telegram_callback_unknown"
+        )
     try:
-        requested_handoff = UUID(callback_data[len(COMPLETION_PREFIX) :])
+        requested_handoff = UUID(callback_data[len(prefix) :])
     except (ValueError, TypeError):
         return _ignored(db, update_id, kind, "IGNORED", "telegram_callback_invalid")
     handoff = db.scalar(
@@ -163,6 +172,21 @@ def _callback(
         return InboundResult(
             update_id, "DUPLICATE", kind, handoff.id, callback_id, sender_name, True
         )
+    if prompt_type == "RESCHEDULE":
+        ticket = db.get(Ticket, handoff.ticket_id)
+        if (
+            ticket is None or ticket.deleted_at is not None
+            or ticket.status != TicketStatus.IN_PROGRESS
+        ):
+            receipt, created = _receipt(
+                db, update_id, kind, "DENIED", handoff_id=handoff.id,
+                error_code="field_reschedule_not_permitted",
+            )
+            db.commit()
+            return InboundResult(
+                update_id, "DENIED" if created else "DUPLICATE", kind,
+                handoff.id, callback_id, sender_name, not created,
+            )
     active = db.scalar(
         select(FieldWorkCompletionPrompt)
         .where(
@@ -204,6 +228,7 @@ def _callback(
         sender_telegram_id=sender_id,
         sender_name=sender_name,
         status="REQUESTING",
+        prompt_type=prompt_type,
         recipient_username=(
             callback["from"]["username"]
             if isinstance(callback.get("from"), dict)
@@ -313,8 +338,10 @@ def _text_reply(
                 )
                 .with_for_update()
             ).all()
-            if len(candidates) == 1 and prompt_text == completion_prompt_text(
-                candidates[0].recipient_username
+            if len(candidates) == 1 and prompt_text == (
+                reschedule_prompt_text(candidates[0].recipient_username)
+                if candidates[0].prompt_type == "RESCHEDULE"
+                else completion_prompt_text(candidates[0].recipient_username)
             ):
                 prompt = candidates[0]
                 prompt.telegram_message_id = reply_message_id
@@ -322,6 +349,75 @@ def _text_reply(
                 prompt.error_code = None
                 prompt.sent_at = _event_time(reply.get("date"))
     if prompt is not None:
+        if prompt.prompt_type == "RESCHEDULE":
+            kind = "RESCHEDULE_REPORT"
+            handoff = db.scalar(select(FieldWorkHandoff).where(
+                FieldWorkHandoff.id == prompt.handoff_id
+            ).with_for_update())
+            if (
+                handoff is None or prompt.status != "WAITING"
+                or handoff.work_status != "AWAITING_REPORT"
+                or handoff.delivery_status != "SENT"
+                or handoff.chat_id not in accepted_chat_ids
+            ):
+                return _ignored(db, update_id, kind, "DENIED", "field_reschedule_not_active")
+            if sender_id != prompt.sender_telegram_id:
+                return _ignored(
+                    db, update_id, "TEXT_REPLY", "DENIED", "field_reschedule_sender_mismatch"
+                )
+            if body == "/cancel":
+                receipt, created = _receipt(
+                    db, update_id, "RESCHEDULE_CANCEL", "PROCESSED", handoff_id=handoff.id,
+                    confirmation_status="PENDING",
+                )
+                if not created:
+                    db.rollback()
+                    return InboundResult(
+                        update_id, "DUPLICATE", "RESCHEDULE_CANCEL", handoff.id,
+                        duplicate=True,
+                    )
+                prompt.status = "CANCELED"
+                prompt.completed_at = _event_time(message.get("date"))
+                prompt.deletion_status = "PENDING"
+                db.commit()
+                return InboundResult(update_id, "PROCESSED", "RESCHEDULE_CANCEL", handoff.id)
+            try:
+                reason, scheduled_for = parse_telegram_reschedule(body)
+            except ValueError as exc:
+                code = str(exc)
+                receipt, created = _receipt(
+                    db, update_id, "RESCHEDULE_INVALID", "DENIED", handoff_id=handoff.id,
+                    error_code=code,
+                )
+                db.commit()
+                return InboundResult(
+                    update_id, "DENIED" if created else "DUPLICATE", "RESCHEDULE_INVALID",
+                    handoff.id, duplicate=not created,
+                )
+            receipt, created = _receipt(
+                db, update_id, kind, "PROCESSED", handoff_id=handoff.id,
+                confirmation_status="PENDING",
+            )
+            if not created:
+                db.rollback()
+                return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+            try:
+                record_reschedule(
+                    db, handoff, reason=reason, scheduled_for=scheduled_for,
+                    source="TELEGRAM", author_name=sender_name,
+                    telegram_user_id=sender_id, telegram_chat_id=str(message["chat"]["id"]),
+                    telegram_message_id=source_message_id, update_record_id=receipt.id,
+                )
+            except ApiError:
+                db.rollback()
+                return _ignored(
+                    db, update_id, kind, "DENIED", "field_reschedule_not_permitted"
+                )
+            prompt.status = "COMPLETED"
+            prompt.completed_at = _event_time(message.get("date"))
+            prompt.deletion_status = "PENDING"
+            db.commit()
+            return InboundResult(update_id, "PROCESSED", kind, handoff.id, sender_name=sender_name)
         kind = "COMPLETION_REPORT"
         handoff = db.scalar(
             select(FieldWorkHandoff)

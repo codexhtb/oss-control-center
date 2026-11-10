@@ -20,6 +20,9 @@ import { connectionConfiguredIpv4, formatSubscriberAddress } from '../features/t
 const callbackLabels: Record<CallbackOutcome, string> = {
   CONFIRMED: 'Проблема устранена', STILL_BROKEN: 'Проблема осталась', NO_ANSWER: 'Не дозвонилась',
 }
+const formatAbkhazia = (value: string) => new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Etc/GMT-3', dateStyle: 'short', timeStyle: 'short',
+}).format(new Date(value))
 
 type TicketTab = 'work' | 'diagnostics' | 'subscriber' | 'history' | 'requests'
 const phoneKey = (phone: string) => {
@@ -78,6 +81,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [revisingDecision, setRevisingDecision] = useState(false)
   const [decisionReason, setDecisionReason] = useState<ResolutionReason>('NOT_ESTABLISHED')
   const [fieldReason, setFieldReason] = useState('')
+  const [scheduleReason, setScheduleReason] = useState('')
+  const [scheduleDate, setScheduleDate] = useState('')
+  const [schedulePage, setSchedulePage] = useState(1)
   const [visitAddress, setVisitAddress] = useState('')
   const [fieldDirection, setFieldDirection] = useState<'' | 'SUKHUM' | 'OCHAMCHIRA'>('')
   const [editedFieldMessage, setEditedFieldMessage] = useState<{ id: string; text: string } | null>(null)
@@ -125,8 +131,15 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const reasonChoices = useQuery({ queryKey: ['decision-reasons', 'active'], queryFn: ({ signal }) => settingsApi.reasons(false, signal), enabled: related && canDecide && (resolved || ticketQuery.data?.status === 'IN_PROGRESS') })
   const callbacks = useQuery({ queryKey: ['ticket-callbacks', id, callbackPage], queryFn: ({ signal }) => ticketApi.callbacks(id, callbackPage, signal), enabled: related && linked && (activeTab === 'history' || (resolved && activeTab === 'work')) })
   const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
-  const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork })
+  const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork, refetchInterval: activeTab === 'work' ? 15000 : false })
   const handoffId = fieldHandoff.data?.handoff?.id
+  const fieldReschedules = useQuery({
+    queryKey: ['ticket-field-reschedules', id, handoffId, schedulePage],
+    queryFn: ({ signal }) => ticketApi.fieldWorkReschedules(id, handoffId!, schedulePage, signal),
+    enabled: !!handoffId && canFieldWork && activeTab === 'work',
+    refetchInterval: activeTab === 'work' ? 15000 : false,
+  })
+  useEffect(() => { setSchedulePage(1) }, [handoffId])
   useEffect(() => {
     setVisitAddress(fieldHandoff.data?.handoff?.visit_address ?? '')
     setFieldDirection(fieldHandoff.data?.handoff?.direction ?? '')
@@ -153,6 +166,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
         queryClient.invalidateQueries({ queryKey: ['ticket-callbacks', id] }),
         queryClient.invalidateQueries({ queryKey: ['ticket-field-work', id] }),
         queryClient.invalidateQueries({ queryKey: ['ticket-field-work-messages', id] }),
+        queryClient.invalidateQueries({ queryKey: ['ticket-field-reschedules', id] }),
         queryClient.invalidateQueries({ queryKey: ['tickets'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       ])
@@ -369,6 +383,26 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                     {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'UNCERTAIN' && <span>Доставка запроса описания не подтверждена.</span>}
                     {fieldHandoff.data.handoff.reported_at && <span>Ответ: {formatDate(fieldHandoff.data.handoff.reported_at)}</span>}
                     {fieldHandoff.data.handoff.verified_at && <span>Подтвердил: {fieldHandoff.data.handoff.verified_by_name || 'инженер'}, {formatDate(fieldHandoff.data.handoff.verified_at)}</span>}
+                  </div>}
+                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-label="Планирование выезда">
+                    <strong>{fieldHandoff.data.handoff.work_status !== 'AWAITING_REPORT' ? 'Выезд выполнен' : fieldHandoff.data.handoff.schedule_status === 'DATE_PENDING' ? 'Выезд перенесён — дата не согласована' : fieldHandoff.data.handoff.schedule_status === 'SCHEDULED' ? 'Выезд перенесён' : 'Выезд ожидает выполнения'}</strong>
+                    {fieldHandoff.data.handoff.scheduled_for && <span>Согласованное время: {formatAbkhazia(fieldHandoff.data.handoff.scheduled_for)} (Абхазия, UTC+3)</span>}
+                    {fieldHandoff.data.handoff.schedule_reason && <span>Причина: {fieldHandoff.data.handoff.schedule_reason}</span>}
+                    {fieldHandoff.data.handoff.scheduled_by_name && fieldHandoff.data.handoff.schedule_changed_at && <span>Перенёс: {fieldHandoff.data.handoff.scheduled_by_name}, {formatAbkhazia(fieldHandoff.data.handoff.schedule_changed_at)} (UTC+3)</span>}
+                  </div>}
+                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && <div className="ticket-action-form">
+                    <strong>Согласовать или изменить дату</strong>
+                    <label className="field"><span>Причина изменения</span><input aria-label="Причина изменения даты" maxLength={2000} value={scheduleReason} onChange={(event) => setScheduleReason(event.target.value)} /></label>
+                    <label className="field"><span>Новая дата и время (Абхазия, UTC+3)</span><input aria-label="Новая дата и время выезда" type="datetime-local" value={scheduleDate} onChange={(event) => setScheduleDate(event.target.value)} /></label>
+                    <Button disabled={!!busy || !scheduleReason.trim() || !scheduleDate || new Date(`${scheduleDate}:00+03:00`).getTime() <= Date.now()} onClick={() => void runAction('field-reschedule', () => ticketApi.rescheduleFieldWork(id, fieldHandoff.data!.handoff!.id, scheduleReason.trim(), `${scheduleDate}:00+03:00`, fieldHandoff.data!.handoff!.schedule_version ?? 0), () => { setScheduleReason(''); setScheduleDate('') })}>Сохранить дату</Button>
+                  </div>}
+                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-replies" aria-label="История переносов">
+                    <strong>История переносов</strong>
+                    {fieldReschedules.isPending && <p className="rail-note">Загружаем историю переносов…</p>}
+                    {fieldReschedules.isError && <Notice tone="error">Не удалось загрузить историю переносов.</Notice>}
+                    {fieldReschedules.data?.items.length === 0 && <p className="rail-note">Переносов пока нет.</p>}
+                    {fieldReschedules.data?.items.map((entry) => <article key={entry.id}><div><strong>{entry.scheduled_for ? formatAbkhazia(entry.scheduled_for) : 'Дата не согласована'}</strong><time dateTime={entry.created_at}>{formatAbkhazia(entry.created_at)} (UTC+3)</time></div><p>{entry.reason} · {entry.author_name}</p></article>)}
+                    <Pager page={schedulePage} total={fieldReschedules.data?.total ?? 0} change={setSchedulePage} />
                   </div>}
                   {fieldMessages.isPending && fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Загружаем ответы монтажников…</p>}
                   {fieldMessages.isError && <Notice tone="error">Не удалось загрузить ответы монтажников.</Notice>}

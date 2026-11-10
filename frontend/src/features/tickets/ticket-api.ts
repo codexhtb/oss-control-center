@@ -6,6 +6,7 @@ import type {
   ResolutionReason,
   FieldWorkHandoff, EditTicketInput,
   FieldExternalMessage,
+  FieldWorkReschedule,
 } from './types'
 
 function withQuery(path: `/api/v1/${string}`, values: Record<string, string | number | boolean | undefined>) {
@@ -119,6 +120,16 @@ export const ticketApi = {
     apiRequest<Page<FieldExternalMessage>>(
       `${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/messages?page=1&size=50`,
       { signal },
+    ),
+  fieldWorkReschedules: (id: string, handoffId: string, page: number, signal?: AbortSignal) =>
+    apiRequest<Page<FieldWorkReschedule>>(
+      `${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/reschedules?page=${page}&size=20`,
+      { signal },
+    ),
+  rescheduleFieldWork: (id: string, handoffId: string, reason: string, scheduledFor: string, expectedVersion: number) =>
+    apiRequest<FieldWorkHandoff>(
+      `${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/reschedules`,
+      { method: 'POST', json: { reason, scheduled_for: scheduledFor, expected_version: expectedVersion } },
     ),
   verifyFieldWork: (id: string, handoffId: string) =>
     apiRequest<FieldWorkHandoff>(
