@@ -19,6 +19,10 @@ export interface InternalTask {
   created_at: string
   updated_at: string
   completed_at: string | null
+  subscriber_name?: string | null
+  phone?: string | null
+  account_no?: string | null
+  latest_answer?: string | null
 }
 export interface TaskEvent {
   id: string
@@ -49,8 +53,8 @@ export const taskApi = {
   },
   get: (id: string, signal?: AbortSignal) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}`, { signal }),
   events: (id: string, page: number, signal?: AbortSignal) => apiRequest<Page<TaskEvent>>(`/api/v1/tasks/${encodeURIComponent(id)}/events?page=${page}&size=50`, { signal }),
-  create: (payload: { ticket_id: string; assignee_id: string; title: string; description: string; due_at: string | null; client_request_id: string }) => apiRequest<InternalTask>('/api/v1/tasks', { method: 'POST', json: payload }),
-  act: (id: string, version: number, kind: Exclude<TaskEventKind, 'CREATED'>, body: string | null, requestId: string) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}/events`, { method: 'POST', ifMatch: `"${version}"`, json: { kind, body, client_request_id: requestId } }),
+  create: (payload: { ticket_id: string; assignee_id: string; description: string; client_request_id: string }) => apiRequest<InternalTask>('/api/v1/tasks', { method: 'POST', json: payload }),
+  act: (id: string, version: number, body: string, requestId: string) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}/events`, { method: 'POST', ifMatch: `"${version}"`, json: { kind: 'COMPLETED', body, client_request_id: requestId } }),
   notifications: (signal?: AbortSignal) => apiRequest<NotificationPage>('/api/v1/tasks/notifications?size=20', { signal }),
   markRead: (id: string) => apiRequest<void>(`/api/v1/tasks/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }),
 }

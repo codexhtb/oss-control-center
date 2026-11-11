@@ -70,6 +70,9 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [tabSelection, setTabSelection] = useState<{ ticketId: string; tab: TicketTab }>({ ticketId: id, tab: 'work' })
   const activeTab = tabSelection.ticketId === id ? tabSelection.tab : 'work'
   const setActiveTab = (tab: TicketTab) => setTabSelection({ ticketId: id, tab })
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has('task')) setTabSelection({ ticketId: id, tab: 'work' })
+  }, [id, location.search])
   const [historyPage, setHistoryPage] = useState(1)
   const [diagnosticPage, setDiagnosticPage] = useState(1)
   const [decisionPage, setDecisionPage] = useState(1)

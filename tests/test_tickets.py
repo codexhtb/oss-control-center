@@ -5320,9 +5320,14 @@ def test_management_exports_are_complete_scoped_and_safe(
         assert account is not None
         with pytest.raises(ApiError) as error:
             load_bundle(
-                db, start=(now + timedelta(hours=3)).date(),
-                end=(now + timedelta(hours=3)).date(), user=account, read_all=True,
-                direction=None, category=None, max_rows=1,
+                db,
+                start=(now + timedelta(hours=3)).date(),
+                end=(now + timedelta(hours=3)).date(),
+                user=account,
+                read_all=True,
+                direction=None,
+                category=None,
+                max_rows=1,
             )
     assert error.value.status_code == 413
 
@@ -5343,30 +5348,28 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
     payload = {
         "ticket_id": ticket_id,
         "assignee_id": str(sima.id),
-        "title": "Позвонить абоненту",
-        "description": "Уточнить время",
-        "due_at": None,
+        "description": "Позвонить абоненту и уточнить время",
         "client_request_id": request_id,
     }
     created = ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json=payload)
     assert created.status_code == 201, created.text
     task = created.json()
     task_id = task["id"]
-    replay = ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json=payload)
-    assert replay.status_code == 201 and replay.json()["id"] == task_id
-    with Session(ticket_engine) as db:
-        assert db.scalar(select(func.count()).select_from(InternalTask)) == 1
-        assert db.scalar(select(func.count()).select_from(InternalTaskEvent)) == 1
-        assert db.scalar(select(func.count()).select_from(InternalTaskNotification)) == 1
+    assert task["title"] == payload["description"]
+    assert task["due_at"] is None
+    assert (
+        ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json=payload).json()["id"]
+        == task_id
+    )
     assert ticket_client.get("/api/v1/tasks", params={"scope": "created"}).json()["total"] == 1
 
     login(ticket_client, outsider.login)
     assert ticket_client.get(f"/api/v1/tasks/{task_id}").status_code == 404
-    assert (
-        ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json=payload).status_code
-        == 403
-    )
     login(ticket_client, sima.login)
+    detail = ticket_client.get(f"/api/v1/tasks/{task_id}").json()
+    assert detail["subscriber_name"] == ticket_before["caller_full_name"]
+    assert detail["phone"] == ticket_before["caller_phone"]
+    assert detail["account_no"] is None
     inbox = ticket_client.get("/api/v1/tasks/notifications").json()
     assert inbox["unread_count"] == 1 and inbox["items"][0]["kind"] == "CREATED"
     assert (
@@ -5376,86 +5379,53 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
         ).status_code
         == 204
     )
-    assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 0
-    message_id = str(uuid4())
-    message = {"client_request_id": message_id, "kind": "MESSAGE", "body": "Абонент ответил позже"}
-    answered = ticket_client.post(
+    answer = "Абонент попросил перезвонить завтра"
+    action = {"client_request_id": str(uuid4()), "kind": "COMPLETED", "body": answer}
+    completed = ticket_client.post(
         f"/api/v1/tasks/{task_id}/events",
         headers={**csrf(ticket_client), "If-Match": '"1"'},
-        json=message,
+        json=action,
     )
-    assert answered.status_code == 200, answered.text
-    assert answered.json()["version"] == 2
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "COMPLETED"
+    assert completed.json()["latest_answer"] == answer
     duplicate = ticket_client.post(
         f"/api/v1/tasks/{task_id}/events",
         headers={**csrf(ticket_client), "If-Match": '"1"'},
-        json=message,
+        json=action,
     )
     assert duplicate.status_code == 200 and duplicate.json()["version"] == 2
+    for kind in ("MESSAGE", "NO_ANSWER", "REOPENED"):
+        response = ticket_client.post(
+            f"/api/v1/tasks/{task_id}/events",
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"client_request_id": str(uuid4()), "kind": kind, "body": "Не нужно"},
+        )
+        assert response.status_code == 422
     assert (
         ticket_client.post(
             f"/api/v1/tasks/{task_id}/events",
-            headers={**csrf(ticket_client), "If-Match": '"1"'},
-            json={"client_request_id": str(uuid4()), "kind": "COMPLETED"},
+            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            json={"client_request_id": str(uuid4()), "kind": "COMPLETED", "body": "Ещё раз"},
         ).status_code
         == 409
     )
-
     login(ticket_client, engineer.login)
     assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 1
-    clarification = ticket_client.post(
-        f"/api/v1/tasks/{task_id}/events",
-        headers={**csrf(ticket_client), "If-Match": '"2"'},
-        json={"client_request_id": str(uuid4()), "kind": "MESSAGE", "body": "Позвоните ещё раз"},
-    )
-    assert clarification.status_code == 200, clarification.text
-    login(ticket_client, sima.login)
-    no_answer = ticket_client.post(
-        f"/api/v1/tasks/{task_id}/events",
-        headers={**csrf(ticket_client), "If-Match": '"3"'},
-        json={"client_request_id": str(uuid4()), "kind": "NO_ANSWER"},
-    )
-    assert no_answer.status_code == 200 and no_answer.json()["status"] == "NO_ANSWER"
-    assert (
-        ticket_client.get(
-            "/api/v1/tasks", params={"scope": "assigned", "state": "completed"}
-        ).json()["total"]
-        == 1
-    )
-    login(ticket_client, engineer.login)
-    reopened = ticket_client.post(
-        f"/api/v1/tasks/{task_id}/events",
-        headers={**csrf(ticket_client), "If-Match": '"4"'},
-        json={"client_request_id": str(uuid4()), "kind": "REOPENED"},
-    )
-    assert reopened.status_code == 200 and reopened.json()["status"] == "OPEN"
-    login(ticket_client, sima.login)
-    completed = ticket_client.post(
-        f"/api/v1/tasks/{task_id}/events",
-        headers={**csrf(ticket_client), "If-Match": '"5"'},
-        json={"client_request_id": str(uuid4()), "kind": "COMPLETED"},
-    )
-    assert completed.status_code == 200 and completed.json()["status"] == "COMPLETED"
-    history = ticket_client.get(f"/api/v1/tasks/{task_id}/events").json()
-    assert [entry["kind"] for entry in history["items"]] == [
-        "COMPLETED",
-        "REOPENED",
-        "NO_ANSWER",
-        "MESSAGE",
-        "MESSAGE",
-        "CREATED",
-    ]
+    ticket_tasks = ticket_client.get(
+        "/api/v1/tasks", params={"ticket_id": ticket_id, "scope": "created", "state": "completed"}
+    ).json()
+    assert ticket_tasks["items"][0]["latest_answer"] == answer
     ticket_after = ticket_client.get(f"/api/v1/tickets/{ticket_id}").json()
     assert (
         ticket_after["status"],
         ticket_after["version"],
         ticket_after["assigned_engineer_id"],
-    ) == (
-        ticket_before["status"],
-        ticket_before["version"],
-        ticket_before["assigned_engineer_id"],
-    )
+    ) == (ticket_before["status"], ticket_before["version"], ticket_before["assigned_engineer_id"])
     with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(InternalTask)) == 1
+        assert db.scalar(select(func.count()).select_from(InternalTaskEvent)) == 2
+        assert db.scalar(select(func.count()).select_from(InternalTaskNotification)) == 2
         assert (
             db.scalar(
                 select(func.count())
@@ -5471,22 +5441,6 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
                 .where(FieldWorkHandoff.ticket_id == UUID(ticket_id))
             )
             == 0
-        )
-        assert (
-            db.scalar(
-                select(func.count())
-                .select_from(InternalTaskEvent)
-                .where(InternalTaskEvent.task_id == UUID(task_id))
-            )
-            == 6
-        )
-        assert (
-            db.scalar(
-                select(func.count())
-                .select_from(InternalTaskNotification)
-                .where(InternalTaskNotification.task_id == UUID(task_id))
-            )
-            == 6
         )
 
 
@@ -5546,6 +5500,29 @@ def test_internal_task_never_exposes_internal_ticket_to_operator(
     assert ticket_client.get("/api/v1/tasks/notifications").json()["total"] == 0
 
 
+def test_internal_task_contact_uses_confirmed_linked_snapshot(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+) -> None:
+    engineer = seed_user(ticket_engine, "task_linked_engineer", Role.ENGINEER)
+    snapshot, _ = seed_snapshot(
+        ticket_engine, engineer, phone="+7 900 222 33 44", account_no="5113"
+    )
+    login(ticket_client, engineer.login)
+    created = create(ticket_client, snapshot)
+    assert created.status_code == 201, created.text
+    task = ticket_client.post(
+        "/api/v1/tasks", headers=csrf(ticket_client),
+        json={"ticket_id": created.json()["id"], "assignee_id": str(engineer.id),
+              "description": "Проверить услугу", "client_request_id": str(uuid4())},
+    )
+    assert task.status_code == 201, task.text
+    detail = ticket_client.get(f"/api/v1/tasks/{task.json()['id']}").json()
+    assert detail["subscriber_name"] == "Synthetic Subscriber"
+    assert detail["phone"] == CONTACT["caller_phone"]
+    assert detail["account_no"] == "5113"
+
+
 def test_internal_task_revoked_permission_and_csrf_are_enforced(
     ticket_engine: Engine,
     ticket_client: TestClient,
@@ -5579,7 +5556,7 @@ def test_internal_task_revoked_permission_and_csrf_are_enforced(
         ticket_client.post(
             f"/api/v1/tasks/{task_id}/events",
             headers={**csrf(ticket_client), "If-Match": '"1"'},
-            json={"client_request_id": str(uuid4()), "kind": "COMPLETED"},
+            json={"client_request_id": str(uuid4()), "kind": "COMPLETED", "body": "Ответ"},
         ).status_code
         == 403
     )

@@ -80,7 +80,7 @@ export function NotificationBell({ session }: { session: MeResponse }) {
     navigate(`/tickets/${ticketId}`)
   }
 
-  async function openTaskNotification(notificationId: string, taskId: string, unread: boolean) {
+  async function openTaskNotification(notificationId: string, taskId: string, ticketId: string, unread: boolean) {
     if (openingId) return
     setActionError(null)
     if (unread) {
@@ -88,11 +88,11 @@ export function NotificationBell({ session }: { session: MeResponse }) {
       try {
         await taskApi.markRead(notificationId)
         await queryClient.invalidateQueries({ queryKey: ['internal-task-notifications', session.user.id] })
-      } catch (error) { setActionError(error); setOpeningId(null); return }
+      } catch (error) { setActionError(error) }
       setOpeningId(null)
     }
     setOpen(false)
-    navigate(`/tasks?task=${encodeURIComponent(taskId)}`)
+    navigate(`/tickets/${encodeURIComponent(ticketId)}?task=${encodeURIComponent(taskId)}`)
   }
 
   const unread = (fieldInbox.data?.unread_count ?? 0) + (taskInbox.data?.unread_count ?? 0)
@@ -103,7 +103,7 @@ export function NotificationBell({ session }: { session: MeResponse }) {
     {open && <div id="field-report-inbox" className="notification-bell__popover" role="region" aria-label="Уведомления">
       <div className="notification-bell__heading"><strong>Уведомления</strong><span>{unread ? `${unread} непрочитанных` : 'Новых нет'}</span></div>
       {actionError !== null && <p className="notification-bell__state" role="alert">Не удалось отметить прочтение. {errorText(actionError)}</p>}
-      {taskEnabled && <><div className="notification-bell__subheading">Поручения</div>{taskInbox.isPending && <p className="notification-bell__state">Загружаем поручения…</p>}{taskInbox.isError && <p className="notification-bell__state" role="alert">{errorText(taskInbox.error)}</p>}{taskInbox.data && (taskInbox.data.items.length ? <div className="notification-bell__list">{taskInbox.data.items.map((item) => <button className={`notification-bell__item${item.read_at ? '' : ' notification-bell__item--unread'}`} key={item.id} type="button" disabled={openingId !== null} onClick={() => void openTaskNotification(item.id, item.task_id, !item.read_at)}><span className="notification-bell__item-title">{taskEventNames[item.kind]} · Заявка #{item.ticket_number}</span><span>{item.title}</span><time dateTime={item.created_at}>{formatDate(item.created_at)}</time><ArrowUpRight size={15} aria-hidden="true" /></button>)}</div> : <p className="notification-bell__state">Новых поручений нет.</p>)}</>}
+      {taskEnabled && <><div className="notification-bell__subheading">Поручения</div>{taskInbox.isPending && <p className="notification-bell__state">Загружаем поручения…</p>}{taskInbox.isError && <p className="notification-bell__state" role="alert">{errorText(taskInbox.error)}</p>}{taskInbox.data && (taskInbox.data.items.length ? <div className="notification-bell__list">{taskInbox.data.items.map((item) => <button className={`notification-bell__item${item.read_at ? '' : ' notification-bell__item--unread'}`} key={item.id} type="button" disabled={openingId !== null} onClick={() => void openTaskNotification(item.id, item.task_id, item.ticket_id, !item.read_at)}><span className="notification-bell__item-title">{taskEventNames[item.kind]} · Заявка #{item.ticket_number}</span><span>{item.title}</span><time dateTime={item.created_at}>{formatDate(item.created_at)}</time><ArrowUpRight size={15} aria-hidden="true" /></button>)}</div> : <p className="notification-bell__state">Новых поручений нет.</p>)}</>}
       {fieldEnabled && <><div className="notification-bell__subheading">Отчёты монтажников</div>{fieldInbox.isPending && <p className="notification-bell__state">Загружаем уведомления…</p>}{fieldInbox.isError && <p className="notification-bell__state" role="alert">{errorText(fieldInbox.error)}</p>}{fieldInbox.data && (fieldInbox.data.items.length ? <div className="notification-bell__list">{fieldInbox.data.items.map((item) => <button className={`notification-bell__item${item.read_at ? '' : ' notification-bell__item--unread'}`} type="button" key={item.id} disabled={openingId !== null} onClick={() => void openFieldNotification(item.id, item.ticket_id, !item.read_at)}><span className="notification-bell__item-title">Заявка #{item.ticket_number} {item.awaiting_verification && <span className="notification-bell__attention" aria-label="Ожидает подтверждения" />}</span><span>Отчёт: {item.sender_name}</span><time dateTime={item.reported_at}>{formatDate(item.reported_at)}</time><ArrowUpRight size={15} aria-hidden="true" /></button>)}</div> : <p className="notification-bell__state">Отчётов пока нет.</p>)}</>}
     </div>}
     {toast && <div className="internal-task-toast" role="status" onClick={() => setToast(null)}>{toast}</div>}

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { MeResponse } from '../../shared/api/types'
 import { NotificationBell } from './NotificationBell'
@@ -19,11 +19,17 @@ const engineer: MeResponse = {
   permissions: ['tickets.read.all', 'tickets.field_work'],
 }
 
-function mount(session = engineer) {
+function TicketDestination() {
+  const location = useLocation()
+  return <><p>Заявка открыта</p><span data-testid="task-destination">{location.pathname}{location.search}</span></>
+}
+
+function mount(session = engineer, start = '/') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/']}>
-    <Routes><Route path="/" element={<NotificationBell session={session} />} />
-      <Route path="/tickets/:id" element={<p>Заявка открыта</p>} /></Routes>
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[start]}>
+    <NotificationBell session={session} />
+    <Routes><Route path="/" element={null} />
+      <Route path="/tickets/:id" element={<TicketDestination />} /></Routes>
   </MemoryRouter></QueryClientProvider>)
 }
 
@@ -69,5 +75,19 @@ it('shows a task notice to a permitted operator and marks it read on opening', a
   fireEvent.click(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 1' }))
   fireEvent.click(screen.getByRole('button', { name: /Новое поручение · Заявка #66/ }))
   await waitFor(() => expect(taskApi.markRead).toHaveBeenCalledWith('task-notice'))
+  expect(await screen.findByText('Заявка открыта')).toBeInTheDocument()
+  expect(screen.getByTestId('task-destination')).toHaveTextContent('/tickets/ticket-1?task=task-1')
   expect(notificationApi.list).not.toHaveBeenCalled()
+})
+
+it('opens a different task while already viewing another ticket', async () => {
+  vi.mocked(taskApi.notifications).mockResolvedValue({
+    items: [{ id: 'task-notice', task_id: 'task-2', ticket_id: 'ticket-2', ticket_number: 67,
+      title: 'Уточнить проблему', kind: 'COMPLETED', created_at: '2026-11-03T10:00:00Z', read_at: null }],
+    page: 1, size: 20, total: 1, unread_count: 1,
+  })
+  mount({ ...engineer, permissions: [...engineer.permissions, 'tasks.create'] }, '/tickets/ticket-1?task=task-1')
+  fireEvent.click(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 2' }))
+  fireEvent.click(screen.getByRole('button', { name: /Поручение завершено · Заявка #67/ }))
+  await waitFor(() => expect(screen.getByTestId('task-destination')).toHaveTextContent('/tickets/ticket-2?task=task-2'))
 })

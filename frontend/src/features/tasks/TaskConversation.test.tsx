@@ -18,6 +18,7 @@ const task: InternalTask = {
   creator_id: 'engineer-id', creator_name: 'Инженер', assignee_id: 'sima-id', assignee_name: 'Сима',
   title: 'Позвонить', description: 'Уточнить время', due_at: null, status: 'OPEN', version: 1,
   created_at: '2026-11-01T10:00:00Z', updated_at: '2026-11-01T10:00:00Z', completed_at: null,
+  subscriber_name: 'Тестовый абонент', phone: '+7 900 111 22 33', account_no: '5113',
 }
 
 function mount(session: MeResponse) {
@@ -33,20 +34,19 @@ beforeEach(() => {
   vi.mocked(taskApi.act).mockReset().mockResolvedValue({ ...task, version: 2 })
 })
 
-it('shows the conversation and lets the author send a clarification without completing it', async () => {
+it('shows the request and contact, without an author reply action', async () => {
   mount(engineer)
   expect(await screen.findByText('Уточнить время')).toBeInTheDocument()
-  fireEvent.change(screen.getByRole('textbox', { name: 'Ответ или уточнение' }), { target: { value: 'Позвоните завтра' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Отправить ответ' }))
-  await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'MESSAGE', 'Позвоните завтра', expect.any(String)))
-  expect(screen.queryByRole('button', { name: 'Завершить' })).not.toBeInTheDocument()
+  expect(screen.getByText('Тестовый абонент')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '+7 900 111 22 33' })).toHaveAttribute('href', 'tel:+79001112233')
+  expect(screen.getByText('5113')).toBeInTheDocument()
+  expect(screen.queryByRole('textbox', { name: 'Ответ' })).not.toBeInTheDocument()
 })
 
-it('lets the assignee finish or report no answer and blocks author-only reopening', async () => {
+it('saves one answer and completes the task for the assignee', async () => {
   mount({ ...engineer, user: { ...engineer.user, id: 'sima-id', role: 'operator' }, permissions: ['tickets.read.all', 'tasks.execute'] })
-  expect(await screen.findByRole('button', { name: 'Завершить' })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Не дозвонилась' })).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Не дозвонилась' }))
-  await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'NO_ANSWER', null, expect.any(String)))
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Ответ' }), { target: { value: 'Не дозвонилась' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Завершить поручение' }))
+  await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'Не дозвонилась', expect.any(String)))
   expect(screen.queryByRole('button', { name: 'Открыть повторно' })).not.toBeInTheDocument()
 })

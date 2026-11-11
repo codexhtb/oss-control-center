@@ -16,7 +16,7 @@ from app.modules.internal_tasks.models import (
     InternalTaskEvent,
     InternalTaskNotification,
 )
-from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
+from app.modules.tickets.models import SubscriberSnapshot, Ticket, TicketAudit, TicketEvent
 from app.modules.tickets.service import _can_read_ticket
 from app.modules.tickets.status import TicketType
 
@@ -68,7 +68,7 @@ def _task(
     return row
 
 
-def _summary(db: Session, task: InternalTask, ticket: Ticket) -> dict:
+def _summary(db: Session, task: InternalTask, ticket: Ticket, *, contact: bool = False) -> dict:
     names = dict(
         db.execute(
             select(User.id, User.display_name).where(
@@ -76,6 +76,28 @@ def _summary(db: Session, task: InternalTask, ticket: Ticket) -> dict:
             )
         ).all()
     )
+    snapshot = (
+        db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
+        if contact and ticket.subscriber_snapshot_id
+        else None
+    )
+    subscriber_name = None
+    if contact:
+        if ticket.ticket_type in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT):
+            subscriber_name = ticket.caller_full_name
+        elif snapshot:
+            subscriber_name = snapshot.full_name or snapshot.organization_name
+    latest_answer = (
+        db.scalar(
+            select(InternalTaskEvent.body)
+            .where(InternalTaskEvent.task_id == task.id, InternalTaskEvent.kind == "COMPLETED")
+            .order_by(InternalTaskEvent.created_at.desc(), InternalTaskEvent.id.desc())
+            .limit(1)
+        )
+        if task.status == "COMPLETED"
+        else None
+    )
+    phone = ticket.caller_phone or (snapshot.phone if snapshot else None) if contact else None
     return {
         "id": task.id,
         "ticket_id": task.ticket_id,
@@ -93,6 +115,10 @@ def _summary(db: Session, task: InternalTask, ticket: Ticket) -> dict:
         "created_at": task.created_at,
         "updated_at": task.updated_at,
         "completed_at": task.completed_at,
+        "subscriber_name": subscriber_name,
+        "phone": phone,
+        "account_no": ticket.account_no if contact else None,
+        "latest_answer": latest_answer,
     }
 
 
@@ -305,7 +331,7 @@ def list_tasks(
 
 def get_task(db: Session, actor: User, task_id: UUID) -> dict:
     task, ticket = _task(db, actor, task_id)
-    return _summary(db, task, ticket)
+    return _summary(db, task, ticket, contact=True)
 
 
 def list_events(db: Session, actor: User, task_id: UUID, page: int, size: int) -> dict:
@@ -353,15 +379,9 @@ def add_event(
     body: str | None,
     version: int,
 ) -> dict:
-    permission = (
-        Permission.TASK_EXECUTE
-        if kind in ("COMPLETED", "NO_ANSWER")
-        else Permission.TASK_CREATE
-        if kind == "REOPENED"
-        else None
-    )
-    if permission is not None:
-        _require_actor(db, actor, permission)
+    if kind != "COMPLETED":
+        raise ApiError(422, "invalid_event", "Unsupported task event")
+    _require_actor(db, actor, Permission.TASK_EXECUTE)
     task, ticket = _task(db, actor, task_id, lock=True)
     existing = db.scalar(
         select(InternalTaskEvent).where(
@@ -376,27 +396,12 @@ def add_event(
         return _summary(db, task, ticket)
     if task.version != version:
         raise ApiError(409, "version_conflict", "Task changed; refresh it")
-    if kind in ("COMPLETED", "NO_ANSWER"):
-        if actor.id != task.assignee_id or task.status != "OPEN":
-            raise ApiError(409, "invalid_task_transition", "Task cannot be completed")
-        task.status = kind
-        task.completed_at = datetime.now(UTC)
-    elif kind == "REOPENED":
-        if actor.id != task.creator_id or task.status == "OPEN":
-            raise ApiError(409, "invalid_task_transition", "Task cannot be reopened")
-        task.status = "OPEN"
-        task.completed_at = None
-    elif kind == "MESSAGE":
-        if task.status != "OPEN":
-            raise ApiError(409, "invalid_task_transition", "Reopen task before replying")
-        if actor.id == task.creator_id:
-            _require_actor(db, actor, Permission.TASK_CREATE)
-        elif actor.id == task.assignee_id:
-            _require_actor(db, actor, Permission.TASK_EXECUTE)
-        else:
-            raise ApiError(404, "task_not_found", "Task not found")
-    else:
-        raise ApiError(422, "invalid_event", "Unsupported task event")
+    if actor.id != task.assignee_id or task.status != "OPEN":
+        raise ApiError(409, "invalid_task_transition", "Task cannot be completed")
+    if not body or not body.strip():
+        raise ApiError(422, "invalid_answer", "Answer is required")
+    task.status = "COMPLETED"
+    task.completed_at = datetime.now(UTC)
     task.version += 1
     task.updated_at = datetime.now(UTC)
     try:

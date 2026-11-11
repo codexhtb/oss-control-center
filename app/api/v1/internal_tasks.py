@@ -31,6 +31,10 @@ class TaskView(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    subscriber_name: str | None = None
+    phone: str | None = None
+    account_no: str | None = None
+    latest_answer: str | None = None
 
 
 class TaskPage(BaseModel):
@@ -84,11 +88,11 @@ class CreateTask(BaseModel):
     ticket_id: UUID
     assignee_id: UUID
     client_request_id: UUID
-    title: str = Field(min_length=1, max_length=160)
+    title: str | None = Field(default=None, min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=4000)
     due_at: AwareDatetime | None = None
 
-    @field_validator("title", "description")
+    @field_validator("description")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         result = value.strip()
@@ -96,18 +100,37 @@ class CreateTask(BaseModel):
             raise ValueError("Text must not be empty or contain control characters")
         return result
 
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        result = value.strip()
+        if not result or any(ord(char) < 32 for char in result):
+            raise ValueError("Invalid title")
+        return result
+
+    @model_validator(mode="after")
+    def generated_title(self) -> "CreateTask":
+        self.title = (
+            self.title.strip() if self.title else self.description.splitlines()[0][:160].strip()
+        )
+        if not self.title:
+            self.title = self.description[:160].strip()
+        return self
+
 
 class TaskAction(BaseModel):
     client_request_id: UUID
-    kind: Literal["MESSAGE", "COMPLETED", "NO_ANSWER", "REOPENED"]
+    kind: Literal["COMPLETED"]
     body: str | None = Field(default=None, max_length=4000)
 
     @model_validator(mode="after")
     def normalize_body(self) -> "TaskAction":
         if self.body is not None:
             self.body = self.body.strip()
-        if self.kind == "MESSAGE" and not self.body:
-            raise ValueError("Message text is required")
+        if not self.body:
+            raise ValueError("Answer text is required")
         if self.body is not None and (
             not self.body or any(ord(char) < 32 and char not in "\n\t" for char in self.body)
         ):
