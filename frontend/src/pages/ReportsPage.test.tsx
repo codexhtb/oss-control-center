@@ -2,10 +2,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
-import { getCallbacksReport, getEmployeesReport, getGeneralReport } from '../features/reports/report-api'
+import { getCallbacksReport, getEmployeesReport, getFieldWorkReport, getGeneralReport, getReasonsReport } from '../features/reports/report-api'
 import { ReportsPage, periodFor } from './ReportsPage'
 
-vi.mock('../features/reports/report-api', () => ({ getGeneralReport: vi.fn(), getEmployeesReport: vi.fn(), getCallbacksReport: vi.fn() }))
+vi.mock('../features/reports/report-api', () => ({ getGeneralReport: vi.fn(), getEmployeesReport: vi.fn(), getCallbacksReport: vi.fn(), getFieldWorkReport: vi.fn(), getReasonsReport: vi.fn() }))
 
 describe('Service Desk reports', () => {
   it('uses calendar boundaries in UTC+3, including month changes', () => {
@@ -62,5 +62,38 @@ describe('Service Desk reports', () => {
     expect(await screen.findByRole('link', { name: '#77' })).toHaveAttribute('href', '/tickets/ticket-1')
     expect(screen.getByText('Уникальные заявки')).toBeInTheDocument()
     await waitFor(() => expect(vi.mocked(getCallbacksReport)).toHaveBeenCalled())
+  })
+
+  it('shows field dispatch event counts and direction filter', async () => {
+    vi.mocked(getFieldWorkReport).mockResolvedValue({
+      start: '2026-11-11', end: '2026-11-11',
+      metrics: { sent_handoffs: 1, sent_unique_tickets: 1, reported_handoffs: 0, verified_handoffs: 0, reschedule_events: 2, rescheduled_handoffs: 1, awaiting_report_now: 1, date_pending_now: 1 },
+      directions: { SUKHUM: { sent: 1, reported: 0, verified: 0, reschedules: 2 } },
+      daily: [{ date: '2026-11-11', sent: 1, reported: 0, verified: 0, reschedules: 2 }],
+      reschedule_reasons: [{ reason: 'Попросил позже', count: 2 }],
+      details: { page: 1, size: 20, total: 1, items: [{ id: 'handoff-1', ticket_id: 'ticket-1', ticket_number: 88, subject: 'Выезд', direction: 'SUKHUM', work_status: 'AWAITING_REPORT', schedule_status: 'DATE_PENDING', sent_at: '2026-11-11T10:00:00Z', reported_at: null, verified_at: null }] },
+    })
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ReportsPage /></MemoryRouter></QueryClientProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Монтажные работы' }))
+    expect(await screen.findByRole('link', { name: '#88' })).toHaveAttribute('href', '/tickets/ticket-1')
+    expect(screen.getByText('Отправленное задание не считается выполненным.', { exact: false })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Направление'), { target: { value: 'OCHAMCHIRA' } })
+    await waitFor(() => expect(getFieldWorkReport).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'OCHAMCHIRA', 1, expect.anything()))
+  })
+
+  it('separates registration categories from decision reasons', async () => {
+    vi.mocked(getReasonsReport).mockResolvedValue({
+      start: '2026-11-11', end: '2026-11-11',
+      metrics: { created_tickets: 1, without_category: 0, decision_events: 2, decision_unique_tickets: 1, decisions_without_reason: 0, created_without_reason_now: 0 },
+      categories: [{ name: 'Нет связи', count: 1 }], reasons: [{ name: 'Обрыв линии', count: 2 }],
+      daily: [{ date: '2026-11-11', category: 'Нет связи', count: 1 }],
+      details: { page: 1, size: 20, total: 1, items: [{ id: 'ticket-1', ticket_id: 'ticket-1', ticket_number: 89, subject: 'Тема', name: 'Нет связи', occurred_at: '2026-11-11T10:00:00Z' }] },
+    })
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ReportsPage /></MemoryRouter></QueryClientProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Причины обращений' }))
+    expect(await screen.findByRole('link', { name: '#89' })).toHaveAttribute('href', '/tickets/ticket-1')
+    expect(screen.getByText('Обрыв линии')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('События'), { target: { value: 'decision' } })
+    await waitFor(() => expect(getReasonsReport).toHaveBeenCalledWith(expect.any(String), expect.any(String), '', 'decision', 1, expect.anything()))
   })
 })

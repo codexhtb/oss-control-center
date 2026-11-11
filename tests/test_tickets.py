@@ -5067,3 +5067,140 @@ def test_employee_and_callback_reports_use_action_authors_and_visibility(
     login(ticket_client, restricted.login)
     assert ticket_client.get("/api/v1/reports/callbacks", params=params).json()["total_events"] == 0
     assert ticket_client.get("/api/v1/reports/employees", params=params).json()["items"] == []
+
+
+def test_field_work_and_reasons_reports_count_events_without_leaks(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "phase2b_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "phase2b_operator", Role.OPERATOR)
+    login(ticket_client, engineer.login)
+    internal_response = ticket_client.post(
+        "/api/v1/tickets", headers=csrf(ticket_client),
+        json={"ticket_type": "INTERNAL", "subject": "Private phase2b",
+              "description": "Synthetic", "client_request_id": str(uuid4())},
+    )
+    assert internal_response.status_code == 201
+    internal = internal_response.json()
+    login(ticket_client, operator.login)
+    manual = make_manual_ticket(ticket_client, subject="Visible phase2b")
+    with Session(ticket_engine) as db:
+        category_id = db.scalar(
+            select(TicketCategory.id).where(TicketCategory.name == "Нет интернета")
+        )
+    assert category_id is not None
+    categorized_response = ticket_client.post(
+        "/api/v1/tickets", headers=csrf(ticket_client),
+        json={"ticket_type": "MANUAL", "category_id": str(category_id),
+              "description": "Synthetic", **MANUAL_CONTACT, "client_request_id": str(uuid4())},
+    )
+    assert categorized_response.status_code == 201, categorized_response.text
+    categorized = categorized_response.json()
+    deleted = make_manual_ticket(ticket_client, subject="Deleted phase2b")
+    created_day = (datetime.now(UTC) + timedelta(hours=3)).date()
+    now = datetime(created_day.year, created_day.month, created_day.day, 20, 30, tzinfo=UTC)
+    next_day = now + timedelta(hours=1)
+    event_day = created_day + timedelta(days=1)
+    with Session(ticket_engine) as db:
+        for ticket, direction in ((manual, "SUKHUM"), (categorized, "OCHAMCHIRA"),
+                                  (internal, "OCHAMCHIRA"), (deleted, "SUKHUM")):
+            item = db.get(Ticket, UUID(ticket["id"]))
+            assert item is not None
+            if ticket is deleted:
+                item.deleted_at = now
+                item.deleted_by = operator.id
+            if ticket is categorized:
+                replacement = db.scalar(
+                    select(TicketCategory).where(TicketCategory.name != "Нет интернета")
+                )
+                assert replacement is not None
+                item.category_id = replacement.id
+                item.category_name = replacement.name
+                item.version += 1
+                db.add(TicketEvent(
+                    ticket_id=item.id, event_type="ticket_edited", actor_id=engineer.id,
+                    event_data={"changes": {"category_name": {
+                        "before": "Нет интернета", "after": replacement.name,
+                    }}}, ticket_version=item.version, occurred_at=now,
+                ))
+            handoff = FieldWorkHandoff(
+                ticket_id=item.id, ticket_version=1, reason="Synthetic visit",
+                delivery_status="SENT",
+                work_status="VERIFIED" if ticket is categorized else "AWAITING_REPORT",
+                chat_id="-5319791765",
+                direction=direction, telegram_message_id=100 + item.number,
+                created_by=engineer.id, sent_by=engineer.id, sent_at=now,
+                reported_at=next_day if ticket is categorized else None,
+                verified_at=next_day + timedelta(minutes=5) if ticket is categorized else None,
+                verified_by=engineer.id if ticket is categorized else None,
+            )
+            db.add(handoff)
+            db.flush()
+            reschedule_versions = (1, 2) if ticket is manual else ()
+            for version in reschedule_versions:
+                db.add(FieldWorkReschedule(
+                    handoff_id=handoff.id, schedule_version=version,
+                    reason="Попросил позже", source="OSS", author_name="Synthetic engineer",
+                    actor_id=engineer.id, created_at=next_day,
+                ))
+            for index in (1, 2) if ticket is manual else (1,):
+                db.add(TicketResolution(
+                    ticket_id=item.id, engineer_id=engineer.id,
+                    decision_text="Synthetic decision",
+                    reason_name="Причина B" if ticket is categorized else "Причина A",
+                    created_at=next_day + timedelta(minutes=index),
+                ))
+        db.commit()
+    params = {"start": event_day.isoformat(), "end": event_day.isoformat()}
+    assert ticket_client.get("/api/v1/reports/field-work", params=params).status_code == 403
+    assert ticket_client.get("/api/v1/reports/reasons", params=params).status_code == 403
+    with Session(ticket_engine) as db:
+        user = db.get(User, operator.id)
+        assert user is not None
+        user.permissions_customized = True
+        db.add_all([
+            UserPermission(user_id=operator.id, permission=Permission.TICKET_READ),
+            UserPermission(user_id=operator.id, permission=Permission.REPORTS_READ),
+        ])
+        db.commit()
+    work = ticket_client.get("/api/v1/reports/field-work", params=params)
+    assert work.status_code == 200, work.text
+    assert work.json()["metrics"]["sent_handoffs"] == 0
+    assert work.json()["metrics"]["reschedule_events"] == 2
+    assert work.json()["metrics"]["rescheduled_handoffs"] == 1
+    assert work.json()["metrics"]["awaiting_report_now"] == 1
+    assert work.json()["metrics"]["reported_handoffs"] == 1
+    assert work.json()["metrics"]["verified_handoffs"] == 1
+    assert work.json()["details"]["total"] == 2
+    assert {row["ticket_id"] for row in work.json()["details"]["items"]} == {
+        manual["id"], categorized["id"]
+    }
+    assert work.json()["daily"][0]["date"] == event_day.isoformat()
+    assert ticket_client.get("/api/v1/reports/field-work", params={
+        **params, "direction": "OCHAMCHIRA"
+    }).json()["metrics"]["reschedule_events"] == 0
+    sent = ticket_client.get("/api/v1/reports/field-work", params={
+        "start": created_day.isoformat(), "end": created_day.isoformat()
+    }).json()
+    assert sent["metrics"]["sent_handoffs"] == 2
+    assert sent["metrics"]["sent_unique_tickets"] == 2
+    reasons = ticket_client.get("/api/v1/reports/reasons", params=params)
+    assert reasons.status_code == 200, reasons.text
+    assert reasons.json()["metrics"]["decision_events"] == 3
+    assert reasons.json()["metrics"]["decision_unique_tickets"] == 2
+    decision_details = ticket_client.get("/api/v1/reports/reasons", params={
+        **params, "detail_kind": "decision", "size": 1, "page": 2,
+    }).json()["details"]
+    assert decision_details["total"] == 3 and len(decision_details["items"]) == 1
+    assert decision_details["items"][0]["ticket_id"] in {manual["id"], categorized["id"]}
+    created = ticket_client.get("/api/v1/reports/reasons", params={
+        "start": created_day.isoformat(), "end": created_day.isoformat()
+    }).json()
+    assert created["metrics"]["created_tickets"] == 2
+    assert created["metrics"]["without_category"] == 1
+    assert created["metrics"]["created_without_reason_now"] == 0
+    assert {row["name"] for row in created["categories"]} == {None, "Нет интернета"}
+    filtered = ticket_client.get("/api/v1/reports/reasons", params={
+        **params, "category": "Нет интернета"
+    }).json()
+    assert filtered["metrics"]["decision_events"] == 1

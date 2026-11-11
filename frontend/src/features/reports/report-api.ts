@@ -56,3 +56,35 @@ export function getCallbacksReport(start: string, end: string, page: number, sig
   const params = new URLSearchParams({ start, end, page: String(page), size: '20' })
   return apiRequest<CallbacksReport>(`/api/v1/reports/callbacks?${params}`, { signal })
 }
+
+interface Page<T> { items: T[]; page: number; size: number; total: number }
+
+export interface FieldWorkReport {
+  start: string; end: string
+  metrics: { sent_handoffs: number; sent_unique_tickets: number; reported_handoffs: number; verified_handoffs: number; reschedule_events: number; rescheduled_handoffs: number; awaiting_report_now: number; date_pending_now: number }
+  directions: Record<string, { sent: number; reported: number; verified: number; reschedules: number }>
+  daily: { date: string; sent: number; reported: number; verified: number; reschedules: number }[]
+  reschedule_reasons: { reason: string; count: number }[]
+  details: Page<{ id: string; ticket_id: string; ticket_number: number; subject: string | null; direction: string | null; work_status: string; schedule_status: string; sent_at: string | null; reported_at: string | null; verified_at: string | null }>
+}
+
+export interface ReasonsReport {
+  start: string; end: string
+  metrics: { created_tickets: number; without_category: number; decision_events: number; decision_unique_tickets: number; decisions_without_reason: number; created_without_reason_now: number }
+  categories: { name: string | null; count: number }[]
+  reasons: { name: string | null; count: number }[]
+  daily: { date: string; category: string | null; count: number }[]
+  details: Page<{ id: string; ticket_id: string; ticket_number: number; subject: string | null; name: string | null; occurred_at: string }>
+}
+
+export function getFieldWorkReport(start: string, end: string, direction: string, page: number, signal?: AbortSignal) {
+  const params = new URLSearchParams({ start, end, page: String(page), size: '20' })
+  if (direction) params.set('direction', direction)
+  return apiRequest<FieldWorkReport>(`/api/v1/reports/field-work?${params}`, { signal })
+}
+
+export function getReasonsReport(start: string, end: string, category: string, detailKind: 'category' | 'decision', page: number, signal?: AbortSignal) {
+  const params = new URLSearchParams({ start, end, detail_kind: detailKind, page: String(page), size: '20' })
+  if (category) params.set('category', category)
+  return apiRequest<ReasonsReport>(`/api/v1/reports/reasons?${params}`, { signal })
+}

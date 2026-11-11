@@ -1,7 +1,7 @@
 """Read-only Service Desk reporting endpoints."""
 
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
@@ -11,6 +11,7 @@ from app.api.v1.identity import CurrentIdentityDep, SessionDep
 from app.core.errors import ApiError
 from app.modules.identity.access import has_permission
 from app.modules.identity.roles import Permission
+from app.modules.reports.phase2b import field_work_report, reasons_report
 from app.modules.reports.service import callbacks_report, employees_report, report
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -134,6 +135,33 @@ class CallbacksReport(BaseModel):
     details: CallbackDetailsPage
 
 
+class ReportPage(BaseModel):
+    items: list[dict]
+    page: int
+    size: int
+    total: int
+
+
+class FieldWorkReport(BaseModel):
+    start: date
+    end: date
+    metrics: dict[str, int]
+    directions: dict[str, dict[str, int]]
+    daily: list[dict]
+    reschedule_reasons: list[dict]
+    details: ReportPage
+
+
+class ReasonsReport(BaseModel):
+    start: date
+    end: date
+    metrics: dict[str, int]
+    categories: list[dict]
+    reasons: list[dict]
+    daily: list[dict]
+    details: ReportPage
+
+
 def _check_access(identity: CurrentIdentityDep, db: SessionDep, start: date, end: date) -> bool:
     if not has_permission(db, identity.user, Permission.REPORTS_READ):
         raise ApiError(403, "forbidden", "Permission denied")
@@ -194,6 +222,62 @@ def callback_activity(
             end=end,
             user=identity.user,
             read_all=all_access,
+            page=page,
+            size=size,
+        )
+    )
+
+
+@router.get("/field-work", response_model=FieldWorkReport)
+def field_work_activity(
+    start: date,
+    end: date,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    response: Response,
+    direction: Literal["SUKHUM", "OCHAMCHIRA"] | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> FieldWorkReport:
+    all_access = _check_access(identity, db, start, end)
+    response.headers["Cache-Control"] = "no-store"
+    return FieldWorkReport.model_validate(
+        field_work_report(
+            db,
+            start=start,
+            end=end,
+            user=identity.user,
+            read_all=all_access,
+            direction=direction,
+            page=page,
+            size=size,
+        )
+    )
+
+
+@router.get("/reasons", response_model=ReasonsReport)
+def ticket_reasons(
+    start: date,
+    end: date,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    response: Response,
+    category: Annotated[str | None, Query(max_length=160)] = None,
+    detail_kind: Literal["category", "decision"] = "category",
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ReasonsReport:
+    all_access = _check_access(identity, db, start, end)
+    response.headers["Cache-Control"] = "no-store"
+    return ReasonsReport.model_validate(
+        reasons_report(
+            db,
+            start=start,
+            end=end,
+            user=identity.user,
+            read_all=all_access,
+            category=category,
+            detail_kind=detail_kind,
             page=page,
             size=size,
         )

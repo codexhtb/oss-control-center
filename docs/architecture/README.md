@@ -19,6 +19,7 @@
 - [Удаление и корзина заявок](ticket-deletion.md)
 - [Reports Phase 1: общая статистика Service Desk](reports-phase-1.md)
 - [Reports Phase 2A: сотрудники и контрольные звонки](reports-phase-2a.md)
+- [Reports Phase 2B: монтажные работы и причины обращений](reports-phase-2b.md)
 - [Phase 5.1: предупреждение о повторных обращениях](phase-5.1-duplicate-tickets.md)
 - [Категории обращений и телефон звонящего](ticket-categories-caller-phone.md)
 - [Phase 5.7: контрольный обзвон и закрытие](phase-5.7-callback.md)
