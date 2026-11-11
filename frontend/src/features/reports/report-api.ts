@@ -1,4 +1,4 @@
-import { apiRequest } from '../../shared/api/client'
+import { ApiError, apiRequest } from '../../shared/api/client'
 
 export interface GeneralReport {
   start: string
@@ -87,4 +87,22 @@ export function getReasonsReport(start: string, end: string, category: string, d
   const params = new URLSearchParams({ start, end, detail_kind: detailKind, page: String(page), size: '20' })
   if (category) params.set('category', category)
   return apiRequest<ReasonsReport>(`/api/v1/reports/reasons?${params}`, { signal })
+}
+
+export async function getReportFile(format: 'xlsx' | 'pdf', start: string, end: string, direction: string, category: string): Promise<Blob> {
+  const params = new URLSearchParams({ start, end })
+  if (direction) params.set('direction', direction)
+  if (category) params.set('category', category)
+  const response = await fetch(`/api/v1/reports/export.${format}?${params}`, {
+    method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
+    headers: { Accept: format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  })
+  if (!response.ok) {
+    const body: unknown = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null
+    const code = body && typeof body === 'object' && 'code' in body && typeof body.code === 'string' ? body.code : 'api_error'
+    throw new ApiError(response.status, code)
+  }
+  const expected = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (!response.headers.get('content-type')?.includes(expected)) throw new ApiError(response.status, 'invalid_response')
+  return response.blob()
 }

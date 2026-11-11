@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart3 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { getCallbacksReport, getEmployeesReport, getFieldWorkReport, getGeneralReport, getReasonsReport, type CallbacksReport, type EmployeesReport, type FieldWorkReport, type GeneralReport, type ReasonsReport } from '../features/reports/report-api'
+import { getCallbacksReport, getEmployeesReport, getFieldWorkReport, getGeneralReport, getReasonsReport, getReportFile, type CallbacksReport, type EmployeesReport, type FieldWorkReport, type GeneralReport, type ReasonsReport } from '../features/reports/report-api'
 import { errorText } from '../shared/api/client'
 import { Notice } from '../shared/ui/Notice'
 import { Button } from '../shared/ui/Button'
@@ -26,6 +26,13 @@ export function periodFor(preset: Exclude<Preset, 'custom'>, now = new Date()) {
   if (preset === 'week') return { start: shift(-6), end: shift(0) }
   if (preset === 'month') return { start: localDate(new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 1))), end: shift(0) }
   return { start: localDate(new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - 1, 1))), end: localDate(new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 0))) }
+}
+
+export function periodForMonth(value: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return null
+  const year = Number(value.slice(0, 4))
+  const month = Number(value.slice(5, 7))
+  return { start: `${value}-01`, end: localDate(new Date(Date.UTC(year, month, 0))) }
 }
 
 function duration(seconds: number | null) {
@@ -115,6 +122,9 @@ export function ReportsPage() {
   const [category, setCategory] = useState('')
   const [categoryInput, setCategoryInput] = useState('')
   const [detailKind, setDetailKind] = useState<'category' | 'decision'>('category')
+  const [month, setMonth] = useState(() => periodFor('today').start.slice(0, 7))
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState<unknown>(null)
   const valid = !!range.start && !!range.end && range.start <= range.end && (Date.parse(range.end) - Date.parse(range.start)) / 86_400_000 <= 3660
   const report = useQuery({ queryKey: ['reports', 'general', range, page], queryFn: ({ signal }) => getGeneralReport(range.start, range.end, page, signal), enabled: valid && tab === 'general' })
   const employees = useQuery({ queryKey: ['reports', 'employees', range], queryFn: ({ signal }) => getEmployeesReport(range.start, range.end, signal), enabled: valid && tab === 'employees' })
@@ -123,9 +133,39 @@ export function ReportsPage() {
   const reasons = useQuery({ queryKey: ['reports', 'reasons', range, category, detailKind, page], queryFn: ({ signal }) => getReasonsReport(range.start, range.end, category, detailKind, page, signal), enabled: valid && tab === 'reasons' })
   const active = tab === 'general' ? report : tab === 'employees' ? employees : tab === 'callbacks' ? callbacks : tab === 'field-work' ? fieldWork : reasons
   function choose(value: Preset) { setPreset(value); setPage(1); if (value !== 'custom') setRange(periodFor(value)) }
+  async function download(format: 'xlsx' | 'pdf', period = range) {
+    if (!period.start || !period.end || period.start > period.end || exportBusy) return
+    setExportBusy(true)
+    setExportError(null)
+    try {
+      const file = await getReportFile(format, period.start, period.end, direction, category)
+      const url = URL.createObjectURL(file)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `oss-report-${period.start}-${period.end}.${format}`
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (error) {
+      setExportError(error)
+    } finally {
+      setExportBusy(false)
+    }
+  }
+  function monthReport() {
+    const period = periodForMonth(month)
+    if (!period) return
+    setPreset('custom')
+    setRange(period)
+    setPage(1)
+    void download('pdf', period)
+  }
   return <div className="reports-page">
     <div className="page-heading"><div><p className="eyebrow">SERVICE DESK</p><h1>Отчёты</h1></div><BarChart3 size={25} aria-hidden="true" /></div>
     <section className="reports-filters" aria-label="Период отчёта"><div className="reports-presets">{(Object.keys(labels) as Preset[]).map((value) => <button type="button" key={value} className={preset === value ? 'reports-preset reports-preset--active' : 'reports-preset'} onClick={() => choose(value)}>{labels[value]}</button>)}</div>{preset === 'custom' && <div className="reports-range"><label>С <input type="date" value={range.start} onChange={(event) => { setRange({ ...range, start: event.target.value }); setPage(1) }} /></label><label>По <input type="date" value={range.end} onChange={(event) => { setRange({ ...range, end: event.target.value }); setPage(1) }} /></label></div>}<small>Календарные даты UTC+3. Показатели действий — по фактическому времени события.</small></section>
+    <section className="reports-export" aria-label="Выгрузка управленческого отчёта"><div className="reports-export__actions"><Button type="button" disabled={!valid || exportBusy} onClick={() => void download('xlsx')}>Скачать Excel</Button><Button type="button" disabled={!valid || exportBusy} onClick={() => void download('pdf')}>Скачать PDF</Button></div><div className="reports-export__month"><label>Отчёт за месяц <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} /></label><Button type="button" variant="quiet" disabled={!month || exportBusy} onClick={monthReport}>Сформировать PDF</Button></div>{exportBusy && <span role="status">Формируем отчёт…</span>}</section>
+    {exportError !== null && <Notice tone="error">Не удалось выгрузить отчёт. {errorText(exportError)}</Notice>}
     <nav className="reports-presets" aria-label="Виды отчётов">{([['general', 'Общая статистика'], ['employees', 'Сотрудники'], ['callbacks', 'Контрольные звонки'], ['field-work', 'Монтажные работы'], ['reasons', 'Причины обращений']] as const).map(([key, label]) => <button type="button" key={key} className={tab === key ? 'reports-preset reports-preset--active' : 'reports-preset'} onClick={() => { setTab(key); setPage(1) }}>{label}</button>)}</nav>
     {tab === 'field-work' && <div className="reports-range"><label>Направление <select value={direction} onChange={(event) => { setDirection(event.target.value); setPage(1) }}><option value="">Все направления</option><option value="SUKHUM">Сухум</option><option value="OCHAMCHIRA">Очамчира</option></select></label></div>}
     {tab === 'reasons' && <form className="reports-range" onSubmit={(event) => { event.preventDefault(); setCategory(categoryInput.trim()); setPage(1) }}><label>Категория <input type="text" value={categoryInput} onChange={(event) => setCategoryInput(event.target.value)} placeholder="Точное историческое название" maxLength={160} /></label><Button type="submit">Применить</Button></form>}

@@ -2,10 +2,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
-import { getCallbacksReport, getEmployeesReport, getFieldWorkReport, getGeneralReport, getReasonsReport } from '../features/reports/report-api'
-import { ReportsPage, periodFor } from './ReportsPage'
+import { getCallbacksReport, getEmployeesReport, getFieldWorkReport, getGeneralReport, getReasonsReport, getReportFile } from '../features/reports/report-api'
+import { ReportsPage, periodFor, periodForMonth } from './ReportsPage'
 
-vi.mock('../features/reports/report-api', () => ({ getGeneralReport: vi.fn(), getEmployeesReport: vi.fn(), getCallbacksReport: vi.fn(), getFieldWorkReport: vi.fn(), getReasonsReport: vi.fn() }))
+vi.mock('../features/reports/report-api', () => ({ getGeneralReport: vi.fn(), getEmployeesReport: vi.fn(), getCallbacksReport: vi.fn(), getFieldWorkReport: vi.fn(), getReasonsReport: vi.fn(), getReportFile: vi.fn() }))
 
 describe('Service Desk reports', () => {
   it('uses calendar boundaries in UTC+3, including month changes', () => {
@@ -13,6 +13,8 @@ describe('Service Desk reports', () => {
     expect(periodFor('today', now)).toEqual({ start: '2026-11-01', end: '2026-11-01' })
     expect(periodFor('yesterday', now)).toEqual({ start: '2026-10-31', end: '2026-10-31' })
     expect(periodFor('previous', now)).toEqual({ start: '2026-10-01', end: '2026-10-31' })
+    expect(periodForMonth('2024-02')).toEqual({ start: '2024-02-01', end: '2024-02-29' })
+    expect(periodForMonth('2026-13')).toBeNull()
   })
 
   it('shows real metrics and links to the original ticket', async () => {
@@ -95,5 +97,19 @@ describe('Service Desk reports', () => {
     expect(screen.getByText('Обрыв линии')).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('События'), { target: { value: 'decision' } })
     await waitFor(() => expect(getReasonsReport).toHaveBeenCalledWith(expect.any(String), expect.any(String), '', 'decision', 1, expect.anything()))
+  })
+
+  it('exports the selected UTC+3 month as a unified PDF', async () => {
+    vi.mocked(getReportFile).mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }))
+    const OriginalURL = URL
+    vi.stubGlobal('URL', class extends OriginalURL {
+      static createObjectURL = vi.fn(() => 'blob:report')
+      static revokeObjectURL = vi.fn()
+    })
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ReportsPage /></MemoryRouter></QueryClientProvider>)
+    fireEvent.change(screen.getByLabelText('Отчёт за месяц'), { target: { value: '2024-02' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сформировать PDF' }))
+    await waitFor(() => expect(getReportFile).toHaveBeenCalledWith('pdf', '2024-02-01', '2024-02-29', '', ''))
+    vi.unstubAllGlobals()
   })
 })

@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from queue import Queue
 from time import monotonic, sleep
@@ -13,6 +14,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
+from pypdf import PdfReader
 from sqlalchemy import create_engine, event, func, inspect, select, text
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DBAPIError
@@ -58,6 +61,7 @@ from app.modules.field_dispatch.service import finalize_send, prepare_send
 from app.modules.identity.crypto import hash_password
 from app.modules.identity.models import User, UserPermission
 from app.modules.identity.roles import Permission, Role
+from app.modules.reports.export import load_bundle
 from app.modules.tickets.models import (
     ConnectionSnapshot,
     DiagnosticCheck,
@@ -5204,3 +5208,115 @@ def test_field_work_and_reasons_reports_count_events_without_leaks(
         **params, "category": "Нет интернета"
     }).json()
     assert filtered["metrics"]["decision_events"] == 1
+
+
+def test_management_exports_are_complete_scoped_and_safe(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "export_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "export_operator", Role.OPERATOR)
+    login(ticket_client, engineer.login)
+    internal_response = ticket_client.post(
+        "/api/v1/tickets", headers=csrf(ticket_client),
+        json={"ticket_type": "INTERNAL", "subject": "Private export ticket",
+              "description": "Synthetic", "client_request_id": str(uuid4())},
+    )
+    assert internal_response.status_code == 201
+    login(ticket_client, operator.login)
+    manual = make_manual_ticket(ticket_client, subject="=1+1")
+    now = datetime.now(UTC)
+    day = (now + timedelta(hours=3)).date().isoformat()
+    with Session(ticket_engine) as db:
+        decision = None
+        for _ in range(2):
+            decision = TicketResolution(
+                ticket_id=UUID(manual["id"]), engineer_id=engineer.id,
+                decision_text="Synthetic", reason_name="Обрыв линии", created_at=now,
+            )
+            db.add(decision)
+            db.flush()
+        assert decision is not None
+        db.add(TicketCallback(
+            ticket_id=UUID(manual["id"]), decision_id=decision.id,
+            client_request_id=uuid4(), actor_id=operator.id, outcome="NO_ANSWER",
+            occurred_at=now,
+        ))
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(manual["id"]), ticket_version=1, reason="Synthetic visit",
+            delivery_status="SENT", work_status="AWAITING_REPORT", chat_id="-5319791765",
+            direction="SUKHUM", telegram_message_id=903, created_by=engineer.id,
+            sent_by=engineer.id, sent_at=now,
+        )
+        db.add(handoff)
+        db.flush()
+        for index in (1, 2):
+            db.add(FieldWorkReschedule(
+                handoff_id=handoff.id, schedule_version=index, reason="Попросил позже",
+                source="OSS", author_name="Synthetic engineer", actor_id=engineer.id,
+                created_at=now,
+            ))
+        db.commit()
+
+    params = {"start": day, "end": day}
+    for suffix in ("xlsx", "pdf"):
+        response = ticket_client.get(f"/api/v1/reports/export.{suffix}", params=params)
+        assert response.status_code == 403
+    with Session(ticket_engine) as db:
+        user = db.get(User, operator.id)
+        assert user is not None
+        user.permissions_customized = True
+        db.add_all([
+            UserPermission(user_id=operator.id, permission=Permission.TICKET_READ),
+            UserPermission(user_id=operator.id, permission=Permission.REPORTS_READ),
+        ])
+        db.commit()
+
+    excel = ticket_client.get("/api/v1/reports/export.xlsx", params=params)
+    assert excel.status_code == 200, excel.text[:300] if excel.status_code != 200 else ""
+    assert excel.content[:2] == b"PK"
+    assert "no-store" in excel.headers["cache-control"]
+    book = load_workbook(BytesIO(excel.content), read_only=True, data_only=False)
+    assert book.sheetnames == [
+        "Сводка OSS", "Общая статистика", "Сотрудники", "Контрольные звонки",
+        "Монтажные работы", "Причины обращений",
+    ]
+    general_cells = [cell for row in book["Общая статистика"] for cell in row]
+    assert any(cell.value == "'=1+1" and cell.data_type == "s" for cell in general_cells)
+    assert not any(cell.value == "Private export ticket" for cell in general_cells)
+    field_values = [cell.value for row in book["Монтажные работы"] for cell in row]
+    assert 2 in field_values and "Попросил позже" in field_values
+    reason_values = [cell.value for row in book["Причины обращений"] for cell in row]
+    assert "Обрыв линии" in reason_values
+    book.close()
+
+    pdf = ticket_client.get("/api/v1/reports/export.pdf", params=params)
+    assert pdf.status_code == 200, pdf.text[:300] if pdf.status_code != 200 else ""
+    assert pdf.content.startswith(b"%PDF-")
+    text_content = "\n".join(
+        page.extract_text() or "" for page in PdfReader(BytesIO(pdf.content)).pages
+    )
+    assert "Контрольный обзвон" in text_content
+    assert "Обрыв линии" in text_content
+    assert "Private export ticket" not in text_content
+
+    no_events = ticket_client.get("/api/v1/reports/export.xlsx", params={
+        "start": "2000-01-01", "end": "2000-01-01",
+    })
+    assert no_events.status_code == 200
+    empty_book = load_workbook(BytesIO(no_events.content), read_only=True)
+    assert any(
+        cell.value == "Нет данных за период"
+        for row in empty_book["Контрольные звонки"] for cell in row
+    )
+    empty_book.close()
+
+    with Session(ticket_engine) as db:
+        account = db.get(User, operator.id)
+        assert account is not None
+        with pytest.raises(ApiError) as error:
+            load_bundle(
+                db, start=(now + timedelta(hours=3)).date(),
+                end=(now + timedelta(hours=3)).date(), user=account, read_all=True,
+                direction=None, category=None, max_rows=1,
+            )
+    assert error.value.status_code == 413

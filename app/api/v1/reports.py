@@ -11,6 +11,13 @@ from app.api.v1.identity import CurrentIdentityDep, SessionDep
 from app.core.errors import ApiError
 from app.modules.identity.access import has_permission
 from app.modules.identity.roles import Permission
+from app.modules.reports.export import (
+    MAX_PDF_ROWS,
+    MAX_XLSX_ROWS,
+    build_pdf,
+    build_xlsx,
+    load_bundle,
+)
 from app.modules.reports.phase2b import field_work_report, reasons_report
 from app.modules.reports.service import callbacks_report, employees_report, report
 
@@ -282,3 +289,64 @@ def ticket_reasons(
             size=size,
         )
     )
+
+
+def _download(
+    start: date,
+    end: date,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    direction: str | None,
+    category: str | None,
+    kind: Literal["xlsx", "pdf"],
+) -> Response:
+    read_all = _check_access(identity, db, start, end)
+    bundle = load_bundle(
+        db,
+        start=start,
+        end=end,
+        user=identity.user,
+        read_all=read_all,
+        direction=direction,
+        category=category,
+        max_rows=MAX_XLSX_ROWS if kind == "xlsx" else MAX_PDF_ROWS,
+    )
+    content = build_xlsx(bundle) if kind == "xlsx" else build_pdf(bundle)
+    filename = f"oss-report-{start}-{end}.{kind}"
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if kind == "xlsx"
+            else "application/pdf"
+        ),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/export.xlsx")
+def export_xlsx(
+    start: date,
+    end: date,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    direction: Literal["SUKHUM", "OCHAMCHIRA"] | None = None,
+    category: Annotated[str | None, Query(max_length=160)] = None,
+) -> Response:
+    return _download(start, end, identity, db, direction, category, "xlsx")
+
+
+@router.get("/export.pdf")
+def export_pdf(
+    start: date,
+    end: date,
+    identity: CurrentIdentityDep,
+    db: SessionDep,
+    direction: Literal["SUKHUM", "OCHAMCHIRA"] | None = None,
+    category: Annotated[str | None, Query(max_length=160)] = None,
+) -> Response:
+    return _download(start, end, identity, db, direction, category, "pdf")
