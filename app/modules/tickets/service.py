@@ -13,6 +13,7 @@ from app.modules.field_dispatch.models import (
     FieldExternalMessage,
     FieldReportNotification,
     FieldReportNotificationRead,
+    FieldRescheduleDialog,
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
@@ -22,6 +23,11 @@ from app.modules.field_dispatch.service import create_handoff
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role
+from app.modules.internal_tasks.models import (
+    InternalTask,
+    InternalTaskEvent,
+    InternalTaskNotification,
+)
 from app.modules.tickets.duplicates import active_count, lock_subscriber
 from app.modules.tickets.models import (
     ConnectionSnapshot,
@@ -425,6 +431,9 @@ def purge_ticket(
     db.execute(delete(FieldExternalMessage).where(FieldExternalMessage.handoff_id.in_(handoff_ids)))
     db.execute(delete(FieldWorkReschedule).where(FieldWorkReschedule.handoff_id.in_(handoff_ids)))
     db.execute(
+        delete(FieldRescheduleDialog).where(FieldRescheduleDialog.handoff_id.in_(handoff_ids))
+    )
+    db.execute(
         delete(FieldWorkCompletionPrompt).where(
             FieldWorkCompletionPrompt.handoff_id.in_(handoff_ids)
         )
@@ -434,6 +443,12 @@ def purge_ticket(
         delete(FieldWorkDeliveryAttempt).where(FieldWorkDeliveryAttempt.handoff_id.in_(handoff_ids))
     )
     db.execute(delete(FieldWorkHandoff).where(FieldWorkHandoff.ticket_id == ticket_id))
+    task_ids = select(InternalTask.id).where(InternalTask.ticket_id == ticket_id)
+    db.execute(
+        delete(InternalTaskNotification).where(InternalTaskNotification.task_id.in_(task_ids))
+    )
+    db.execute(delete(InternalTaskEvent).where(InternalTaskEvent.task_id.in_(task_ids)))
+    db.execute(delete(InternalTask).where(InternalTask.ticket_id == ticket_id))
     for model in (
         DiagnosticSnapshot,
         DiagnosticCheck,

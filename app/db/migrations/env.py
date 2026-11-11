@@ -11,6 +11,7 @@ from app.db.base import Base
 from app.modules.chat import models as chat_models  # noqa: F401
 from app.modules.field_dispatch import models as field_dispatch_models  # noqa: F401
 from app.modules.identity import models as identity_models  # noqa: F401 - register ORM metadata
+from app.modules.internal_tasks import models as internal_task_models  # noqa: F401
 from app.modules.tickets import models as ticket_models  # noqa: F401 - register ORM metadata
 from app.modules.tickets import settings_models as ticket_settings_models  # noqa: F401
 
