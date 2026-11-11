@@ -2,13 +2,15 @@ import { useQuery } from '@tanstack/react-query'
 import { BarChart3 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { getGeneralReport, type GeneralReport } from '../features/reports/report-api'
+import { getCallbacksReport, getEmployeesReport, getGeneralReport, type CallbacksReport, type EmployeesReport, type GeneralReport } from '../features/reports/report-api'
 import { errorText } from '../shared/api/client'
 import { Notice } from '../shared/ui/Notice'
 import { Button } from '../shared/ui/Button'
 import { formatDate, priorityLabel, statusLabel, ticketTitle, typeLabel } from '../features/tickets/presentation'
 
 type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'previous' | 'custom'
+type ReportTab = 'general' | 'employees' | 'callbacks'
+const outcomeNames: Record<string, string> = { CONFIRMED: 'Проблема устранена', STILL_BROKEN: 'Проблема осталась', NO_ANSWER: 'Не дозвонились' }
 const labels: Record<Preset, string> = { today: 'Сегодня', yesterday: 'Вчера', week: '7 дней', month: 'Текущий месяц', previous: 'Предыдущий месяц', custom: 'Период' }
 
 function localDate(value: Date) {
@@ -49,20 +51,49 @@ function Distribution({ title, data, names }: { title: string; data: Record<stri
   return <section className="reports-panel"><h2>{title}</h2>{total === 0 ? <p className="muted">За период заявок нет</p> : Object.entries(data).sort((a, b) => b[1] - a[1]).map(([key, count]) => <div className="reports-distribution" key={key}><div><span>{names[key] || key}</span><strong>{count}</strong></div><div className="reports-distribution__track"><span style={{ width: `${count / total * 100}%` }} /></div></div>)}</section>
 }
 
+function EmployeesContent({ data }: { data: EmployeesReport }) {
+  const [selectedId, setSelectedId] = useState('')
+  const selected = data.items.find((item) => item.user_id === selectedId) ?? data.items[0]
+  const daily = data.daily.filter((item) => item.user_id === selected?.user_id)
+  return <>
+    <p className="reports-explanation">Созданные заявки считаются по автору, решения и звонки — по фактическим исполнителям. Повторные решения и звонки учтены как отдельные события.</p>
+    <section className="reports-panel"><h2>Действия сотрудников</h2><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Сотрудник</th><th>Созданы заявки</th><th>Решения</th><th>Звонки</th><th>Уникальные заявки со звонками</th><th>Устранена</th><th>Осталась</th><th>Нет ответа</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.user_id}><td>{item.display_name}{!item.is_active && <small className="muted"> · отключён</small>}</td><td>{item.created_tickets}</td><td>{item.decision_events}</td><td>{item.callback_events}</td><td>{item.callback_tickets}</td><td>{item.outcomes.CONFIRMED ?? 0}</td><td>{item.outcomes.STILL_BROKEN ?? 0}</td><td>{item.outcomes.NO_ANSWER ?? 0}</td></tr>)}</tbody></table></div>{data.items.length === 0 && <p className="muted">Нет действий за выбранный период.</p>}</section>
+    {selected && <section className="reports-panel"><div className="reports-panel__heading"><h2>Динамика действий</h2><label>Сотрудник <select value={selected.user_id} onChange={(event) => setSelectedId(event.target.value)}>{data.items.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></label></div><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Дата (UTC+3)</th><th>Созданы</th><th>Решения</th><th>Звонки</th></tr></thead><tbody>{daily.map((item) => <tr key={item.date}><td>{item.date}</td><td>{item.created}</td><td>{item.decisions}</td><td>{item.callbacks}</td></tr>)}</tbody></table></div>{daily.length === 0 && <p className="muted">За период действий нет.</p>}</section>}
+  </>
+}
+
+function CallbacksContent({ data, page, setPage }: { data: CallbacksReport; page: number; setPage: (page: number) => void }) {
+  return <>
+    <div className="reports-metrics"><article><span>Контрольные звонки</span><strong>{data.total_events}</strong></article><article><span>Уникальные заявки</span><strong>{data.unique_tickets}</strong></article></div>
+    <p className="reports-explanation">Повторные контрольные звонки учитываются как отдельные события. Дата — фактическое время звонка в UTC+3.</p>
+    <Distribution title="Результаты звонков" data={data.outcomes} names={outcomeNames} />
+    <div className="reports-distributions reports-distributions--two"><section className="reports-panel"><h2>Динамика по датам</h2><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Дата</th><th>Результат</th><th>Звонки</th></tr></thead><tbody>{data.daily.map((item) => <tr key={`${item.date}-${item.outcome}`}><td>{item.date}</td><td>{outcomeNames[item.outcome] ?? item.outcome}</td><td>{item.count}</td></tr>)}</tbody></table></div>{data.daily.length === 0 && <p className="muted">За период звонков нет.</p>}</section>
+    <section className="reports-panel"><h2>По сотрудникам</h2><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Сотрудник</th><th>Результат</th><th>Звонки</th></tr></thead><tbody>{data.employees.map((item) => <tr key={`${item.user_id}-${item.outcome}`}><td>{item.display_name}</td><td>{outcomeNames[item.outcome] ?? item.outcome}</td><td>{item.count}</td></tr>)}</tbody></table></div>{data.employees.length === 0 && <p className="muted">За период звонков нет.</p>}</section></div>
+    <section className="reports-panel"><div className="reports-panel__heading"><h2>Журнал звонков</h2><span>{data.details.total}</span></div><div className="table-scroll"><table className="subscriber-table"><thead><tr><th>Заявка</th><th>Тема</th><th>Сотрудник</th><th>Результат</th><th>Когда</th></tr></thead><tbody>{data.details.items.map((item) => <tr key={item.id}><td><Link to={`/tickets/${item.ticket_id}`}>#{item.ticket_number}</Link></td><td>{ticketTitle(item.subject)}</td><td>{item.actor_name}</td><td>{outcomeNames[item.outcome] ?? item.outcome}</td><td>{formatDate(item.occurred_at)}</td></tr>)}</tbody></table></div>{data.details.total === 0 && <p className="muted">За выбранный период звонков нет.</p>}<div className="reports-pagination"><Button variant="quiet" disabled={page <= 1} onClick={() => setPage(page - 1)}>Назад</Button><span>{page} / {Math.max(1, Math.ceil(data.details.total / 20))}</span><Button variant="quiet" disabled={page * 20 >= data.details.total} onClick={() => setPage(page + 1)}>Далее</Button></div></section>
+  </>
+}
+
 export function ReportsPage() {
+  const [tab, setTab] = useState<ReportTab>('general')
   const [preset, setPreset] = useState<Preset>('week')
   const [range, setRange] = useState(() => periodFor('week'))
   const [page, setPage] = useState(1)
   const valid = !!range.start && !!range.end && range.start <= range.end && (Date.parse(range.end) - Date.parse(range.start)) / 86_400_000 <= 3660
-  const report = useQuery({ queryKey: ['reports', 'general', range, page], queryFn: ({ signal }) => getGeneralReport(range.start, range.end, page, signal), enabled: valid })
+  const report = useQuery({ queryKey: ['reports', 'general', range, page], queryFn: ({ signal }) => getGeneralReport(range.start, range.end, page, signal), enabled: valid && tab === 'general' })
+  const employees = useQuery({ queryKey: ['reports', 'employees', range], queryFn: ({ signal }) => getEmployeesReport(range.start, range.end, signal), enabled: valid && tab === 'employees' })
+  const callbacks = useQuery({ queryKey: ['reports', 'callbacks', range, page], queryFn: ({ signal }) => getCallbacksReport(range.start, range.end, page, signal), enabled: valid && tab === 'callbacks' })
+  const active = tab === 'general' ? report : tab === 'employees' ? employees : callbacks
   function choose(value: Preset) { setPreset(value); setPage(1); if (value !== 'custom') setRange(periodFor(value)) }
   return <div className="reports-page">
     <div className="page-heading"><div><p className="eyebrow">SERVICE DESK</p><h1>Отчёты</h1></div><BarChart3 size={25} aria-hidden="true" /></div>
-    <section className="reports-filters" aria-label="Период отчёта"><div className="reports-presets">{(Object.keys(labels) as Preset[]).map((value) => <button type="button" key={value} className={preset === value ? 'reports-preset reports-preset--active' : 'reports-preset'} onClick={() => choose(value)}>{labels[value]}</button>)}</div>{preset === 'custom' && <div className="reports-range"><label>С <input type="date" value={range.start} onChange={(event) => { setRange({ ...range, start: event.target.value }); setPage(1) }} /></label><label>По <input type="date" value={range.end} onChange={(event) => { setRange({ ...range, end: event.target.value }); setPage(1) }} /></label></div>}<small>Даты и графики: UTC+3. Поступления и детализация — по дате создания.</small></section>
+    <section className="reports-filters" aria-label="Период отчёта"><div className="reports-presets">{(Object.keys(labels) as Preset[]).map((value) => <button type="button" key={value} className={preset === value ? 'reports-preset reports-preset--active' : 'reports-preset'} onClick={() => choose(value)}>{labels[value]}</button>)}</div>{preset === 'custom' && <div className="reports-range"><label>С <input type="date" value={range.start} onChange={(event) => { setRange({ ...range, start: event.target.value }); setPage(1) }} /></label><label>По <input type="date" value={range.end} onChange={(event) => { setRange({ ...range, end: event.target.value }); setPage(1) }} /></label></div>}<small>Календарные даты UTC+3. Показатели действий — по фактическому времени события.</small></section>
+    <nav className="reports-presets" aria-label="Виды отчётов">{([['general', 'Общая статистика'], ['employees', 'Сотрудники'], ['callbacks', 'Контрольные звонки']] as const).map(([key, label]) => <button type="button" key={key} className={tab === key ? 'reports-preset reports-preset--active' : 'reports-preset'} onClick={() => { setTab(key); setPage(1) }}>{label}</button>)}</nav>
     {!valid && <Notice tone="error">Выберите корректный период не длиннее 10 лет.</Notice>}
-    {report.isPending && valid && <p role="status">Загружаем отчёт…</p>}
-    {report.isError && <Notice tone="error">Не удалось получить отчёт. {errorText(report.error)}</Notice>}
-    {report.data && <>
+    {active.isPending && valid && <p role="status">Загружаем отчёт…</p>}
+    {active.isError && <Notice tone="error">Не удалось получить отчёт. {errorText(active.error)}</Notice>}
+    {tab === 'employees' && employees.data && <EmployeesContent data={employees.data} />}
+    {tab === 'callbacks' && callbacks.data && <CallbacksContent data={callbacks.data} page={page} setPage={setPage} />}
+    {tab === 'general' && report.data && <>
       <div className="reports-metrics">
         <article><span>Поступили за период</span><strong>{report.data.metrics.created}</strong></article>
         <article><span>Решения за период</span><strong>{report.data.metrics.resolved_events}</strong></article>

@@ -4948,3 +4948,122 @@ def test_general_report_period_events_and_operator_scope(
         ).delete()
         db.commit()
     assert ticket_client.get("/api/v1/reports/general", params=params).status_code == 403
+def test_employee_and_callback_reports_use_action_authors_and_visibility(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    engineer = seed_user(ticket_engine, "phase2_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "phase2_operator", Role.OPERATOR)
+    login(ticket_client, engineer.login)
+    internal = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_type": "INTERNAL",
+            "subject": "Private phase2",
+            "description": "Synthetic",
+            "client_request_id": str(uuid4()),
+        },
+    ).json()
+    login(ticket_client, operator.login)
+    manual = make_manual_ticket(ticket_client, subject="Visible phase2")
+    deleted = make_manual_ticket(ticket_client, subject="Deleted phase2")
+    now = datetime.now(UTC)
+    local_day = (now + timedelta(hours=3)).date().isoformat()
+    with Session(ticket_engine) as db:
+        removed = db.get(Ticket, UUID(deleted["id"]))
+        assert removed is not None
+        removed.deleted_at = now
+        removed.deleted_by = operator.id
+        db.flush()
+        for ticket, outcomes in (
+            (manual, ("CONFIRMED", "NO_ANSWER")),
+            (internal, ("STILL_BROKEN",)),
+            (deleted, ("CONFIRMED",)),
+        ):
+            for outcome in outcomes:
+                decision = TicketResolution(
+                    ticket_id=UUID(ticket["id"]),
+                    engineer_id=engineer.id,
+                    decision_text="Synthetic decision",
+                    created_at=now,
+                )
+                db.add(decision)
+                db.flush()
+                db.add(
+                    TicketCallback(
+                        ticket_id=UUID(ticket["id"]),
+                        decision_id=decision.id,
+                        client_request_id=uuid4(),
+                        actor_id=operator.id,
+                        outcome=outcome,
+                        comment="Synthetic" if outcome == "STILL_BROKEN" else None,
+                        occurred_at=now,
+                    )
+                )
+        db.commit()
+    params = {"start": local_day, "end": local_day}
+    assert ticket_client.get("/api/v1/reports/employees", params=params).status_code == 403
+    assert ticket_client.get("/api/v1/reports/callbacks", params=params).status_code == 403
+    with Session(ticket_engine) as db:
+        account = db.get(User, operator.id)
+        assert account is not None
+        account.permissions_customized = True
+        db.add_all(
+            [
+                UserPermission(user_id=operator.id, permission=Permission.TICKET_READ),
+                UserPermission(user_id=operator.id, permission=Permission.REPORTS_READ),
+            ]
+        )
+        db.commit()
+    employees = ticket_client.get("/api/v1/reports/employees", params=params)
+    assert employees.status_code == 200, employees.text
+    by_id = {row["user_id"]: row for row in employees.json()["items"]}
+    assert by_id[str(operator.id)]["created_tickets"] == 1
+    assert by_id[str(operator.id)]["callback_events"] == 2
+    assert by_id[str(operator.id)]["callback_tickets"] == 1
+    assert by_id[str(operator.id)]["outcomes"] == {
+        "CONFIRMED": 1,
+        "STILL_BROKEN": 0,
+        "NO_ANSWER": 1,
+    }
+    assert by_id[str(engineer.id)]["decision_events"] == 2
+    assert sum(row["decisions"] for row in employees.json()["daily"]) == 2
+    callbacks = ticket_client.get(
+        "/api/v1/reports/callbacks", params={**params, "page": 1, "size": 1}
+    )
+    assert callbacks.status_code == 200, callbacks.text
+    body = callbacks.json()
+    assert body["total_events"] == body["details"]["total"] == 2
+    assert body["unique_tickets"] == 1
+    assert body["outcomes"] == {"CONFIRMED": 1, "STILL_BROKEN": 0, "NO_ANSWER": 1}
+    assert sum(row["count"] for row in body["daily"]) == 2
+    assert sum(row["count"] for row in body["employees"]) == 2
+    assert len(body["details"]["items"]) == 1
+    assert body["details"]["items"][0]["ticket_id"] == manual["id"]
+    second = ticket_client.get(
+        "/api/v1/reports/callbacks", params={**params, "page": 2, "size": 1}
+    ).json()
+    assert second["details"]["items"][0]["ticket_id"] == manual["id"]
+    empty_period = {"start": (now.date() - timedelta(days=3)).isoformat(),
+                    "end": (now.date() - timedelta(days=3)).isoformat()}
+    assert ticket_client.get("/api/v1/reports/callbacks", params=empty_period).json()[
+        "total_events"
+    ] == 0
+    assert ticket_client.get("/api/v1/reports/employees", params=empty_period).json()[
+        "daily"
+    ] == []
+    login(ticket_client, engineer.login)
+    assert ticket_client.get("/api/v1/reports/callbacks", params=params).json()["total_events"] == 3
+    restricted = seed_user(ticket_engine, "phase2_restricted", Role.ENGINEER)
+    with Session(ticket_engine) as db:
+        account = db.get(User, restricted.id)
+        assert account is not None
+        account.permissions_customized = True
+        db.add_all([
+            UserPermission(user_id=restricted.id, permission=Permission.TICKET_READ_OWN),
+            UserPermission(user_id=restricted.id, permission=Permission.REPORTS_READ),
+        ])
+        db.commit()
+    login(ticket_client, restricted.login)
+    assert ticket_client.get("/api/v1/reports/callbacks", params=params).json()["total_events"] == 0
+    assert ticket_client.get("/api/v1/reports/employees", params=params).json()["items"] == []

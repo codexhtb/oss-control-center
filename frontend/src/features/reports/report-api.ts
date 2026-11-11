@@ -21,3 +21,38 @@ export function getGeneralReport(start: string, end: string, page: number, signa
   const params = new URLSearchParams({ start, end, page: String(page), size: '20' })
   return apiRequest<GeneralReport>(`/api/v1/reports/general?${params}`, { signal })
 }
+
+export interface EmployeesReport {
+  start: string
+  end: string
+  items: {
+    user_id: string; display_name: string; role: string; is_active: boolean
+    created_tickets: number; decision_events: number; callback_events: number
+    callback_tickets: number; outcomes: Record<string, number>
+  }[]
+  daily: { user_id: string; date: string; created: number; decisions: number; callbacks: number }[]
+}
+
+export interface CallbacksReport {
+  start: string
+  end: string
+  total_events: number
+  unique_tickets: number
+  outcomes: Record<string, number>
+  daily: { date: string; outcome: string; count: number }[]
+  employees: { user_id: string; display_name: string; outcome: string; count: number }[]
+  details: { page: number; size: number; total: number; items: {
+    id: string; ticket_id: string; ticket_number: number; subject: string | null
+    outcome: string; occurred_at: string; actor_id: string; actor_name: string
+  }[] }
+}
+
+export function getEmployeesReport(start: string, end: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ start, end })
+  return apiRequest<EmployeesReport>(`/api/v1/reports/employees?${params}`, { signal })
+}
+
+export function getCallbacksReport(start: string, end: string, page: number, signal?: AbortSignal) {
+  const params = new URLSearchParams({ start, end, page: String(page), size: '20' })
+  return apiRequest<CallbacksReport>(`/api/v1/reports/callbacks?${params}`, { signal })
+}
