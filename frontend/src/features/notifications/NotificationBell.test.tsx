@@ -5,8 +5,10 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import type { MeResponse } from '../../shared/api/types'
 import { NotificationBell } from './NotificationBell'
 import { notificationApi } from './notification-api'
+import { taskApi } from '../tasks/task-api'
 
 vi.mock('./notification-api', () => ({ notificationApi: { list: vi.fn(), markRead: vi.fn() } }))
+vi.mock('../tasks/task-api', () => ({ taskApi: { notifications: vi.fn(), markRead: vi.fn() } }))
 
 const engineer: MeResponse = {
   user: {
@@ -35,6 +37,8 @@ beforeEach(() => {
     page: 1, size: 20, total: 1, unread_count: 1,
   })
   vi.mocked(notificationApi.markRead).mockResolvedValue(undefined)
+  vi.mocked(taskApi.notifications).mockReset().mockResolvedValue({ items: [], page: 1, size: 20, total: 0, unread_count: 0 })
+  vi.mocked(taskApi.markRead).mockReset().mockResolvedValue(undefined)
 })
 
 it('shows persisted report and marks it read before opening its ticket', async () => {
@@ -50,5 +54,20 @@ it('shows persisted report and marks it read before opening its ticket', async (
 it('does not fetch or show engineer reports to an operator', () => {
   mount({ ...engineer, user: { ...engineer.user, role: 'operator' } })
   expect(screen.queryByRole('button', { name: /Уведомления/ })).not.toBeInTheDocument()
+  expect(notificationApi.list).not.toHaveBeenCalled()
+})
+
+it('shows a task notice to a permitted operator and marks it read on opening', async () => {
+  vi.mocked(taskApi.notifications).mockResolvedValue({
+    items: [{ id: 'task-notice', task_id: 'task-1', ticket_id: 'ticket-1', ticket_number: 66,
+      title: 'Позвонить абоненту', kind: 'CREATED', created_at: '2026-11-03T10:00:00Z', read_at: null }],
+    page: 1, size: 20, total: 1, unread_count: 1,
+  })
+  const session = { ...engineer, user: { ...engineer.user, role: 'operator' as const },
+    permissions: ['tickets.read.all', 'tasks.execute'] as MeResponse['permissions'] }
+  mount(session)
+  fireEvent.click(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 1' }))
+  fireEvent.click(screen.getByRole('button', { name: /Новое поручение · Заявка #66/ }))
+  await waitFor(() => expect(taskApi.markRead).toHaveBeenCalledWith('task-notice'))
   expect(notificationApi.list).not.toHaveBeenCalled()
 })

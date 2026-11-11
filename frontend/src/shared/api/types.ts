@@ -28,6 +28,8 @@ export type Permission =
   | 'chat.messages.delete'
   | 'settings.manage'
   | 'reports.read'
+  | 'tasks.create'
+  | 'tasks.execute'
 
 export interface User {
   id: string

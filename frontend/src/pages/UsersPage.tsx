@@ -14,6 +14,7 @@ type Page<T> = { items: T[]; page: number; size: number; total: number }
 type AuditRow = { id: string; actor_name: string | null; target_name: string | null; action: string; outcome: string; details: Record<string, unknown> | null; occurred_at: string }
 
 const permissionGroups: { title: string; values: { key: Permission; label: string }[] }[] = [
+  { title: 'Внутренние поручения', values: [{ key: 'tasks.create', label: 'Создание поручений' }, { key: 'tasks.execute', label: 'Выполнение поручений' }] },
   { title: 'Отчёты', values: [{ key: 'reports.read', label: 'Просмотр отчётов Service Desk' }] },
   { title: 'Настройки Service Desk', values: [{ key: 'settings.manage', label: 'Управление причинами решений и шаблонами (администратор)' }] },
   { title: 'Чат', values: [{ key: 'chat.messages.delete', label: 'Удаление сообщений (администратор)' }] },
@@ -42,7 +43,7 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
 
 const presets: Record<Role, Permission[]> = {
   operator: ['subscribers.read', 'subscribers.finance.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.own', 'tickets.comment', 'diagnostics.read'],
-  engineer: ['subscribers.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.all', 'tickets.comment', 'tickets.start', 'tickets.assign', 'tickets.field_work', 'tickets.diagnose', 'diagnostics.read', 'diagnostics.run', 'tickets.resolve', 'tickets.close', 'audit.read', 'reports.read'],
+  engineer: ['subscribers.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.all', 'tickets.comment', 'tickets.start', 'tickets.assign', 'tickets.field_work', 'tickets.diagnose', 'diagnostics.read', 'diagnostics.run', 'tickets.resolve', 'tickets.close', 'audit.read', 'reports.read', 'tasks.create', 'tasks.execute'],
   admin: permissionGroups.flatMap((group) => group.values.map((entry) => entry.key)),
 }
 

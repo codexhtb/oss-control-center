@@ -7,6 +7,7 @@
 - [Service Desk workflow](service-desk-workflow.md)
 - [Admin Control Center: аудит настраиваемости и первый безопасный этап](admin-control-center.md)
 - [Общий чат сотрудников (Phase 1)](staff-chat.md)
+- [Внутренние поручения по заявкам](internal-tasks.md)
 - [Системная архитектура](system-architecture.md)
 - [API contracts](api-contracts.md) и [RBAC matrix](rbac.md)
 - [Модуль field_dispatch](field-dispatch.md) — проект Phase 3

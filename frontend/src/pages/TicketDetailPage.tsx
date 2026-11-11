@@ -8,6 +8,7 @@ import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { TicketEditor } from '../features/tickets/TicketEditor'
+import { TicketTasks } from '../features/tasks/TicketTasks'
 import { settingsApi } from '../features/tickets/settings-api'
 import { TemplatePicker } from '../features/tickets/TemplatePicker'
 import { MonitoringTicketSection } from '../features/tickets/MonitoringTicketSection'
@@ -430,6 +431,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
             {ticket.description && <p className="ticket-description">{ticket.description}</p>}
           </section>
         {!ticket.subscriber && <div className="unlinked-note">Заявка без привязки к абоненту.</div>}
+        {(session.permissions.includes('tasks.create') || session.permissions.includes('tasks.execute')) && <TicketTasks ticketId={id} session={session} />}
         {canDelete && <section className="detail-panel ticket-work-panel ticket-work-panel--more">
             <details className="ticket-action-disclosure" onToggle={(event) => { if (!event.currentTarget.open) setConfirmDelete(false) }}><summary>Дополнительно</summary>
               {confirmDelete ? <div className="ticket-action-form" role="group" aria-label="Подтверждение удаления" aria-describedby="ticket-delete-warning" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); cancelDelete() } }}>

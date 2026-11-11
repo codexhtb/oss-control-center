@@ -20,6 +20,7 @@ import { TrashPage } from '../pages/TrashPage'
 import { ChatPage } from '../pages/ChatPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { ReportsPage } from '../pages/ReportsPage'
+import { TasksPage } from '../pages/TasksPage'
 import { queryClient } from './query-client'
 
 function AppRoutes() {
@@ -64,6 +65,7 @@ function AppRoutes() {
         <Route path="/chat" element={<ChatPage user={session.data.user} canDelete={session.data.user.role === 'admin' && session.data.permissions.includes('chat.messages.delete')} />} />
         <Route path="/tickets" element={canReadTickets ? <TicketListPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/reports" element={canReadTickets && session.data.permissions.includes('reports.read') ? <ReportsPage /> : <Navigate to="/" replace />} />
+        <Route path="/tasks" element={canReadTickets && (session.data.permissions.includes('tasks.create') || session.data.permissions.includes('tasks.execute')) ? <TasksPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/new" element={session.data.permissions.includes('tickets.create') ? <TicketCreatePage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/tickets/:id" element={canReadTickets ? <TicketDetailPage session={session.data} /> : <Navigate to="/" replace />} />
         <Route path="/users" element={session.data.permissions.includes('users.manage') ? <UsersPage currentUser={session.data.user} /> : <Navigate to="/" replace />} />
