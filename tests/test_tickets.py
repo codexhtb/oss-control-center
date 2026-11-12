@@ -4854,8 +4854,9 @@ def test_completion_prompt_failure_never_retries_automatically(
         assert later.outcome == "PROCESSED" and later.prompt_id != prompt_id
 
 
+@pytest.mark.parametrize("replacement_uncertain", [False, True])
 def test_completion_prompt_after_group_migration_keeps_report_bound_to_handoff(
-    ticket_engine: Engine, ticket_client: TestClient,
+    ticket_engine: Engine, ticket_client: TestClient, replacement_uncertain: bool,
 ) -> None:
     engineer = seed_user(ticket_engine, "migrated_prompt_engineer", Role.ENGINEER)
     login(ticket_client, engineer.login)
@@ -4880,6 +4881,7 @@ def test_completion_prompt_after_group_migration_keeps_report_bound_to_handoff(
             ticket_id=UUID(ticket["id"]), ticket_version=1, reason="Synthetic visit",
             delivery_status="SENT", work_status="AWAITING_REPORT",
             chat_id=old_chat, telegram_message_id=204,
+            message_text=f"Заявка #{ticket['number']} · Выезд",
             created_by=engineer.id, sent_by=engineer.id, sent_at=datetime.now(UTC),
         )
         db.add(handoff)
@@ -4998,6 +5000,43 @@ def test_completion_prompt_after_group_migration_keeps_report_bound_to_handoff(
             FieldExternalMessage.handoff_id == handoff_id,
             FieldExternalMessage.kind == "COMPLETION_REPORT",
         )) == 1
+
+        class CleanupGateway:
+            edits: list[tuple[str, int]] = []
+            replacements: list[tuple[str, str]] = []
+
+            def delete_message(self, _chat_id: str, _message_id: int) -> None:
+                pass
+
+            def edit_handoff_card(self, chat_id: str, message_id: int, _text: str) -> None:
+                self.edits.append((chat_id, message_id))
+                raise DispatchRejected("telegram_http_403")
+
+            def send_message(self, chat_id: str, text: str) -> DispatchReceipt:
+                self.replacements.append((chat_id, text))
+                if replacement_uncertain:
+                    raise DispatchUncertain
+                return DispatchReceipt(chat_id, "706")
+
+        cleanup = CleanupGateway()
+        _sync_completion(db, cleanup, 92003)
+        report_update = db.scalar(select(FieldDispatchUpdate).where(
+            FieldDispatchUpdate.update_id == 92003,
+        ))
+        assert report_update is not None
+        assert cleanup.edits == [(old_chat, 204)]
+        assert len(cleanup.replacements) == 1
+        assert cleanup.replacements[0][0] == new_chat
+        assert cleanup.replacements[0][1].endswith("✅ Выполнено\nМонтажник: Synthetic")
+        if replacement_uncertain:
+            assert report_update.card_edit_status == "FAILED"
+            assert report_update.card_edit_attempts == 5
+            assert report_update.card_edit_error_code == "telegram_replacement_uncertain"
+        else:
+            assert report_update.card_edit_status == "DONE"
+            assert report_update.card_edit_error_code == "telegram_replacement_sent"
+        _sync_completion(db, cleanup, 92003)
+        assert len(cleanup.replacements) == 1
 
 
 def test_ochamchira_completion_retry_and_late_old_reply_are_idempotent(

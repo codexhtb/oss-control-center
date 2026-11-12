@@ -353,11 +353,40 @@ def _sync_report_action(
             gateway.delete_message(current_chat_id(db, report.chat_id), report.telegram_message_id)
         else:
             gateway.edit_handoff_card(
-                current_chat_id(db, handoff.chat_id),
+                handoff.chat_id,
                 handoff.telegram_message_id,
                 _card_text(handoff, report),
             )
     except DispatchRejected as exc:
+        migrated_chat = current_chat_id(db, handoff.chat_id)
+        if (
+            action == "card_edit"
+            and migrated_chat != handoff.chat_id
+            and exc.code in {"telegram_http_400", "telegram_http_403"}
+        ):
+            # Message IDs are scoped to their original chat. If that chat is
+            # gone after migration, publish one completed replacement in the
+            # confirmed successor group. A lost sendMessage receipt must never
+            # trigger a second replacement automatically.
+            attempted = record.card_edit_attempts
+            record.card_edit_status = "FAILED"
+            record.card_edit_attempts = 5
+            record.card_edit_error_code = "telegram_replacement_uncertain"
+            db.commit()
+            try:
+                gateway.send_message(migrated_chat, _card_text(handoff, report))
+            except DispatchRejected as replacement_error:
+                record.card_edit_status = "FAILED"
+                record.card_edit_attempts = attempted
+                record.card_edit_error_code = replacement_error.code
+            except DispatchUncertain:
+                return
+            else:
+                record.card_edit_status = "DONE"
+                record.card_edit_attempts = attempted
+                record.card_edit_error_code = "telegram_replacement_sent"
+            db.commit()
+            return
         already_done = (action == "report_delete" and exc.code == "telegram_message_not_found") or (
             action == "card_edit" and exc.code == "telegram_message_not_modified"
         )
