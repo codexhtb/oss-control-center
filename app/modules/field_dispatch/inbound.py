@@ -2,11 +2,11 @@
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -82,6 +82,32 @@ def _event_time(value: object) -> datetime:
         )
     except (OverflowError, OSError, ValueError):
         return datetime.now(UTC)
+
+
+def _recover_prompt_receipt(
+    db: Session, prompt: FieldWorkCompletionPrompt, quoted: dict[str, Any],
+    chat_id: str, message_id: int,
+) -> None:
+    other_active = db.scalar(
+        select(FieldWorkCompletionPrompt.id).where(
+            FieldWorkCompletionPrompt.handoff_id == prompt.handoff_id,
+            FieldWorkCompletionPrompt.id != prompt.id,
+            FieldWorkCompletionPrompt.status.in_(ACTIVE_PROMPT_STATUSES),
+        ).with_for_update().limit(1)
+    )
+    prompt.chat_id = chat_id
+    prompt.telegram_message_id = message_id
+    prompt.error_code = None
+    prompt.sent_at = _event_time(quoted.get("date"))
+    if other_active is not None:
+        prompt.status = "CANCELED"
+        prompt.completed_at = datetime.now(UTC)
+    else:
+        prompt.status = "WAITING"
+    record = db.get(FieldDispatchUpdate, prompt.callback_update_id)
+    if record is not None:
+        record.sync_status = "SYNCED"
+        record.sync_error_code = None
 
 
 def _receipt(
@@ -338,6 +364,7 @@ def _callback(
         or handoff.delivery_status != "SENT"
         or handoff.chat_id not in accepted_chat_ids
         or handoff.telegram_message_id != source_message_id
+        or handoff.chat_id != str(source_message.get("chat", {}).get("id"))
     ):
         return _ignored(db, update_id, kind, "DENIED", "telegram_handoff_mismatch")
     if handoff.work_status != "AWAITING_REPORT":
@@ -378,32 +405,78 @@ def _callback(
         )
         .with_for_update()
     )
+    now = datetime.now(UTC)
     if active is not None:
-        _receipt(
-            db,
-            update_id,
-            kind,
-            "DUPLICATE",
-            handoff_id=handoff.id,
-            error_code="completion_description_already_requested",
+        retry_ready = (
+            prompt_type == "COMPLETION"
+            and active.prompt_type == "COMPLETION"
+            and active.status != "REQUESTING"
+            and now - active.created_at >= timedelta(seconds=45)
         )
-        db.commit()
-        return InboundResult(
-            update_id,
-            "DUPLICATE",
-            kind,
-            handoff.id,
-            callback_id,
-            sender_name,
-            True,
-            active.id,
+        recent_prompts = db.scalar(
+            select(func.count()).select_from(FieldWorkCompletionPrompt).where(
+                FieldWorkCompletionPrompt.handoff_id == handoff.id,
+                FieldWorkCompletionPrompt.created_at >= now - timedelta(minutes=10),
+                or_(
+                    FieldWorkCompletionPrompt.status.in_(ACTIVE_PROMPT_STATUSES + ("CANCELED",)),
+                    FieldWorkCompletionPrompt.error_code == "superseded_uncertain",
+                ),
+            )
+        ) or 0
+        if not retry_ready or recent_prompts >= 3:
+            _receipt(
+                db, update_id, kind, "DUPLICATE", handoff_id=handoff.id,
+                error_code=(
+                    "completion_prompt_retry_limit" if recent_prompts >= 3
+                    else "completion_description_already_requested"
+                ),
+            )
+            db.commit()
+            return InboundResult(
+                update_id, "DUPLICATE", kind, handoff.id, callback_id,
+                sender_name, True, active.id,
+            )
+    else:
+        latest_failed = db.scalar(
+            select(FieldWorkCompletionPrompt).where(
+                FieldWorkCompletionPrompt.handoff_id == handoff.id,
+                FieldWorkCompletionPrompt.status == "FAILED",
+            ).order_by(FieldWorkCompletionPrompt.created_at.desc()).limit(1)
         )
+        if (
+            prompt_type == "COMPLETION"
+            and latest_failed is not None
+            and latest_failed.prompt_type == "COMPLETION"
+            and now - latest_failed.created_at < timedelta(seconds=15)
+        ):
+            _receipt(
+                db, update_id, kind, "DUPLICATE", handoff_id=handoff.id,
+                error_code="completion_prompt_retry_wait",
+            )
+            db.commit()
+            return InboundResult(
+                update_id, "DUPLICATE", kind, handoff.id, callback_id,
+                sender_name, True, latest_failed.id,
+            )
     receipt, created = _receipt(
         db, update_id, kind, "PROCESSED", handoff_id=handoff.id, sync_status="PENDING"
     )
     if not created:
         db.rollback()
         return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+    if active is not None:
+        if active.status == "WAITING":
+            active.status = "CANCELED"
+            active.completed_at = now
+            # Keep the old question until the replacement was delivered.
+            active.deletion_status = "NOT_REQUIRED"
+        else:
+            active.status = "FAILED"
+            active.error_code = "superseded_uncertain"
+            old_update = db.get(FieldDispatchUpdate, active.callback_update_id)
+            if old_update is not None:
+                old_update.sync_status = "FAILED"
+                old_update.sync_error_code = "superseded_uncertain"
     prompt = FieldWorkCompletionPrompt(
         handoff_id=handoff.id,
         callback_update_id=receipt.id,
@@ -451,9 +524,10 @@ def _text_reply(
     body = text.strip()
     if len(body) > 4000 or any(char == "\x00" for char in body):
         return _ignored(db, update_id, "TEXT_REPLY", "IGNORED", "telegram_reply_invalid")
+    incoming_chat_id = str(message.get("chat", {}).get("id"))
 
     card = db.scalar(select(FieldWorkHandoff).where(
-        FieldWorkHandoff.chat_id.in_(accepted_chat_ids),
+        FieldWorkHandoff.chat_id == incoming_chat_id,
         FieldWorkHandoff.telegram_message_id == reply_message_id,
     ).with_for_update())
     dialog = active_dialog(db, card.id, lock=True) if card is not None else None
@@ -479,7 +553,7 @@ def _text_reply(
 
     imported = db.scalar(
         select(FieldExternalMessage).where(
-            FieldExternalMessage.chat_id.in_(accepted_chat_ids),
+            FieldExternalMessage.chat_id == incoming_chat_id,
             FieldExternalMessage.telegram_message_id == source_message_id,
         )
     )
@@ -500,7 +574,7 @@ def _text_reply(
     prompt = db.scalar(
         select(FieldWorkCompletionPrompt)
         .where(
-            FieldWorkCompletionPrompt.chat_id.in_(accepted_chat_ids),
+            FieldWorkCompletionPrompt.chat_id == incoming_chat_id,
             FieldWorkCompletionPrompt.telegram_message_id == reply_message_id,
         )
         .with_for_update()
@@ -539,23 +613,96 @@ def _text_reply(
                 .join(FieldWorkHandoff, FieldWorkHandoff.id == FieldWorkCompletionPrompt.handoff_id)
                 .where(
                     FieldWorkCompletionPrompt.chat_id.in_(accepted_chat_ids),
-                    FieldWorkCompletionPrompt.status == "UNCERTAIN",
+                    or_(
+                        FieldWorkCompletionPrompt.status == "UNCERTAIN",
+                        and_(
+                            FieldWorkCompletionPrompt.status == "FAILED",
+                            FieldWorkCompletionPrompt.error_code == "superseded_uncertain",
+                        ),
+                    ),
                     FieldWorkHandoff.delivery_status == "SENT",
                     FieldWorkHandoff.work_status == "AWAITING_REPORT",
                     FieldWorkHandoff.telegram_message_id == original_id,
                 )
                 .with_for_update()
             ).all()
-            if len(candidates) == 1 and prompt_text == (
-                reschedule_prompt_text(candidates[0].recipient_username)
-                if candidates[0].prompt_type == "RESCHEDULE"
-                else completion_prompt_text(candidates[0].recipient_username)
-            ):
-                prompt = candidates[0]
-                prompt.telegram_message_id = reply_message_id
-                prompt.status = "WAITING"
-                prompt.error_code = None
-                prompt.sent_at = _event_time(reply.get("date"))
+            matches = []
+            for candidate in candidates:
+                candidate_handoff = db.get(FieldWorkHandoff, candidate.handoff_id)
+                if candidate_handoff is None or candidate_handoff.chat_id != str(original_chat_id):
+                    continue
+                prior = db.scalar(select(FieldWorkCompletionPrompt.id).where(
+                    FieldWorkCompletionPrompt.handoff_id == candidate.handoff_id,
+                    FieldWorkCompletionPrompt.created_at < candidate.created_at,
+                ).limit(1))
+                ticket = db.get(Ticket, candidate_handoff.ticket_id)
+                context = f"Заявка #{ticket.number} · {candidate.id}" if prior and ticket else None
+                expected = (
+                    reschedule_prompt_text(candidate.recipient_username, context)
+                    if candidate.prompt_type == "RESCHEDULE"
+                    else completion_prompt_text(candidate.recipient_username, context)
+                )
+                if prompt_text == expected:
+                    matches.append(candidate)
+            if len(matches) == 1:
+                prompt = matches[0]
+                _recover_prompt_receipt(
+                    db, prompt, reply, str(quoted_chat_id), reply_message_id
+                )
+        if (
+            prompt is None
+            and original_id is None
+            and isinstance(prompt_text, str)
+            and isinstance(from_value, dict)
+            and from_value.get("is_bot") is True
+            and bot_sender_id is not None
+            and bot_sender_id > 0
+            and quoted_chat_id is not None
+            and str(quoted_chat_id) in accepted_chat_ids
+        ):
+            # A migrated group's old card cannot be quoted in the new group.
+            # The fallback prompt carries an exact prompt ID for recovery if
+            # Telegram delivered it but its sendMessage receipt was lost.
+            match = re.search(r"(?m)^Заявка #(\d+) · ([0-9a-f-]{36})$", prompt_text)
+            if match is not None:
+                try:
+                    prompt_id = UUID(match.group(2))
+                except ValueError:
+                    prompt_id = None
+                if prompt_id is not None:
+                    candidate = db.scalar(
+                        select(FieldWorkCompletionPrompt)
+                        .join(FieldWorkHandoff)
+                        .where(
+                            FieldWorkCompletionPrompt.id == prompt_id,
+                            FieldWorkCompletionPrompt.chat_id.in_(accepted_chat_ids),
+                            or_(
+                                FieldWorkCompletionPrompt.status == "UNCERTAIN",
+                                and_(
+                                    FieldWorkCompletionPrompt.status == "FAILED",
+                                    FieldWorkCompletionPrompt.error_code == "superseded_uncertain",
+                                ),
+                            ),
+                            FieldWorkHandoff.delivery_status == "SENT",
+                            FieldWorkHandoff.work_status == "AWAITING_REPORT",
+                        )
+                        .with_for_update()
+                    )
+                    handoff = db.get(FieldWorkHandoff, candidate.handoff_id) if candidate else None
+                    ticket = db.get(Ticket, handoff.ticket_id) if handoff else None
+                    context = f"Заявка #{ticket.number} · {prompt_id}" if ticket else None
+                    expected = None
+                    if candidate is not None:
+                        expected = (
+                            reschedule_prompt_text(candidate.recipient_username, context)
+                            if candidate.prompt_type == "RESCHEDULE"
+                            else completion_prompt_text(candidate.recipient_username, context)
+                        )
+                    if ticket and str(ticket.number) == match.group(1) and prompt_text == expected:
+                        prompt = candidate
+                        _recover_prompt_receipt(
+                            db, prompt, reply, str(quoted_chat_id), reply_message_id
+                        )
     if prompt is not None:
         if prompt.prompt_type == "RESCHEDULE":
             kind = "RESCHEDULE_REPORT"
@@ -634,7 +781,10 @@ def _text_reply(
         )
         if handoff is None:
             return _ignored(db, update_id, kind, "IGNORED", "telegram_handoff_missing")
-        if prompt.status != "WAITING" or handoff.work_status != "AWAITING_REPORT":
+        if (
+            prompt.status not in {"WAITING", "CANCELED"}
+            or handoff.work_status != "AWAITING_REPORT"
+        ):
             _receipt(
                 db,
                 update_id,
@@ -658,6 +808,25 @@ def _text_reply(
         if not created:
             db.rollback()
             return InboundResult(update_id, "DUPLICATE", kind, handoff.id, duplicate=True)
+        other_prompts = db.scalars(
+            select(FieldWorkCompletionPrompt).where(
+                FieldWorkCompletionPrompt.handoff_id == handoff.id,
+                FieldWorkCompletionPrompt.id != prompt.id,
+                FieldWorkCompletionPrompt.status.in_(ACTIVE_PROMPT_STATUSES),
+            ).with_for_update()
+        ).all()
+        for other in other_prompts:
+            if other.status == "WAITING":
+                other.status = "CANCELED"
+                other.completed_at = event_time
+                other.deletion_status = "PENDING"
+            else:
+                other.status = "FAILED"
+                other.error_code = "superseded_by_report"
+                other_update = db.get(FieldDispatchUpdate, other.callback_update_id)
+                if other_update is not None:
+                    other_update.sync_status = "FAILED"
+                    other_update.sync_error_code = "superseded_by_report"
         receipt.report_delete_status = "PENDING"
         receipt.card_edit_status = "PENDING"
         report_message_id = uuid4()

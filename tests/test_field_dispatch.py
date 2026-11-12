@@ -136,8 +136,12 @@ def test_gateway_acknowledges_callback_and_edits_card_without_button(
     gateway = TelegramBotGateway(TelegramGatewayConfig(path))
     FakeConnection.response = FakeResponse(200, {"ok": True, "result": True})
     gateway.acknowledge_callback("synthetic-callback", "Сохранено")
-    args, _ = FakeConnection.request_args or ((), {})
+    args, kwargs = FakeConnection.request_args or ((), {})
     assert args[1].endswith("/answerCallbackQuery")
+    assert json.loads(kwargs["body"])["show_alert"] is False
+    gateway.acknowledge_callback("synthetic-callback", "Ошибка", show_alert=True)
+    _, kwargs = FakeConnection.request_args or ((), {})
+    assert json.loads(kwargs["body"])["show_alert"] is True
 
     completed_text = "Заявка #1\n\n✅ Выполнено\nМонтажник: Тест"
     FakeConnection.response = FakeResponse(
@@ -222,6 +226,10 @@ def test_gateway_asks_for_completion_description_with_force_reply(
     assert addressed["text"] == "Что было сделано?\n@installer_1"
     assert addressed["reply_parameters"]["message_id"] == 702
     assert addressed["reply_markup"]["selective"] is True
+
+    gateway.send_completion_prompt("-5319791765", None)
+    _, kwargs = FakeConnection.request_args or ((), {})
+    assert "reply_parameters" not in json.loads(kwargs["body"])
 
 
 def test_gateway_deletes_only_requested_message(

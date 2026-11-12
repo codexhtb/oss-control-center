@@ -32,11 +32,14 @@ class DispatchUncertain(Exception):
     """Transport outcome is unknown; automatic retry could duplicate a message."""
 
 
-def completion_prompt_text(username: str | None) -> str:
-    return f"Что было сделано?\n@{username}" if username else "Что было сделано?"
+def completion_prompt_text(username: str | None, context: str | None = None) -> str:
+    text = "Что было сделано?"
+    if context:
+        text += f"\n{context}"
+    return f"{text}\n@{username}" if username else text
 
 
-def reschedule_prompt_text(username: str | None) -> str:
+def reschedule_prompt_text(username: str | None, context: str | None = None) -> str:
     base = (
         "Укажите перенос одним ответом на это сообщение:\n"
         "Причина: <почему переносится выезд>\n"
@@ -44,6 +47,8 @@ def reschedule_prompt_text(username: str | None) -> str:
         "Если дату не согласовали: Дата: не согласована\n"
         "Для отмены ответьте /cancel."
     )
+    if context:
+        base += f"\n{context}"
     return f"{base}\n@{username}" if username else base
 
 
@@ -172,31 +177,35 @@ class TelegramBotGateway:
             raise DispatchUncertain from None
         return result
 
-    def acknowledge_callback(self, callback_query_id: str, text: str) -> None:
+    def acknowledge_callback(
+        self, callback_query_id: str, text: str, *, show_alert: bool = False
+    ) -> None:
         result = self._call(
             "answerCallbackQuery",
-            {"callback_query_id": callback_query_id, "text": text, "show_alert": False},
+            {"callback_query_id": callback_query_id, "text": text, "show_alert": show_alert},
         )
         if result is not True:
             raise DispatchUncertain from None
 
     def send_completion_prompt(
-        self, chat_id: str, handoff_message_id: int, *, username: str | None = None
+        self, chat_id: str, handoff_message_id: int | None, *,
+        username: str | None = None, context: str | None = None,
     ) -> DispatchReceipt:
         """Ask for the report and bind the next reply to this exact prompt."""
         _validate_chat_id(chat_id)
         parameters = {
             "chat_id": chat_id,
-            "text": completion_prompt_text(username),
-            "reply_parameters": {
-                "message_id": handoff_message_id,
-                "allow_sending_without_reply": False,
-            },
+            "text": completion_prompt_text(username, context),
             "reply_markup": {
                 "force_reply": True,
                 "input_field_placeholder": "Опишите выполненные работы",
             },
         }
+        if handoff_message_id is not None:
+            parameters["reply_parameters"] = {
+                "message_id": handoff_message_id,
+                "allow_sending_without_reply": False,
+            }
         if username:
             parameters["reply_markup"]["selective"] = True
         result = self._call("sendMessage", parameters)
@@ -210,21 +219,23 @@ class TelegramBotGateway:
         return DispatchReceipt(chat_id=chat_id, message_id=str(message_id))
 
     def send_reschedule_prompt(
-        self, chat_id: str, handoff_message_id: int, *, username: str | None = None
+        self, chat_id: str, handoff_message_id: int | None, *,
+        username: str | None = None, context: str | None = None,
     ) -> DispatchReceipt:
         _validate_chat_id(chat_id)
         parameters: dict[str, Any] = {
             "chat_id": chat_id,
-            "text": reschedule_prompt_text(username),
-            "reply_parameters": {
-                "message_id": handoff_message_id,
-                "allow_sending_without_reply": False,
-            },
+            "text": reschedule_prompt_text(username, context),
             "reply_markup": {
                 "force_reply": True,
                 "input_field_placeholder": "Причина и новая дата или «не согласована»",
             },
         }
+        if handoff_message_id is not None:
+            parameters["reply_parameters"] = {
+                "message_id": handoff_message_id,
+                "allow_sending_without_reply": False,
+            }
         if username:
             parameters["reply_markup"]["selective"] = True
         result = self._call("sendMessage", parameters)

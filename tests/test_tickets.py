@@ -32,10 +32,16 @@ from app.modules.billing.quality import DataQuality
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.correlation import DiagnosticReport, Observation
 from app.modules.field_dispatch.binding import chat_id_aliases, destination_chat_id
-from app.modules.field_dispatch.gateway import DispatchReceipt, DispatchRejected, DispatchUncertain
+from app.modules.field_dispatch.gateway import (
+    DispatchReceipt,
+    DispatchRejected,
+    DispatchUncertain,
+    completion_prompt_text,
+)
 from app.modules.field_dispatch.group_control import process_group_control
 from app.modules.field_dispatch.inbound import process_update
 from app.modules.field_dispatch.models import (
+    FieldDispatchChatMigration,
     FieldDispatchGroupBinding,
     FieldDispatchUpdate,
     FieldExternalMessage,
@@ -48,7 +54,9 @@ from app.modules.field_dispatch.models import (
     FieldWorkReschedule,
 )
 from app.modules.field_dispatch.poller import (
+    _delete_prompt,
     _send_prompt,
+    _sync_callback,
     _sync_completion,
     _sync_dialog,
     _sync_schedule_card,
@@ -4742,6 +4750,7 @@ def test_dynamic_group_binding_requires_admin_and_tracks_supergroup_migration(
     ("failure", "expected_status", "expected_code"),
     [
         (DispatchRejected("telegram_http_400"), "FAILED", "telegram_http_400"),
+        (DispatchRejected("telegram_http_403"), "FAILED", "telegram_http_403"),
         (DispatchUncertain(), "UNCERTAIN", "telegram_transport_uncertain"),
     ],
 )
@@ -4794,6 +4803,7 @@ def test_completion_prompt_failure_never_retries_automatically(
 
         class FailingGateway:
             calls = 0
+            alerts: list[tuple[str, bool]] = []
 
             def send_completion_prompt(self, chat_id: str, message_id: int) -> DispatchReceipt:
                 self.calls += 1
@@ -4803,10 +4813,17 @@ def test_completion_prompt_failure_never_retries_automatically(
                     assert persisted is not None and persisted.status == "UNCERTAIN"
                 raise failure
 
+            def acknowledge_callback(
+                self, _callback_id: str, message: str, *, show_alert: bool = False,
+            ) -> None:
+                self.alerts.append((message, show_alert))
+
         gateway = FailingGateway()
-        _send_prompt(db, gateway, prompt_id)
+        _sync_callback(db, gateway, "synthetic-callback", prompt_id)
         _send_prompt(db, gateway, prompt_id)
         assert gateway.calls == 1
+        assert len(gateway.alerts) == 1 and gateway.alerts[0][1] is True
+        assert "Вопрос" in gateway.alerts[0][0] or "вопрос" in gateway.alerts[0][0]
         saved = db.get(FieldWorkCompletionPrompt, prompt_id)
         assert saved is not None and saved.status == expected_status
         assert saved.error_code == expected_code
@@ -4814,6 +4831,362 @@ def test_completion_prompt_failure_never_retries_automatically(
         receipt = db.get(FieldDispatchUpdate, update.id)
         assert receipt is not None and receipt.sync_status == "FAILED"
         assert receipt.sync_error_code == expected_code
+
+        def retry_callback(update_id: int) -> dict:
+            return {
+                "update_id": update_id,
+                "callback_query": {
+                    "id": f"retry-{update_id}",
+                    "from": {"id": 501, "is_bot": False, "first_name": "Synthetic"},
+                    "data": f"field_done:{handoff.id}",
+                    "message": {
+                        "message_id": 701,
+                        "chat": {"id": -5319791765, "type": "group"},
+                    },
+                },
+            }
+
+        immediate = process_update(db, retry_callback(91002))
+        assert immediate.outcome == "DUPLICATE" and immediate.prompt_id == prompt_id
+        saved.created_at = datetime.now(UTC) - timedelta(minutes=2)
+        db.commit()
+        later = process_update(db, retry_callback(91003))
+        assert later.outcome == "PROCESSED" and later.prompt_id != prompt_id
+
+
+def test_completion_prompt_after_group_migration_keeps_report_bound_to_handoff(
+    ticket_engine: Engine, ticket_client: TestClient,
+) -> None:
+    engineer = seed_user(ticket_engine, "migrated_prompt_engineer", Role.ENGINEER)
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client)
+    old_chat, new_chat = "-5319791765", "-1005319791765"
+    with Session(ticket_engine) as db:
+        binding = db.get(FieldDispatchGroupBinding, 1)
+        assert binding is not None
+        binding.chat_id, binding.chat_type, binding.status = new_chat, "supergroup", "ACTIVE"
+        binding.chat_title = "Synthetic destination"
+        migration_update = FieldDispatchUpdate(
+            bot_identity="oss_field_service_bot", update_id=92001,
+            kind="GROUP_EVENT", outcome="PROCESSED",
+        )
+        db.add(migration_update)
+        db.flush()
+        db.add(FieldDispatchChatMigration(
+            old_chat_id=old_chat, new_chat_id=new_chat,
+            update_record_id=migration_update.id,
+        ))
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=1, reason="Synthetic visit",
+            delivery_status="SENT", work_status="AWAITING_REPORT",
+            chat_id=old_chat, telegram_message_id=204,
+            created_by=engineer.id, sent_by=engineer.id, sent_at=datetime.now(UTC),
+        )
+        db.add(handoff)
+        db.flush()
+        update = FieldDispatchUpdate(
+            bot_identity="oss_field_service_bot", update_id=92002,
+            kind="COMPLETION_CALLBACK", outcome="PROCESSED",
+            handoff_id=handoff.id, sync_status="PENDING",
+        )
+        db.add(update)
+        db.flush()
+        prompt = FieldWorkCompletionPrompt(
+            handoff_id=handoff.id, callback_update_id=update.id, chat_id=old_chat,
+            sender_telegram_id=501, sender_name="Synthetic installer",
+            status="REQUESTING", prompt_type="COMPLETION",
+        )
+        db.add(prompt)
+        db.commit()
+        prompt_id = prompt.id
+        handoff_id = handoff.id
+
+        class Gateway:
+            sends: list[tuple[str, int | None, str | None]] = []
+            answers: list[tuple[str, bool]] = []
+
+            def send_completion_prompt(
+                self, chat_id: str, message_id: int | None, *, context: str | None = None,
+            ) -> DispatchReceipt:
+                self.sends.append((chat_id, message_id, context))
+                if chat_id == old_chat:
+                    raise DispatchRejected("telegram_http_403")
+                return DispatchReceipt(chat_id, "704")
+
+            def acknowledge_callback(
+                self, _callback_id: str, text: str, *, show_alert: bool = False,
+            ) -> None:
+                self.answers.append((text, show_alert))
+
+        gateway = Gateway()
+        forged_callback = {
+            "update_id": 92000,
+            "callback_query": {
+                "id": "wrong-migrated-chat",
+                "from": {"id": 501, "is_bot": False, "first_name": "Installer"},
+                "data": f"field_done:{handoff_id}",
+                "message": {"message_id": 204, "chat": {"id": int(new_chat), "type": "supergroup"}},
+            },
+        }
+        assert process_update(db, forged_callback).outcome == "DENIED"
+        _sync_callback(db, gateway, "synthetic-callback", prompt_id)
+        context = f"Заявка #{ticket['number']} · {prompt_id}"
+        assert gateway.sends == [(old_chat, 204, None), (new_chat, None, context)]
+        assert gateway.answers == [("Вопрос отправлен в группу. Ответьте на него", False)]
+        saved_prompt = db.get(FieldWorkCompletionPrompt, prompt_id)
+        assert saved_prompt is not None
+        assert saved_prompt.status == "WAITING" and saved_prompt.chat_id == new_chat
+        assert saved_prompt.telegram_message_id == 704
+        _send_prompt(db, gateway, prompt_id)
+        assert len(gateway.sends) == 2
+
+        # Message IDs are scoped to a chat. The old chat may independently
+        # contain a prompt numbered 704; it must not capture a new-chat reply.
+        other_handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=2, reason="Other synthetic visit",
+            delivery_status="SENT", work_status="AWAITING_REPORT",
+            chat_id=old_chat, telegram_message_id=205,
+            created_by=engineer.id, sent_by=engineer.id, sent_at=datetime.now(UTC),
+        )
+        db.add(other_handoff)
+        db.flush()
+        other_update = FieldDispatchUpdate(
+            bot_identity="oss_field_service_bot", update_id=92004,
+            kind="COMPLETION_CALLBACK", outcome="PROCESSED",
+            handoff_id=other_handoff.id, sync_status="SYNCED",
+        )
+        db.add(other_update)
+        db.flush()
+        db.add(FieldWorkCompletionPrompt(
+            handoff_id=other_handoff.id, callback_update_id=other_update.id,
+            chat_id=old_chat, sender_telegram_id=503, sender_name="Other installer",
+            status="WAITING", prompt_type="COMPLETION",
+            telegram_message_id=704, sent_at=datetime.now(UTC),
+        ))
+        db.commit()
+        other_handoff_id = other_handoff.id
+
+        # Simulate a lost sendMessage receipt for the migrated-chat fallback.
+        # Its prompt has no quoted old card; the exact context must recover it.
+        saved_prompt.status = "UNCERTAIN"
+        saved_prompt.error_code = "telegram_transport_uncertain"
+        saved_prompt.telegram_message_id = None
+        saved_prompt.sent_at = None
+        db.commit()
+
+        reply = {
+            "update_id": 92003,
+            "message": {
+                "message_id": 705, "date": 1_800_000_010,
+                "from": {"id": 502, "is_bot": False, "first_name": "Synthetic"},
+                "chat": {"id": int(new_chat), "type": "supergroup"},
+                "reply_to_message": {
+                    "message_id": 704, "date": 1_800_000_009,
+                    "from": {"id": 9999, "is_bot": True},
+                    "chat": {"id": int(new_chat), "type": "supergroup"},
+                    "text": completion_prompt_text(None, context),
+                },
+                "text": "Synthetic work completed",
+            },
+        }
+        result = process_update(db, reply)
+        assert result.outcome == "PROCESSED" and result.handoff_id == handoff_id
+        assert db.get(FieldWorkHandoff, handoff_id).work_status == "REPORTED"
+        assert db.get(FieldWorkHandoff, other_handoff_id).work_status == "AWAITING_REPORT"
+        assert process_update(db, reply).duplicate
+        assert db.scalar(select(func.count()).select_from(FieldExternalMessage).where(
+            FieldExternalMessage.handoff_id == handoff_id,
+            FieldExternalMessage.kind == "COMPLETION_REPORT",
+        )) == 1
+
+
+def test_ochamchira_completion_retry_and_late_old_reply_are_idempotent(
+    ticket_engine: Engine, ticket_client: TestClient,
+) -> None:
+    engineer = seed_user(ticket_engine, "ochamchira_retry_engineer", Role.ENGINEER)
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client)
+    chat_id = "-1004473201977"
+    with Session(ticket_engine) as db:
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=1, reason="Synthetic visit",
+            delivery_status="SENT", work_status="AWAITING_REPORT",
+            chat_id=chat_id, telegram_message_id=35,
+            created_by=engineer.id, sent_by=engineer.id, sent_at=datetime.now(UTC),
+        )
+        db.add(handoff)
+        db.flush()
+        original_update = FieldDispatchUpdate(
+            bot_identity="oss_field_service_bot", update_id=93001,
+            kind="COMPLETION_CALLBACK", outcome="PROCESSED",
+            handoff_id=handoff.id, sync_status="SYNCED",
+        )
+        db.add(original_update)
+        db.flush()
+        old_prompt = FieldWorkCompletionPrompt(
+            handoff_id=handoff.id, callback_update_id=original_update.id,
+            chat_id=chat_id, sender_telegram_id=501, sender_name="Synthetic installer",
+            status="WAITING", prompt_type="COMPLETION", telegram_message_id=38,
+            created_at=datetime.now(UTC) - timedelta(minutes=2), sent_at=datetime.now(UTC),
+        )
+        db.add(old_prompt)
+        db.commit()
+        handoff_id, old_prompt_id = handoff.id, old_prompt.id
+
+        def callback(update_id: int, sender_id: int) -> dict:
+            return {
+                "update_id": update_id,
+                "callback_query": {
+                    "id": f"synthetic-{update_id}",
+                    "from": {"id": sender_id, "is_bot": False, "first_name": "Synthetic"},
+                    "data": f"field_done:{handoff_id}",
+                    "message": {
+                        "message_id": 35,
+                        "chat": {"id": int(chat_id), "type": "supergroup"},
+                    },
+                },
+            }
+
+        first = process_update(db, callback(93002, 501))
+        assert first.outcome == "PROCESSED" and first.prompt_id != old_prompt_id
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).status == "CANCELED"
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).deletion_status == "NOT_REQUIRED"
+        second = process_update(db, callback(93003, 502))
+        assert second.outcome == "DUPLICATE" and second.prompt_id == first.prompt_id
+
+        class Gateway:
+            calls: list[tuple[str, int, str]] = []
+
+            def send_completion_prompt(
+                self, target: str, message_id: int, *, context: str,
+            ) -> DispatchReceipt:
+                self.calls.append((target, message_id, context))
+                return DispatchReceipt(target, str(38 + len(self.calls)))
+
+        gateway = Gateway()
+        _send_prompt(db, gateway, first.prompt_id)
+        assert gateway.calls == [
+            (chat_id, 35, f"Заявка #{ticket['number']} · {first.prompt_id}")
+        ]
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).deletion_status == "PENDING"
+        _delete_prompt(db, gateway, old_prompt_id)
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).deletion_status == "PENDING"
+        assert db.get(FieldWorkCompletionPrompt, first.prompt_id).status == "WAITING"
+        db.get(FieldWorkCompletionPrompt, first.prompt_id).created_at = (
+            datetime.now(UTC) - timedelta(minutes=2)
+        )
+        db.commit()
+        third = process_update(db, callback(93006, 501))
+        assert third.outcome == "PROCESSED"
+        _send_prompt(db, gateway, third.prompt_id)
+        assert db.get(FieldWorkCompletionPrompt, third.prompt_id).telegram_message_id == 40
+        db.get(FieldWorkCompletionPrompt, third.prompt_id).created_at = (
+            datetime.now(UTC) - timedelta(minutes=2)
+        )
+        db.commit()
+        limited = process_update(db, callback(93007, 502))
+        assert limited.outcome == "DUPLICATE" and limited.prompt_id == third.prompt_id
+        assert db.scalar(select(func.count()).select_from(FieldWorkCompletionPrompt).where(
+            FieldWorkCompletionPrompt.handoff_id == handoff_id,
+        )) == 3
+
+        def reply(update_id: int, reply_to: int, sender_id: int) -> dict:
+            return {
+                "update_id": update_id,
+                "message": {
+                    "message_id": update_id, "date": 1_800_000_010,
+                    "from": {"id": sender_id, "is_bot": False, "first_name": "Synthetic"},
+                    "chat": {"id": int(chat_id), "type": "supergroup"},
+                    "reply_to_message": {"message_id": reply_to},
+                    "text": "Synthetic repair completed",
+                },
+            }
+
+        accepted = process_update(db, reply(93004, 38, 502))
+        assert accepted.outcome == "PROCESSED" and accepted.handoff_id == handoff_id
+        assert db.get(FieldWorkHandoff, handoff_id).work_status == "REPORTED"
+        assert db.get(FieldWorkCompletionPrompt, third.prompt_id).status == "CANCELED"
+        assert process_update(db, reply(93005, 39, 501)).outcome == "DUPLICATE"
+        assert process_update(db, reply(93004, 38, 502)).duplicate
+        assert db.scalar(select(func.count()).select_from(FieldExternalMessage).where(
+            FieldExternalMessage.handoff_id == handoff_id,
+            FieldExternalMessage.kind == "COMPLETION_REPORT",
+        )) == 1
+
+
+def test_uncertain_completion_can_retry_and_accept_the_old_delivered_question(
+    ticket_engine: Engine, ticket_client: TestClient,
+) -> None:
+    engineer = seed_user(ticket_engine, "uncertain_retry_engineer", Role.ENGINEER)
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client)
+    chat_id = "-5319791765"
+    with Session(ticket_engine) as db:
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=1, reason="Synthetic visit",
+            delivery_status="SENT", work_status="AWAITING_REPORT",
+            chat_id=chat_id, telegram_message_id=701,
+            created_by=engineer.id, sent_by=engineer.id, sent_at=datetime.now(UTC),
+        )
+        db.add(handoff)
+        db.flush()
+        old_update = FieldDispatchUpdate(
+            bot_identity="oss_field_service_bot", update_id=94001,
+            kind="COMPLETION_CALLBACK", outcome="PROCESSED", handoff_id=handoff.id,
+            sync_status="FAILED", sync_error_code="telegram_transport_uncertain",
+        )
+        db.add(old_update)
+        db.flush()
+        old_prompt = FieldWorkCompletionPrompt(
+            handoff_id=handoff.id, callback_update_id=old_update.id,
+            chat_id=chat_id, sender_telegram_id=501, sender_name="Synthetic installer",
+            status="UNCERTAIN", prompt_type="COMPLETION",
+            error_code="telegram_transport_uncertain",
+            created_at=datetime.now(UTC) - timedelta(minutes=2),
+        )
+        db.add(old_prompt)
+        db.commit()
+        handoff_id, old_prompt_id = handoff.id, old_prompt.id
+        retried = process_update(db, {
+            "update_id": 94002,
+            "callback_query": {
+                "id": "retry-uncertain",
+                "from": {"id": 502, "is_bot": False, "first_name": "Other installer"},
+                "data": f"field_done:{handoff_id}",
+                "message": {
+                    "message_id": 701,
+                    "chat": {"id": int(chat_id), "type": "group"},
+                },
+            },
+        })
+        assert retried.outcome == "PROCESSED"
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).status == "FAILED"
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).error_code == "superseded_uncertain"
+        late_reply = {
+            "update_id": 94003,
+            "message": {
+                "message_id": 705, "date": 1_800_000_010,
+                "from": {"id": 503, "is_bot": False, "first_name": "Third installer"},
+                "chat": {"id": int(chat_id), "type": "group"},
+                "reply_to_message": {
+                    "message_id": 704, "date": 1_800_000_009,
+                    "from": {"id": 9999, "is_bot": True},
+                    "chat": {"id": int(chat_id), "type": "group"},
+                    "text": "Что было сделано?",
+                    "reply_to_message": {
+                        "message_id": 701,
+                        "chat": {"id": int(chat_id), "type": "group"},
+                    },
+                },
+                "text": "Synthetic work completed",
+            },
+        }
+        accepted = process_update(db, late_reply)
+        assert accepted.outcome == "PROCESSED" and accepted.handoff_id == handoff_id
+        assert db.get(FieldWorkHandoff, handoff_id).work_status == "REPORTED"
+        assert db.get(FieldWorkCompletionPrompt, old_prompt_id).status == "COMPLETED"
+        assert db.get(FieldWorkCompletionPrompt, retried.prompt_id).status == "FAILED"
+        assert process_update(db, late_reply).duplicate
 
 def test_general_report_period_events_and_operator_scope(
     ticket_engine: Engine,

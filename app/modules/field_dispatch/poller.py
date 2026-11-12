@@ -95,26 +95,52 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     prompt.status = "UNCERTAIN"
     prompt.error_code = "telegram_transport_uncertain"
     db.commit()
-    try:
-        destination = current_chat_id(db, prompt.chat_id)
+    destination = prompt.chat_id
+    current_destination = current_chat_id(db, destination)
+    ticket = db.get(Ticket, handoff.ticket_id)
+    context = f"Заявка #{ticket.number} · {prompt.id}" if ticket is not None else None
+    is_retry = db.scalar(
+        select(FieldWorkCompletionPrompt.id).where(
+            FieldWorkCompletionPrompt.handoff_id == handoff.id,
+            FieldWorkCompletionPrompt.id != prompt.id,
+        ).limit(1)
+    ) is not None
+
+    def send(chat_id: str, reply_message_id: int | None):
+        options: dict[str, str] = {}
+        if prompt.recipient_username:
+            options["username"] = prompt.recipient_username
+        if (reply_message_id is None or is_retry) and context is not None:
+            options["context"] = context
         if prompt.prompt_type == "RESCHEDULE":
-            receipt = gateway.send_reschedule_prompt(
-                destination, handoff.telegram_message_id,
-                username=prompt.recipient_username,
+            return gateway.send_reschedule_prompt(
+                chat_id, reply_message_id, **options
             )
-        elif prompt.recipient_username:
-            receipt = gateway.send_completion_prompt(
-                destination, handoff.telegram_message_id, username=prompt.recipient_username
-            )
-        else:
-            receipt = gateway.send_completion_prompt(destination, handoff.telegram_message_id)
+        return gateway.send_completion_prompt(chat_id, reply_message_id, **options)
+
+    try:
+        try:
+            # Telegram message IDs belong to a chat. A callback on an old card
+            # must first be answered in that card's original chat.
+            receipt = send(destination, handoff.telegram_message_id)
+        except DispatchRejected as exc:
+            if current_destination == destination or exc.code not in {
+                "telegram_http_400", "telegram_http_403"
+            }:
+                raise
+            # A migrated group can reject sends to its old ID. Its old card
+            # message ID cannot be used as a reply target in the new group.
+            destination = current_destination
+            receipt = send(destination, None)
     except DispatchRejected as exc:
         _set_prompt_failure(db, prompt_id, exc.code)
+        logger.warning("telegram_prompt_send_rejected code=%s", exc.code)
         if exc.code.endswith("403"):
             mark_bot_unavailable(db, destination)
         return
     except DispatchUncertain:
         _set_prompt_failure(db, prompt_id, "telegram_transport_uncertain", uncertain=True)
+        logger.warning("telegram_prompt_send_uncertain")
         return
 
     prompt = db.scalar(
@@ -124,6 +150,13 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     )
     if prompt is None or prompt.status != "UNCERTAIN":
         db.rollback()
+        # An older question may have been answered while this send was in
+        # flight. The new question is then obsolete; never leave its button
+        # visible if Telegram returned a confirmed message ID.
+        try:
+            gateway.delete_message(receipt.chat_id, int(receipt.message_id))
+        except (DispatchRejected, DispatchUncertain):
+            logger.warning("telegram_obsolete_prompt_delete_failed")
         return
     record = db.get(FieldDispatchUpdate, prompt.callback_update_id)
     handoff = db.get(FieldWorkHandoff, prompt.handoff_id)
@@ -136,6 +169,18 @@ def _send_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> N
     if record is not None:
         record.sync_status = "SYNCED"
         record.sync_error_code = None
+    if prompt.prompt_type == "COMPLETION":
+        old_prompts = db.scalars(
+            select(FieldWorkCompletionPrompt).where(
+                FieldWorkCompletionPrompt.handoff_id == prompt.handoff_id,
+                FieldWorkCompletionPrompt.id != prompt.id,
+                FieldWorkCompletionPrompt.status == "CANCELED",
+                FieldWorkCompletionPrompt.deletion_status == "NOT_REQUIRED",
+                FieldWorkCompletionPrompt.telegram_message_id.is_not(None),
+            ).with_for_update()
+        ).all()
+        for old_prompt in old_prompts:
+            old_prompt.deletion_status = "PENDING"
     if handoff is not None:
         ticket = db.get(Ticket, handoff.ticket_id)
         db.add(
@@ -172,17 +217,22 @@ def _sync_callback(
     callback_id: str,
     prompt_id: UUID,
 ) -> None:
-    try:
-        prompt = db.get(FieldWorkCompletionPrompt, prompt_id)
-        gateway.acknowledge_callback(
-            callback_id,
-            "Укажите причину и дату в ответе боту" if prompt and prompt.prompt_type == "RESCHEDULE"
-            else "Опишите выполненные работы в ответе боту",
-        )
-    except (DispatchRejected, DispatchUncertain):
-        # The durable prompt is still sent even if Telegram could not display the toast.
-        pass
     _send_prompt(db, gateway, prompt_id)
+    prompt = db.get(FieldWorkCompletionPrompt, prompt_id)
+    if prompt is not None and prompt.status == "WAITING":
+        text = "Вопрос отправлен в группу. Ответьте на него"
+        show_alert = False
+    elif prompt is not None and prompt.status == "UNCERTAIN":
+        text = "Доставка вопроса не подтверждена. Сообщите инженеру"
+        show_alert = True
+    else:
+        text = "Не удалось отправить вопрос. Повторите нажатие позже"
+        show_alert = True
+    try:
+        gateway.acknowledge_callback(callback_id, text, show_alert=show_alert)
+    except (DispatchRejected, DispatchUncertain):
+        # Prompt delivery is already durable even if Telegram cannot display the callback alert.
+        pass
 
 
 def _delete_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) -> None:
@@ -201,6 +251,18 @@ def _delete_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) ->
         db.rollback()
         return
     now = datetime.now(UTC)
+    handoff = db.get(FieldWorkHandoff, prompt.handoff_id)
+    if (
+        prompt.status == "CANCELED"
+        and prompt.prompt_type == "COMPLETION"
+        and handoff is not None
+        and handoff.work_status == "AWAITING_REPORT"
+        and prompt.completed_at is not None
+        and now - prompt.completed_at < timedelta(minutes=2)
+    ):
+        # A reply may already be on its way when a newer question is sent.
+        db.rollback()
+        return
     if prompt.deletion_attempted_at is not None and prompt.deletion_status != "PENDING":
         retry_after = timedelta(seconds=30 * 2 ** min(prompt.deletion_attempts, 5))
         if now - prompt.deletion_attempted_at < retry_after:
@@ -700,16 +762,28 @@ def poll_once() -> int:
                         else None
                     )
                     if active_prompt is not None and active_prompt.status == "UNCERTAIN":
-                        text = "Доставка вопроса не подтверждена, сообщите инженеру"
-                    elif active_prompt is not None:
-                        text = "Ответьте на вопрос бота"
+                        text = (
+                            "Доставка вопроса не подтверждена. Если он виден, ответьте на него; "
+                            "иначе нажмите снова позднее"
+                        )
+                    elif active_prompt is not None and active_prompt.status == "WAITING":
+                        text = (
+                            "Вопрос уже есть в группе: найдите сообщение бота и нажмите "
+                            "«Ответить». Для нового вопроса нажмите снова позднее"
+                        )
+                    elif active_prompt is not None and active_prompt.status == "REQUESTING":
+                        text = "Вопрос отправляется. Подождите немного"
+                    elif active_prompt is not None and active_prompt.status == "FAILED":
+                        text = "Вопрос не отправлен. Повторите нажатие через несколько секунд"
                     elif result.kind == "RESCHEDULE_CALLBACK":
                         text = "Перенос сейчас недоступен"
                     elif result.handoff_id is not None:
                         text = "Отчёт уже получен"
                     else:
                         text = "Действие не принято"
-                    gateway.acknowledge_callback(result.callback_query_id, text)
+                    gateway.acknowledge_callback(
+                        result.callback_query_id, text, show_alert=active_prompt is not None
+                    )
                 except (DispatchRejected, DispatchUncertain):
                     pass
             elif result.kind == "COMPLETION_REPORT" and result.outcome == "PROCESSED":
