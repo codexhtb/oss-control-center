@@ -85,6 +85,12 @@ class TelegramBotGateway:
             "api.telegram.org", timeout=self.config.timeout_seconds
         )
         try:
+            # A failed TCP/TLS handshake cannot have delivered an HTTP request.
+            # Once request() starts, a transport error has an unknown outcome.
+            try:
+                connection.connect()
+            except (OSError, TimeoutError, http.client.HTTPException):
+                raise DispatchRejected("telegram_connect_failed") from None
             connection.request(
                 "POST",
                 f"/bot{quote(token, safe='')}/{method}",

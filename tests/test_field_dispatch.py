@@ -53,6 +53,9 @@ class FakeConnection:
     def __init__(self, _host: str, timeout: int) -> None:
         self.timeout = timeout
 
+    def connect(self) -> None:
+        pass
+
     def request(self, *args, **kwargs) -> None:
         type(self).request_args = (args, kwargs)
 
@@ -117,6 +120,34 @@ def test_gateway_treats_receipt_mismatch_as_uncertain(
         TelegramBotGateway(TelegramGatewayConfig(path)).send_message(
             "-5319791765", "Synthetic field work"
         )
+
+
+def test_gateway_distinguishes_connect_failure_from_lost_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = token_file(tmp_path)
+
+    class NoConnection(FakeConnection):
+        request_called = False
+
+        def connect(self) -> None:
+            raise TimeoutError("synthetic connect timeout")
+
+        def request(self, *args, **kwargs) -> None:
+            type(self).request_called = True
+
+    monkeypatch.setattr("http.client.HTTPSConnection", NoConnection)
+    with pytest.raises(DispatchRejected, match="telegram_connect_failed"):
+        TelegramBotGateway(TelegramGatewayConfig(path)).send_message("-5319791765", "test")
+    assert NoConnection.request_called is False
+
+    class LostResponse(FakeConnection):
+        def getresponse(self) -> FakeResponse:
+            raise TimeoutError("synthetic response timeout")
+
+    monkeypatch.setattr("http.client.HTTPSConnection", LostResponse)
+    with pytest.raises(DispatchUncertain):
+        TelegramBotGateway(TelegramGatewayConfig(path)).send_message("-5319791765", "test")
 
 
 def test_gateway_rejects_overbroad_secret_permissions(tmp_path: Path) -> None:

@@ -26,6 +26,12 @@ class SendFieldWork(BaseModel):
         return value
 
 
+class ConfirmAbsentFieldWork(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed_absent: Literal[True]
+
+
 class FieldWorkHandoffView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

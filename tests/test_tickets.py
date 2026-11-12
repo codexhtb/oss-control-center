@@ -3828,6 +3828,79 @@ def test_field_work_requires_explicit_confirmed_telegram_delivery(
             == 1
         )
 
+    recovery_path = f"{path}/field-work-handoffs/{second_handoff['id']}/confirm-absent"
+    assert ticket_client.post(recovery_path, json={"confirmed_absent": True}).status_code == 403
+    assert ticket_client.post(
+        recovery_path, headers=csrf(ticket_client), json={"confirmed_absent": False}
+    ).status_code == 422
+    too_early = ticket_client.post(
+        recovery_path, headers=csrf(ticket_client), json={"confirmed_absent": True}
+    )
+    assert too_early.status_code == 409
+    assert too_early.json()["code"] == "field_recovery_too_early"
+    with Session(ticket_engine) as db:
+        saved = db.get(FieldWorkHandoff, UUID(second_handoff["id"]))
+        assert saved is not None
+        saved.send_started_at = datetime.now(UTC) - timedelta(minutes=3)
+        db.commit()
+    confirmed = ticket_client.post(
+        recovery_path, headers=csrf(ticket_client), json={"confirmed_absent": True}
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["delivery_status"] == "FAILED"
+    assert confirmed.json()["ready_to_send"] is True
+    assert confirmed.json()["message_preview"] == "Исправление после отказа"
+    assert ticket_client.post(
+        recovery_path, headers=csrf(ticket_client), json={"confirmed_absent": True}
+    ).status_code == 200
+    with Session(ticket_engine) as db:
+        attempts = db.scalars(select(FieldWorkDeliveryAttempt).where(
+            FieldWorkDeliveryAttempt.handoff_id == UUID(second_handoff["id"])
+        ).order_by(FieldWorkDeliveryAttempt.started_at)).all()
+        assert [attempt.status for attempt in attempts] == ["FAILED", "UNCERTAIN"]
+    retry_gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: retry_gateway
+    retried = ticket_client.post(second_path, headers=csrf(ticket_client), json={
+        "client_request_id": str(uuid4()), "message_text": "Исправление после отказа",
+        "direction": "SUKHUM",
+    })
+    assert retried.status_code == 200 and retried.json()["delivery_status"] == "SENT"
+    assert retry_gateway.calls == [("-3333333", "Исправление после отказа")]
+
+    current_version = ticket_client.get(path).json()["version"]
+    assert ticket_client.post(
+        f"{path}/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": f'"{current_version}"'},
+        json={"reason": "Synthetic lost Telegram receipt"},
+    ).status_code == 200
+    third = ticket_client.get(f"{path}/field-work-handoffs/latest").json()["handoff"]
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: uncertain_gateway
+    uncertain_again = ticket_client.post(
+        f"{path}/field-work-handoffs/{third['id']}/send",
+        headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "direction": "SUKHUM"},
+    )
+    assert uncertain_again.status_code == 200
+    assert uncertain_again.json()["delivery_status"] == "UNCERTAIN"
+
+    def callback(update_id: int, chat_id: int) -> dict:
+        return {"update_id": update_id, "callback_query": {
+            "id": f"callback-{update_id}",
+            "from": {"id": 777, "is_bot": False, "first_name": "Synthetic Installer"},
+            "data": f"field_done:{third['id']}",
+            "message": {"message_id": 811, "date": 1_800_000_000,
+                        "chat": {"id": chat_id, "type": "supergroup"}},
+        }}
+
+    with Session(ticket_engine) as db:
+        assert process_update(db, callback(99921, -2222222)).outcome == "DENIED"
+        assert db.get(FieldWorkHandoff, UUID(third["id"])).delivery_status == "UNCERTAIN"
+        assert process_update(db, callback(99922, -3333333)).outcome == "PROCESSED"
+        recovered = db.get(FieldWorkHandoff, UUID(third["id"]))
+        assert recovered is not None and recovered.delivery_status == "SENT"
+        assert recovered.telegram_message_id == 811
+        assert process_update(db, callback(99922, -3333333)).duplicate
+
 
 def test_ochamchira_dispatch_and_callback_are_bound_to_saved_chat(
     ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch

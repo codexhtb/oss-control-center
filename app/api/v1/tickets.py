@@ -20,6 +20,7 @@ from app.modules.field_dispatch.gateway import (
 )
 from app.modules.field_dispatch.models import FieldWorkHandoff
 from app.modules.field_dispatch.schemas import (
+    ConfirmAbsentFieldWork,
     FieldExternalMessagePage,
     FieldWorkHandoffView,
     FieldWorkReschedulePage,
@@ -28,6 +29,7 @@ from app.modules.field_dispatch.schemas import (
     SendFieldWork,
 )
 from app.modules.field_dispatch.service import (
+    confirm_absent_delivery,
     handoff_messages,
     handoff_reschedules,
     handoff_view,
@@ -840,6 +842,22 @@ def send_field_work(
         payload.message_text,
         payload.direction,
     )
+    return handoff_view(db, item, identity.user)
+
+
+@router.post(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/confirm-absent",
+    response_model=FieldWorkHandoffView,
+)
+def confirm_field_work_absent(
+    ticket_id: UUID,
+    handoff_id: UUID,
+    payload: ConfirmAbsentFieldWork,
+    identity: FieldDep,
+    db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = confirm_absent_delivery(db, identity.user.id, ticket_id, handoff_id)
     return handoff_view(db, item, identity.user)
 
 

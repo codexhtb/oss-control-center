@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unicodedata import category
 from uuid import UUID
 
@@ -399,6 +399,70 @@ def send_handoff(
             db, prepared, error_code="telegram_transport_uncertain", uncertain=True
         )
     return finalize_send(db, prepared, receipt=receipt)
+
+
+def confirm_absent_delivery(
+    db: Session, actor_id: UUID, ticket_id: UUID, handoff_id: UUID
+) -> FieldWorkHandoff:
+    """Unlock an uncertain send only after a human checked the destination group.
+
+    The original attempt remains UNCERTAIN as evidence. This never sends a message.
+    """
+    _actor(db, actor_id)
+    handoff = db.execute(
+        select(FieldWorkHandoff)
+        .where(FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    ticket = db.execute(
+        select(Ticket).where(Ticket.id == ticket_id).with_for_update()
+    ).scalar_one_or_none()
+    if handoff is None or ticket is None or ticket.deleted_at is not None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    if (
+        handoff.delivery_status == "FAILED"
+        and handoff.last_error_code == "telegram_absence_confirmed"
+    ):
+        return handoff
+    if handoff.delivery_status != "UNCERTAIN" or handoff.telegram_message_id is not None:
+        raise ApiError(409, "field_recovery_state_changed", "Delivery state changed")
+    if ticket.status != TicketStatus.IN_PROGRESS or handoff.work_status != "AWAITING_REPORT":
+        raise ApiError(409, "invalid_transition", "Field work cannot be retried")
+    if (
+        handoff.send_started_at is None
+        or datetime.now(UTC) - handoff.send_started_at < timedelta(minutes=2)
+    ):
+        raise ApiError(409, "field_recovery_too_early", "Wait before checking the group")
+    if (
+        handoff.direction is None
+        or destination_for_direction(db, handoff.direction) != handoff.chat_id
+    ):
+        raise ApiError(409, "field_destination_changed", "Destination requires review")
+    latest_attempt = db.scalar(
+        select(FieldWorkDeliveryAttempt)
+        .where(FieldWorkDeliveryAttempt.handoff_id == handoff.id)
+        .order_by(FieldWorkDeliveryAttempt.started_at.desc(), FieldWorkDeliveryAttempt.id.desc())
+        .limit(1)
+    )
+    if latest_attempt is None or latest_attempt.status != "UNCERTAIN":
+        raise ApiError(409, "field_recovery_state_changed", "Delivery state changed")
+    handoff.delivery_status = "FAILED"
+    handoff.last_error_code = "telegram_absence_confirmed"
+    handoff.updated_at = datetime.now(UTC)
+    db.add(TicketEvent(
+        ticket_id=ticket_id, event_type="field_work_delivery_absence_confirmed",
+        actor_id=actor_id,
+        event_data={"handoff_id": str(handoff.id), "delivery_status": "FAILED"},
+        ticket_version=ticket.version,
+    ))
+    db.add(TicketAudit(
+        ticket_id=ticket_id, actor_id=actor_id,
+        action="field_work_delivery_absence_confirmed", outcome="success", origin="API",
+    ))
+    db.commit()
+    db.refresh(handoff)
+    return handoff
 
 
 def verify_handoff(

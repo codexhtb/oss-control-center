@@ -19,6 +19,7 @@ from app.modules.field_dispatch.models import (
     FieldReportNotification,
     FieldRescheduleDialog,
     FieldWorkCompletionPrompt,
+    FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
 )
 from app.modules.field_dispatch.reschedule_dialog import (
@@ -359,6 +360,43 @@ def _callback(
     handoff = db.scalar(
         select(FieldWorkHandoff).where(FieldWorkHandoff.id == requested_handoff).with_for_update()
     )
+    source_chat_id = str(source_message.get("chat", {}).get("id"))
+    if (
+        handoff is not None
+        and handoff.delivery_status == "UNCERTAIN"
+        and handoff.chat_id == source_chat_id
+        and source_chat_id in accepted_chat_ids
+        and source_message_id > 0
+    ):
+        # Telegram supplied a callback from the original bot card. Its unique
+        # handoff callback data, chat and message ID confirm delivery.
+        attempt = db.scalar(
+            select(FieldWorkDeliveryAttempt)
+            .where(FieldWorkDeliveryAttempt.handoff_id == handoff.id)
+            .order_by(
+                FieldWorkDeliveryAttempt.started_at.desc(), FieldWorkDeliveryAttempt.id.desc()
+            )
+            .limit(1).with_for_update()
+        )
+        if attempt is not None and attempt.status == "UNCERTAIN":
+            now = datetime.now(UTC)
+            handoff.delivery_status = attempt.status = "SENT"
+            handoff.telegram_message_id = attempt.telegram_message_id = source_message_id
+            handoff.sent_at = now
+            handoff.last_error_code = attempt.error_code = None
+            handoff.updated_at = now
+            ticket = db.get(Ticket, handoff.ticket_id)
+            db.add(TicketEvent(
+                ticket_id=handoff.ticket_id, event_type="field_work_delivery_reconciled",
+                actor_id=handoff.sent_by,
+                event_data={"handoff_id": str(handoff.id), "message_id": source_message_id},
+                ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
+            ))
+            db.add(TicketAudit(
+                ticket_id=handoff.ticket_id, actor_id=handoff.sent_by,
+                action="field_work_delivery_reconciled", outcome="success", origin="SYSTEM",
+            ))
+            db.flush()
     if (
         handoff is None
         or handoff.delivery_status != "SENT"

@@ -14,7 +14,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   previousTickets: vi.fn(),
   decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
-  assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(),
+  assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(), confirmFieldWorkAbsent: vi.fn(),
   fieldWorkMessages: vi.fn(), fieldWorkReschedules: vi.fn(), rescheduleFieldWork: vi.fn(), verifyFieldWork: vi.fn(),
   addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
@@ -382,6 +382,17 @@ it.each(['SENDING', 'SENT', 'UNCERTAIN'] as const)('locks Telegram text in %s', 
   expect(screen.queryByRole('textbox', { name: 'Текст сообщения для Telegram' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Восстановить исходный текст' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Отправить боту' })).not.toBeInTheDocument()
+  if (status === 'UNCERTAIN') {
+    const recover = screen.getByRole('button', { name: 'Разрешить явный повтор' })
+    expect(recover).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Я проверил группу/ }))
+    expect(recover).toBeEnabled()
+    vi.mocked(ticketApi.confirmFieldWorkAbsent).mockResolvedValue({} as never)
+    fireEvent.click(recover)
+    await waitFor(() => expect(ticketApi.confirmFieldWorkAbsent).toHaveBeenCalledWith(
+      ticketId, '00000000-0000-4000-8000-000000000040',
+    ))
+  }
 })
 
 it('shows visit schedule history and lets a permitted engineer agree a new date', async () => {

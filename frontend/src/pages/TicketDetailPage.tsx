@@ -90,6 +90,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const [schedulePage, setSchedulePage] = useState(1)
   const [visitAddress, setVisitAddress] = useState('')
   const [fieldDirection, setFieldDirection] = useState<'' | 'SUKHUM' | 'OCHAMCHIRA'>('')
+  const [cardAbsentConfirmed, setCardAbsentConfirmed] = useState(false)
   const [editedFieldMessage, setEditedFieldMessage] = useState<{ id: string; text: string } | null>(null)
   const [engineerId, setEngineerId] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -137,6 +138,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const engineers = useQuery({ queryKey: ['assignable-engineers'], queryFn: ({ signal }) => ticketApi.engineers(signal), enabled: related && canAssign && ticketQuery.data?.status !== 'CLOSED' && ticketQuery.data?.status !== 'RESOLVED' })
   const fieldHandoff = useQuery({ queryKey: ['ticket-field-work', id], queryFn: ({ signal }) => ticketApi.latestFieldWork(id, signal), enabled: related && canFieldWork, refetchInterval: activeTab === 'work' ? 15000 : false })
   const handoffId = fieldHandoff.data?.handoff?.id
+  useEffect(() => { setCardAbsentConfirmed(false) }, [handoffId])
   const fieldReschedules = useQuery({
     queryKey: ['ticket-field-reschedules', id, handoffId, schedulePage],
     queryFn: ({ signal }) => ticketApi.fieldWorkReschedules(id, handoffId!, schedulePage, signal),
@@ -418,8 +420,8 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   </article>)}</div> : null}
                   {fieldHandoff.data.handoff.work_status === 'REPORTED' && <Button variant="primary" disabled={!!busy} onClick={() => void runAction('field-verify', () => ticketApi.verifyFieldWork(id, fieldHandoff.data!.handoff!.id))}>Подтвердить результат</Button>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENDING' && <p className="rail-note">Отправка выполняется. Повторный запрос заблокирован.</p>}
-                  {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">Telegram отклонил отправку. Можно повторить отдельным действием.</Notice>}
-                  {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <Notice tone="error">Результат отправки неизвестен. Автоматический повтор заблокирован во избежание дубля.</Notice>}
+                  {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">{fieldHandoff.data.handoff.last_error_code === 'telegram_connect_failed' ? 'Нет соединения с Telegram Bot API. Повторите после восстановления связи.' : 'Отправка в Telegram не состоялась. Можно повторить отдельным действием.'}</Notice>}
+                  {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <div className="ticket-action-form"><Notice tone="error">Telegram не подтвердил отправку. Проверьте историю группы {fieldHandoff.data.handoff.group_name || 'монтажников'}{fieldHandoff.data.handoff.send_started_at ? ` около ${formatAbkhazia(fieldHandoff.data.handoff.send_started_at)} (UTC+3)` : ' за время попытки'}. Если карточка есть, не отправляйте её повторно и обратитесь к администратору.</Notice><label className="field"><input type="checkbox" checked={cardAbsentConfirmed} onChange={(event) => setCardAbsentConfirmed(event.target.checked)} /> Я проверил группу: карточки этой заявки нет</label><Button disabled={!!busy || !cardAbsentConfirmed} onClick={() => void runAction('field-confirm-absent', () => ticketApi.confirmFieldWorkAbsent(id, fieldHandoff.data!.handoff!.id), () => setCardAbsentConfirmed(false))}>Разрешить явный повтор</Button></div>}
                   {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy || !validFieldMessage || !fieldDirection} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !hasTicketAddress ? visitAddress.trim() || null : undefined, fieldMessage, fieldDirection as 'SUKHUM' | 'OCHAMCHIRA'))}>Отправить боту</Button>}
                 </div>}
               </div></section>}

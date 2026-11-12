@@ -118,6 +118,10 @@ export const ticketApi = {
     apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/send`, {
       method: 'POST', json: { client_request_id: requestId, visit_address: visitAddress, message_text: messageText, direction },
     }),
+  confirmFieldWorkAbsent: (id: string, handoffId: string) =>
+    apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/confirm-absent`, {
+      method: 'POST', json: { confirmed_absent: true },
+    }),
   fieldWorkMessages: (id: string, handoffId: string, signal?: AbortSignal) =>
     apiRequest<Page<FieldExternalMessage>>(
       `${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/messages?page=1&size=50`,
