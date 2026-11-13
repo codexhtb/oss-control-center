@@ -3612,6 +3612,90 @@ class RejectingFieldGateway:
         raise DispatchRejected("telegram_http_400")
 
 
+@pytest.mark.parametrize("direction,with_category", [
+    ("SUKHUM", True), ("OCHAMCHIRA", False),
+])
+def test_manual_field_work_generates_editable_draft_without_netup(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    with_category: bool,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_OCHAMCHIRA_CHAT_ID", "-1004473201977")
+    engineer = seed_user(ticket_engine, f"manual_dispatch_{direction.lower()}", Role.ENGINEER)
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    login(ticket_client, engineer.login)
+    payload = {
+        "ticket_type": "MANUAL",
+        "caller_full_name": "Тестовый заявитель",
+        "caller_phone": "+7 900 123 45 67",
+        "city": "Тестовый город",
+        "client_request_id": str(uuid4()),
+    }
+    if with_category:
+        category = ticket_client.get("/api/v1/ticket-categories").json()[0]
+        payload["category_id"] = category["id"]
+    else:
+        payload["subject"] = "Своя тема"
+    created = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert created.status_code == 201, created.text
+    path = f"/api/v1/tickets/{created.json()['id']}"
+    assert ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'},
+    ).status_code == 200
+    requested = ticket_client.post(
+        path + "/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Проверить линию на месте"},
+    )
+    assert requested.status_code == 200, requested.text
+    # The preview is generated when a persisted DRAFT is read.
+    draft = ticket_client.get(path + "/field-work-handoffs/latest")
+    assert draft.status_code == 200, draft.text
+    handoff = draft.json()["handoff"]
+    preview = handoff["message_preview"]
+    assert handoff["delivery_status"] == "DRAFT"
+    assert handoff["ready_to_send"] is True
+    assert handoff["missing_fields"] == []
+    assert handoff["generated_preview"] == preview
+    for fragment in (
+        f"Заявка #{created.json()['number']}",
+        f"Тема: {created.json()['subject']}",
+        "Обратившийся: Тестовый заявитель",
+        "Контактный номер: +7 900 123 45 67",
+        "Город: Тестовый город",
+        "Адрес: не указан",
+        "Причина передачи: Проверить линию на месте",
+        f"Отправил инженер: {engineer.display_name}",
+    ):
+        assert fragment in preview
+    if with_category:
+        assert f"Категория: {created.json()['category_name']}" in preview
+    else:
+        assert "Категория:" not in preview
+    assert "Лицевой счёт:" not in preview
+    assert gateway.calls == []
+
+    approved = preview.replace("Проверить линию на месте", "Проверить кабель и порт")
+    sent = ticket_client.post(
+        path + f"/field-work-handoffs/{handoff['id']}/send",
+        headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "direction": direction,
+              "message_text": approved},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["delivery_status"] == "SENT"
+    assert sent.json()["message_preview"] == approved
+    assert gateway.calls == [(sent.json()["chat_id"], approved)]
+    with Session(ticket_engine) as db:
+        saved = db.get(FieldWorkHandoff, UUID(handoff["id"]))
+        assert saved is not None and saved.reason == "Проверить линию на месте"
+        assert saved.message_text == approved
+        assert db.get(Ticket, UUID(created.json()["id"])).account_no is None
+
+
 def test_ticket_address_correction_precedes_netup_for_new_field_work(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:

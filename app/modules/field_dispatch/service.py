@@ -36,7 +36,7 @@ from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission
 from app.modules.tickets.models import SubscriberSnapshot, Ticket, TicketAudit, TicketEvent
-from app.modules.tickets.status import TicketStatus
+from app.modules.tickets.status import TicketStatus, TicketType
 
 
 def _actor(db: Session, actor_id: UUID) -> User:
@@ -82,6 +82,34 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     ticket = db.get(Ticket, handoff.ticket_id)
     if ticket is None or ticket.deleted_at is not None:
         raise ApiError(404, "ticket_not_found", "Ticket not found")
+    if ticket.ticket_type == TicketType.MANUAL:
+        values = {
+            "caller_full_name": ticket.caller_full_name,
+            "caller_phone": ticket.caller_phone,
+            "city": ticket.city,
+        }
+        missing = tuple(key for key, value in values.items() if not value)
+        if missing:
+            return MessageData(None, missing)
+        engineer = db.get(User, handoff.created_by) or sender
+        lines = [
+            f"Заявка #{ticket.number}",
+            f"Тема: {ticket.subject or 'Ручное обращение'}",
+        ]
+        if ticket.category_name:
+            lines.append(f"Категория: {ticket.category_name}")
+        lines.extend((
+            f"Обратившийся: {ticket.caller_full_name}",
+            f"Контактный номер: {ticket.caller_phone}",
+            f"Город: {ticket.city}",
+            f"Адрес: {ticket.address_override or handoff.visit_address or 'не указан'}",
+            f"Причина передачи: {handoff.reason}",
+            f"Отправил инженер: {engineer.display_name}",
+        ))
+        text = "\n".join(lines)
+        if len(text) > 4096:
+            raise ApiError(422, "telegram_message_too_long", "Telegram message is too long")
+        return MessageData(text, ())
     snapshot = (
         db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
         if ticket.subscriber_snapshot_id is not None
