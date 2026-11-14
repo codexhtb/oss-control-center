@@ -12,7 +12,7 @@ vi.mock('../features/chat/chat-api', () => ({ chatApi: {
 
 const user = { id: 'self', display_name: 'Инженер', login: 'engineer', role: 'engineer', is_active: true,
   created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' } as User
-const incoming = { id: 1, sender_id: 'other', sender_name: 'Оператор', body: 'Привет', created_at: '2026-11-03T10:00:00Z' }
+const incoming = { id: 1, sender_id: 'other', sender_name: 'Оператор', body: 'Привет', created_at: '2026-11-03T10:00:00Z', reply_to: null }
 
 function renderPage(canDelete = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -69,6 +69,32 @@ it('sends with Enter, keeps Shift+Enter for a newline and shows own message', as
   await waitFor(() => expect(chatApi.send).toHaveBeenCalledWith('Первая', expect.any(String)))
   expect(await screen.findByText('Первая')).toBeInTheDocument()
   expect(screen.getByText('Вы')).toBeInTheDocument()
+})
+
+it('quotes a selected message and sends its ID, then clears the reply context', async () => {
+  vi.mocked(chatApi.send).mockImplementation(async (body, _id, replyId) => ({
+    ...incoming, id: 2, sender_id: 'self', sender_name: 'Инженер', body,
+    reply_to: replyId ? { id: incoming.id, sender_name: incoming.sender_name, body: incoming.body, deleted: false } : null,
+  }))
+  renderPage()
+  await screen.findByText('Привет')
+  fireEvent.click(screen.getByRole('button', { name: 'Ответить на сообщение 1 от Оператор' }))
+  expect(screen.getByText('Ответ для Оператор')).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Сообщение'), { target: { value: 'Ответ' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить сообщение' }))
+  await waitFor(() => expect(chatApi.send).toHaveBeenCalledWith('Ответ', expect.any(String), 1))
+  expect(await screen.findByText('Ответ')).toBeInTheDocument()
+  await waitFor(() => expect(screen.queryByText('Ответ для Оператор')).not.toBeInTheDocument())
+})
+
+it('can cancel a reply without clearing the typed message', async () => {
+  renderPage()
+  await screen.findByText('Привет')
+  fireEvent.click(screen.getByRole('button', { name: 'Ответить на сообщение 1 от Оператор' }))
+  fireEvent.change(screen.getByLabelText('Сообщение'), { target: { value: 'Самостоятельное сообщение' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить ответ' }))
+  expect(screen.queryByText('Ответ для Оператор')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Сообщение')).toHaveValue('Самостоятельное сообщение')
 })
 
 it('loads older pages without replacing the latest messages', async () => {

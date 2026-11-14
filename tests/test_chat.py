@@ -87,10 +87,19 @@ def chat_clients(chat_engine: Engine, monkeypatch: pytest.MonkeyPatch):
         get_settings.cache_clear()
 
 
-def send(client: TestClient, body: str, client_id: str | None = None):
+def send(
+    client: TestClient,
+    body: str,
+    client_id: str | None = None,
+    reply_to_message_id: int | None = None,
+):
     return client.post(
         "/api/v1/chat/messages",
-        json={"body": body, "client_id": client_id or str(uuid4())},
+        json={
+            "body": body,
+            "client_id": client_id or str(uuid4()),
+            "reply_to_message_id": reply_to_message_id,
+        },
         headers={"X-CSRF-Token": client.cookies["oss_csrf"]},
     )
 
@@ -177,6 +186,36 @@ def test_chat_send_history_unread_read_and_reconnect(chat_engine: Engine, chat_c
     ] == [second["id"]]
     with Session(chat_engine) as db:
         assert db.scalar(select(ChatMessage).where(ChatMessage.id == item["id"])) is not None
+
+
+def test_reply_survives_history_reconnect_and_target_deletion(chat_engine: Engine, chat_clients):
+    operator, engineer, admin = chat_clients
+    original = send(operator, "Исходный вопрос").json()
+    cursor = engineer.get("/api/v1/chat/summary").json()["latest_event_id"]
+    client_id = str(uuid4())
+    reply = send(engineer, "Ответ оператору", client_id, original["id"])
+    assert reply.status_code == 201
+    expected = {
+        "id": original["id"],
+        "sender_name": "Operator",
+        "body": "Исходный вопрос",
+        "deleted": False,
+    }
+    assert reply.json()["reply_to"] == expected
+    assert send(engineer, "Ответ оператору", client_id, original["id"]).status_code == 200
+    assert send(engineer, "Ответ оператору", client_id).status_code == 409
+    assert operator.get("/api/v1/chat/messages?limit=1").json()["items"][0]["reply_to"] == expected
+    event = _poll(chat_engine, operator.cookies["oss_session"], cursor)[0]
+    assert event["data"]["reply_to"] == expected
+    assert send(engineer, "Нет исходного", reply_to_message_id=999999).status_code == 404
+    assert send(engineer, "Неверный ID", reply_to_message_id=-1).status_code == 422
+
+    assert remove(admin, original["id"]).status_code == 204
+    history = operator.get("/api/v1/chat/messages").json()["items"]
+    assert len(history) == 1
+    assert history[0]["reply_to"] == {**expected, "body": None, "deleted": True}
+    assert "Исходный вопрос" not in str(history)
+    assert send(engineer, "На удалённое", reply_to_message_id=original["id"]).status_code == 404
 
 
 def test_chat_idempotency_validation_and_inactive_account(chat_engine: Engine, chat_clients):

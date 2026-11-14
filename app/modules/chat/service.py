@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
 from app.modules.chat.models import ChatEvent, ChatMessage, ChatRead
+from app.modules.chat.schemas import ChatMessageView, ChatReplyView
 from app.modules.identity.access import effective_permissions
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role
@@ -17,6 +18,37 @@ from app.modules.identity.service import audit, utc_now
 STAFF_ROOM_ID = UUID("00000000-0000-4000-8000-000000000001")
 MESSAGE_LIMIT = 2000
 SEND_LIMIT_PER_MINUTE = 12
+
+
+def message_views(db: Session, messages: list[ChatMessage]) -> list[ChatMessageView]:
+    reply_ids = {item.reply_to_message_id for item in messages if item.reply_to_message_id}
+    parents = (
+        {
+            item.id: item
+            for item in db.scalars(
+                select(ChatMessage).where(
+                    ChatMessage.room_id == STAFF_ROOM_ID, ChatMessage.id.in_(reply_ids)
+                )
+            )
+        }
+        if reply_ids
+        else {}
+    )
+    views = []
+    for item in messages:
+        parent = parents.get(item.reply_to_message_id)
+        reply = (
+            ChatReplyView(
+                id=parent.id,
+                sender_name=parent.sender_name,
+                body=parent.body[:160] if parent.deleted_at is None else None,
+                deleted=parent.deleted_at is not None,
+            )
+            if parent
+            else None
+        )
+        views.append(ChatMessageView.model_validate(item).model_copy(update={"reply_to": reply}))
+    return views
 
 
 def latest_id(db: Session) -> int:
@@ -56,7 +88,12 @@ def events_after(db: Session, after: int, limit: int = 100) -> list[tuple[ChatEv
 
 
 def send_message(
-    db: Session, *, sender_id: UUID, client_id: UUID, body: str
+    db: Session,
+    *,
+    sender_id: UUID,
+    client_id: UUID,
+    body: str,
+    reply_to_message_id: int | None = None,
 ) -> tuple[ChatMessage, bool]:
     body = body.strip()
     if not body or len(body) > MESSAGE_LIMIT:
@@ -79,9 +116,21 @@ def send_message(
         db.commit()
         if existing.deleted_at is not None:
             raise ApiError(409, "chat_message_deleted", "Message was deleted")
-        if existing.body != body:
+        if existing.body != body or existing.reply_to_message_id != reply_to_message_id:
             raise ApiError(409, "chat_client_id_conflict", "Client message ID was already used")
         return existing, False
+
+    if reply_to_message_id is not None:
+        parent = db.scalar(
+            select(ChatMessage).where(
+                ChatMessage.id == reply_to_message_id,
+                ChatMessage.room_id == STAFF_ROOM_ID,
+                ChatMessage.deleted_at.is_(None),
+            )
+        )
+        if parent is None:
+            db.rollback()
+            raise ApiError(404, "chat_message_not_found", "Message not found")
 
     recent = (
         db.scalar(
@@ -104,6 +153,7 @@ def send_message(
         sender_name=sender.display_name,
         client_id=client_id,
         body=body,
+        reply_to_message_id=reply_to_message_id,
     )
     db.add(message)
     db.flush()

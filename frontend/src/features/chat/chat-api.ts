@@ -6,6 +6,7 @@ export interface ChatMessage {
   sender_name: string
   body: string
   created_at: string
+  reply_to: { id: number; sender_name: string; body: string | null; deleted: boolean } | null
 }
 
 export interface ChatHistory { items: ChatMessage[]; next_before: number | null }
@@ -16,8 +17,8 @@ export const chatApi = {
   history: (before?: number, signal?: AbortSignal) => apiRequest<ChatHistory>(
     `/api/v1/chat/messages?limit=40${before ? `&before=${before}` : ''}`, { signal },
   ),
-  send: (body: string, clientId: string) => apiRequest<ChatMessage>('/api/v1/chat/messages', {
-    method: 'POST', json: { body, client_id: clientId },
+  send: (body: string, clientId: string, replyToMessageId?: number) => apiRequest<ChatMessage>('/api/v1/chat/messages', {
+    method: 'POST', json: { body, client_id: clientId, ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}) },
   }),
   remove: (messageId: number) => apiRequest<void>(`/api/v1/chat/messages/${messageId}`, { method: 'DELETE' }),
   markRead: (throughId: number) => apiRequest<ChatSummary>('/api/v1/chat/read', {

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, LoaderCircle, Send, Trash2 } from 'lucide-react'
+import { ArrowDown, LoaderCircle, Reply, Send, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { chatDeletedEvent, chatMessageEvent } from '../features/chat/ChatRealtime'
 import { chatApi, type ChatMessage } from '../features/chat/chat-api'
@@ -20,6 +20,7 @@ export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [olderBefore, setOlderBefore] = useState<number | null>(null)
   const [body, setBody] = useState('')
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -56,12 +57,18 @@ export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: 
   useEffect(() => {
     const receive = (event: Event) => {
       const item = (event as CustomEvent<ChatMessage>).detail
-      if (!deletedIds.current.has(item.id)) setMessages((current) => mergeMessages(current, [item]))
+      if (!deletedIds.current.has(item.id)) setMessages((current) => mergeMessages(current, [
+        item.reply_to && deletedIds.current.has(item.reply_to.id)
+          ? { ...item, reply_to: { ...item.reply_to, body: null, deleted: true } }
+          : item,
+      ]))
     }
     const receiveDeletion = (event: Event) => {
       const id = (event as CustomEvent<number>).detail
       deletedIds.current.add(id)
-      setMessages((current) => current.filter((item) => item.id !== id))
+      setMessages((current) => current.filter((item) => item.id !== id).map((item) =>
+        item.reply_to?.id === id ? { ...item, reply_to: { ...item.reply_to, body: null, deleted: true } } : item))
+      setReplyTo((current) => current?.id === id ? null : current)
     }
     window.addEventListener(chatMessageEvent, receive)
     window.addEventListener(chatDeletedEvent, receiveDeletion)
@@ -121,7 +128,8 @@ export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: 
   }
 
   const send = useMutation({
-    mutationFn: ({ text, id }: { text: string; id: string }) => chatApi.send(text, id),
+    mutationFn: ({ text, id, replyId }: { text: string; id: string; replyId: number | null }) =>
+      replyId ? chatApi.send(text, id, replyId) : chatApi.send(text, id),
     onSuccess: (item) => {
       bottomRef.current = true
       setNearBottom(true)
@@ -142,7 +150,11 @@ export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: 
     const text = body.trim()
     if (!text || text.length > 2000 || send.isPending) return
     const id = crypto.randomUUID()
-    send.mutate({ text, id }, { onSuccess: () => setBody((current) => current === body ? '' : current) })
+    const replyId = replyTo?.id ?? null
+    send.mutate({ text, id, replyId }, { onSuccess: () => {
+      setBody((current) => current === body ? '' : current)
+      setReplyTo((current) => current?.id === replyId ? null : current)
+    } })
   }
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -177,8 +189,10 @@ export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: 
             {!own && !grouped && <div className="staff-chat__avatar" aria-hidden="true">{message.sender_name.trim().slice(0, 1).toLocaleUpperCase('ru')}</div>}
             <div className="staff-chat__bubble">
               {!grouped && <div className="staff-chat__meta"><strong>{own ? 'Вы' : message.sender_name}</strong><time dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time></div>}
+              {message.reply_to && <div className="staff-chat__quoted"><strong>{message.reply_to.sender_name}</strong><span>{message.reply_to.deleted ? 'Сообщение удалено' : message.reply_to.body}</span></div>}
               <p>{message.body}{grouped && <time className="staff-chat__inline-time" dateTime={message.created_at}>{timeFormat.format(new Date(message.created_at))}</time>}</p>
             </div>
+            <button type="button" className="staff-chat__reply-action" aria-label={`Ответить на сообщение ${message.id} от ${message.sender_name}`} title="Ответить" onClick={() => { setReplyTo(message); inputRef.current?.focus() }}><Reply size={15} /></button>
             {canDelete && <button type="button" className="staff-chat__delete" aria-label={`Удалить сообщение ${message.id}`} title="Удалить сообщение" disabled={remove.isPending} onClick={() => { if (window.confirm('Удалить сообщение из общего чата?')) remove.mutate(message.id) }}><Trash2 size={15} /></button>}
           </article>
         </div>
@@ -187,6 +201,7 @@ export function ChatPage({ user, canDelete = false }: { user: User; canDelete?: 
     {!nearBottom && <button type="button" className="staff-chat__jump" onClick={() => { const list = listRef.current; if (list) list.scrollTop = list.scrollHeight; onScroll() }} aria-label="К последним сообщениям"><ArrowDown size={18} /></button>}
     </div>
     <form className="staff-chat__composer" onSubmit={(event) => { event.preventDefault(); submit() }}>
+      {replyTo && <div className="staff-chat__reply-preview"><div><strong>Ответ для {replyTo.sender_name}</strong><span>{replyTo.body.slice(0, 160)}</span></div><button type="button" aria-label="Отменить ответ" onClick={() => setReplyTo(null)}><X size={16} /></button></div>}
       <label className="sr-only" htmlFor="staff-chat-input">Сообщение</label>
       <textarea ref={inputRef} id="staff-chat-input" value={body} onChange={(event) => setBody(event.target.value)} onKeyDown={onKeyDown} maxLength={2000} rows={1} placeholder="Сообщение команде…" />
       <button type="submit" disabled={!body.trim() || send.isPending} aria-label="Отправить сообщение"><Send size={19} /></button>

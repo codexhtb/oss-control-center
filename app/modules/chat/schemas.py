@@ -11,6 +11,14 @@ class SendChatMessage(BaseModel):
 
     client_id: UUID
     body: str = Field(min_length=1, max_length=2000)
+    reply_to_message_id: int | None = Field(default=None, ge=1)
+
+
+class ChatReplyView(BaseModel):
+    id: int
+    sender_name: str
+    body: str | None
+    deleted: bool
 
 
 class ChatMessageView(BaseModel):
@@ -21,6 +29,7 @@ class ChatMessageView(BaseModel):
     sender_name: str
     body: str
     created_at: datetime
+    reply_to: ChatReplyView | None = None
 
 
 class ChatHistory(BaseModel):

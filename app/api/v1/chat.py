@@ -23,6 +23,7 @@ from app.modules.chat.service import (
     latest_event_id,
     list_messages,
     mark_read,
+    message_views,
     read_summary,
     send_message,
 )
@@ -45,7 +46,7 @@ def history(
 ) -> ChatHistory:
     items, next_before = list_messages(db, before=before, limit=limit)
     return ChatHistory(
-        items=[ChatMessageView.model_validate(item) for item in items],
+        items=message_views(db, items),
         next_before=next_before,
     )
 
@@ -58,10 +59,14 @@ def send(
     db: SessionDep,
 ) -> ChatMessageView:
     message, created = send_message(
-        db, sender_id=identity.user.id, client_id=payload.client_id, body=payload.body
+        db,
+        sender_id=identity.user.id,
+        client_id=payload.client_id,
+        body=payload.body,
+        reply_to_message_id=payload.reply_to_message_id,
     )
     response.status_code = 201 if created else 200
-    return ChatMessageView.model_validate(message)
+    return message_views(db, [message])[0]
 
 
 @router.post("/read", response_model=ChatSummary)
@@ -86,7 +91,15 @@ def _poll(engine: Engine, token: str | None, cursor: int) -> list[dict] | None:
         except ApiError:
             return None
         result = []
-        for event, message in events_after(db, cursor):
+        events = events_after(db, cursor)
+        views = dict(
+            zip(
+                (message.id for _, message in events),
+                message_views(db, [message for _, message in events]),
+                strict=True,
+            )
+        )
+        for event, message in events:
             if event.event_type == "DELETE":
                 result.append(
                     {"id": event.id, "type": "delete", "data": {"message_id": message.id}}
@@ -96,7 +109,7 @@ def _poll(engine: Engine, token: str | None, cursor: int) -> list[dict] | None:
                     {
                         "id": event.id,
                         "type": "message",
-                        "data": ChatMessageView.model_validate(message).model_dump(mode="json"),
+                        "data": views[message.id].model_dump(mode="json"),
                     }
                 )
             else:
