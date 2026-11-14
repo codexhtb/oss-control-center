@@ -1,4 +1,4 @@
-"""Bounded, access-scoped management exports built from the existing Reports services."""
+"""Compact, access-scoped management exports built from the Reports services."""
 
 from datetime import UTC, date, datetime
 from html import escape
@@ -6,7 +6,6 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
@@ -21,18 +20,27 @@ from reportlab.platypus import (
     Spacer,
     TableStyle,
 )
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, aliased
 from xlsxwriter import Workbook
 
 from app.core.errors import ApiError
+from app.modules.field_dispatch.models import FieldWorkHandoff, FieldWorkReschedule
 from app.modules.identity.models import User
-from app.modules.reports.phase2b import field_work_report, reasons_report
+from app.modules.reports.phase2b import (
+    field_work_report,
+    initial_category_expression,
+    reasons_report,
+)
 from app.modules.reports.service import (
     LOCAL_TZ,
+    _visible,
     callbacks_report,
     employees_report,
     report,
+    utc_bounds,
 )
+from app.modules.tickets.models import Ticket, TicketCallback, TicketResolution
 
 FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 BOLD_FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
@@ -45,41 +53,16 @@ OUTCOME_NAMES = {
     "STILL_BROKEN": "Проблема осталась",
     "NO_ANSWER": "Не дозвонились",
 }
-GENERAL_LABELS = {
-    "created": "Поступили за период",
-    "resolved_events": "Решения за период (события)",
-    "closed_events": "Закрытия за период (события)",
-    "returned_events": "Возвраты на доработку (события)",
-    "active_now": "Активные заявки сейчас",
-    "average_resolution_seconds": "Среднее время до решения, сек",
-    "average_closure_seconds": "Среднее время до закрытия, сек",
+STATUS_NAMES = {
+    "OPEN": "Открыта",
+    "IN_PROGRESS": "В работе",
+    "RESOLVED": "Решена",
+    "CLOSED": "Закрыта",
 }
-FIELD_LABELS = {
-    "sent_handoffs": "Отправленные задания (handoff)",
-    "sent_unique_tickets": "Уникальные заявки с отправкой",
-    "reported_handoffs": "Полученные отчёты монтажников",
-    "verified_handoffs": "Проверенные инженером работы",
-    "reschedule_events": "События переноса",
-    "rescheduled_handoffs": "Задания с переносом",
-    "awaiting_report_now": "Ожидают отчёта сейчас",
-    "date_pending_now": "Дата не согласована сейчас",
-}
-REASON_LABELS = {
-    "created_tickets": "Созданные заявки",
-    "without_category": "Заявки без категории при регистрации",
-    "decision_events": "Решения инженеров (события)",
-    "decision_unique_tickets": "Уникальные заявки с решением",
-    "decisions_without_reason": "Решения без указанной причины",
-    "created_without_reason_now": "Созданные, без причины сейчас",
-}
-
-
-def _metric_rows(metrics: dict, labels: dict[str, str]):
-    return ((labels.get(key, key), value) for key, value in metrics.items())
 
 
 def _safe_cell(value):
-    """Keep untrusted labels as literal text in Excel, including whitespace prefixes."""
+    """Keep untrusted text literal in Excel and prevent formula injection."""
     if value is None:
         return "—"
     if isinstance(value, datetime):
@@ -99,6 +82,201 @@ def _local_text(value) -> str:
     return str(value)
 
 
+def _latest_id(model, timestamp):
+    return (
+        select(model.id)
+        .where(model.ticket_id == Ticket.id)
+        .order_by(timestamp.desc(), model.id.desc())
+        .limit(1)
+        .correlate(Ticket)
+        .scalar_subquery()
+    )
+
+
+def _ticket_rows(
+    db: Session,
+    *,
+    start: date,
+    end: date,
+    user: User,
+    read_all: bool,
+    category: str | None,
+) -> list[dict]:
+    """One selected-period row per ticket with its latest decision and callback."""
+    lower, upper = utc_bounds(start, end)
+    creator = aliased(User)
+    assignee = aliased(User)
+    decision = aliased(TicketResolution)
+    callback = aliased(TicketCallback)
+    initial_category = initial_category_expression()
+    scope = [
+        *_visible(user, read_all),
+        Ticket.created_at >= lower,
+        Ticket.created_at < upper,
+    ]
+    if category:
+        scope.append(initial_category == category)
+    rows = db.execute(
+        select(
+            Ticket.id,
+            Ticket.number,
+            Ticket.created_at,
+            Ticket.subject,
+            initial_category.label("initial_category"),
+            decision.reason_name,
+            decision.decision_text,
+            creator.display_name,
+            assignee.display_name,
+            Ticket.status,
+            Ticket.closed_at,
+            callback.outcome,
+            callback.occurred_at,
+        )
+        .join(creator, creator.id == Ticket.created_by)
+        .outerjoin(assignee, assignee.id == Ticket.assigned_engineer_id)
+        .outerjoin(
+            decision, decision.id == _latest_id(TicketResolution, TicketResolution.created_at)
+        )
+        .outerjoin(callback, callback.id == _latest_id(TicketCallback, TicketCallback.occurred_at))
+        .where(*scope)
+        .order_by(Ticket.created_at.desc(), Ticket.id.desc())
+    ).all()
+    keys = (
+        "id",
+        "number",
+        "created_at",
+        "subject",
+        "category",
+        "reason_name",
+        "decision_text",
+        "creator_name",
+        "assignee_name",
+        "status",
+        "closed_at",
+        "callback_outcome",
+        "callback_at",
+    )
+    return [dict(zip(keys, row, strict=True)) for row in rows]
+
+
+def _active_rows(db: Session, *, user: User, read_all: bool) -> list[dict]:
+    """Current active state, deliberately independent from the selected event period."""
+    assignee = aliased(User)
+    callback = aliased(TicketCallback)
+    handoff = aliased(FieldWorkHandoff)
+    latest_handoff_id = (
+        select(FieldWorkHandoff.id)
+        .where(FieldWorkHandoff.ticket_id == Ticket.id)
+        .order_by(FieldWorkHandoff.created_at.desc(), FieldWorkHandoff.id.desc())
+        .limit(1)
+        .correlate(Ticket)
+        .scalar_subquery()
+    )
+    latest_reschedule_reason = (
+        select(FieldWorkReschedule.reason)
+        .where(FieldWorkReschedule.handoff_id == handoff.id)
+        .order_by(FieldWorkReschedule.created_at.desc(), FieldWorkReschedule.id.desc())
+        .limit(1)
+        .correlate(handoff)
+        .scalar_subquery()
+    )
+    rows = db.execute(
+        select(
+            Ticket.id,
+            Ticket.number,
+            Ticket.created_at,
+            Ticket.subject,
+            Ticket.category_name,
+            Ticket.status,
+            assignee.display_name,
+            callback.outcome,
+            handoff.work_status,
+            handoff.schedule_status,
+            latest_reschedule_reason,
+        )
+        .outerjoin(assignee, assignee.id == Ticket.assigned_engineer_id)
+        .outerjoin(callback, callback.id == _latest_id(TicketCallback, TicketCallback.occurred_at))
+        .outerjoin(handoff, handoff.id == latest_handoff_id)
+        .where(*_visible(user, read_all), Ticket.status != "CLOSED")
+        .order_by(Ticket.created_at, Ticket.id)
+    ).all()
+    result = []
+    for row in rows:
+        reason = None
+        if row[7] == "STILL_BROKEN":
+            reason = "Проблема осталась после контрольного звонка"
+        elif row[9] == "DATE_PENDING":
+            reason = f"Перенос: {row[10]}" if row[10] else "Дата выезда не согласована"
+        elif row[8] == "AWAITING_REPORT":
+            reason = "Ожидается отчёт монтажников"
+        elif row[5] == "RESOLVED":
+            reason = "Ожидает контрольного звонка или закрытия"
+        elif row[5] == "OPEN" and row[6] is None:
+            reason = "Не назначен исполнитель"
+        result.append(
+            {
+                "id": row[0],
+                "number": row[1],
+                "created_at": row[2],
+                "subject": row[3],
+                "category": row[4],
+                "status": row[5],
+                "assignee_name": row[6],
+                "delay_reason": reason,
+            }
+        )
+    return result
+
+
+def _decision_cases(
+    db: Session, *, start: date, end: date, user: User, read_all: bool
+) -> list[dict]:
+    """Latest decision event per ticket during the selected period."""
+    lower, upper = utc_bounds(start, end)
+    ranked = (
+        select(
+            TicketResolution.ticket_id,
+            TicketResolution.reason_name,
+            TicketResolution.decision_text,
+            TicketResolution.created_at,
+        )
+        .join(Ticket, Ticket.id == TicketResolution.ticket_id)
+        .where(
+            *_visible(user, read_all),
+            TicketResolution.created_at >= lower,
+            TicketResolution.created_at < upper,
+        )
+        .distinct(TicketResolution.ticket_id)
+        .order_by(
+            TicketResolution.ticket_id,
+            TicketResolution.created_at.desc(),
+            TicketResolution.id.desc(),
+        )
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            Ticket.number,
+            Ticket.subject,
+            ranked.c.reason_name,
+            ranked.c.decision_text,
+            ranked.c.created_at,
+        )
+        .join(ranked, ranked.c.ticket_id == Ticket.id)
+        .order_by(ranked.c.created_at.desc(), Ticket.number.desc())
+    ).all()
+    return [
+        {
+            "ticket_number": row[0],
+            "subject": row[1],
+            "reason_name": row[2],
+            "decision_text": row[3],
+            "created_at": row[4],
+        }
+        for row in rows
+    ]
+
+
 def load_bundle(
     db: Session,
     *,
@@ -110,10 +288,18 @@ def load_bundle(
     category: str | None,
     max_rows: int,
 ) -> dict:
-    """Reuse Reports calculations and refuse oversized exports before loading detail rows."""
+    """Reuse report calculations and load bounded management-only detail."""
     base = {"db": db, "start": start, "end": end, "user": user, "read_all": read_all}
     general = report(**base, page=1, size=1)
     employees = employees_report(**base)
+    employees["items"] = [
+        row
+        for row in employees["items"]
+        if row["created_tickets"]
+        or row["decision_events"]
+        or row["closed_events"]
+        or row["callback_events"]
+    ]
     callbacks = callbacks_report(**base, page=1, size=1)
     field = field_work_report(**base, direction=direction, page=1, size=1)
     categories = reasons_report(**base, category=category, detail_kind="category", page=1, size=1)
@@ -125,50 +311,41 @@ def load_bundle(
         categories["details"]["total"],
         decisions["details"]["total"],
     )
-    grouped_rows = (
-        len(general["daily"])
-        + len(employees["items"])
-        + len(employees["daily"])
-        + len(callbacks["daily"])
-        + len(callbacks["employees"])
-        + len(field["daily"])
-        + len(field["reschedule_reasons"])
-        + len(categories["daily"])
-        + len(categories["categories"])
-        + len(categories["reasons"])
+    grouped_rows = sum(
+        len(rows)
+        for rows in (
+            employees["items"],
+            callbacks["employees"],
+            field["reschedule_reasons"],
+            categories["categories"],
+            categories["reasons"],
+        )
     )
     if sum(totals) + grouped_rows > max_rows:
         raise ApiError(413, "report_too_large", "Choose a shorter report period")
 
-    if totals[0] > 1:
-        general = report(**base, page=1, size=totals[0])
-    if totals[1] > 1:
-        callbacks = callbacks_report(**base, page=1, size=totals[1])
-    if totals[2] > 1:
-        field = field_work_report(**base, direction=direction, page=1, size=totals[2])
-    if totals[3] > 1:
-        categories = reasons_report(
-            **base, category=category, detail_kind="category", page=1, size=totals[3]
-        )
-    if totals[4] > 1:
-        decisions = reasons_report(
-            **base, category=category, detail_kind="decision", page=1, size=totals[4]
-        )
-    # An export is never silently truncated if new events arrive during construction.
-    actual = (
-        general["details"]["total"],
-        callbacks["details"]["total"],
-        field["details"]["total"],
-        categories["details"]["total"],
-        decisions["details"]["total"],
+    ticket_rows = _ticket_rows(
+        db, start=start, end=end, user=user, read_all=read_all, category=category
     )
-    if actual != totals or any(
-        len(part["details"]["items"]) != total
-        for part, total in zip(
-            (general, callbacks, field, categories, decisions), totals, strict=True
-        )
+    active_rows = _active_rows(db, user=user, read_all=read_all)
+    decision_cases = _decision_cases(db, start=start, end=end, user=user, read_all=read_all)
+    if len(ticket_rows) + len(active_rows) + len(decision_cases) + grouped_rows > max_rows:
+        raise ApiError(413, "report_too_large", "Choose a shorter report period")
+
+    callback_total = callbacks["details"]["total"]
+    field_total = field["details"]["total"]
+    if callback_total > 1:
+        callbacks = callbacks_report(**base, page=1, size=callback_total)
+    if field_total > 1:
+        field = field_work_report(**base, direction=direction, page=1, size=field_total)
+    if (
+        callbacks["details"]["total"] != callback_total
+        or field["details"]["total"] != field_total
+        or len(callbacks["details"]["items"]) != callback_total
+        or len(field["details"]["items"]) != field_total
     ):
         raise ApiError(409, "report_changed", "Report data changed during export; retry")
+
     return {
         "start": start,
         "end": end,
@@ -181,27 +358,32 @@ def load_bundle(
         "field": field,
         "categories": categories,
         "decisions": decisions,
+        "tickets": ticket_rows,
+        "active_tickets": active_rows,
+        "decision_cases": decision_cases,
     }
 
 
-def _summary(bundle: dict) -> list[tuple[str, int | float | None]]:
-    g = bundle["general"]["metrics"]
-    c = bundle["callbacks"]
-    f = bundle["field"]["metrics"]
-    r = bundle["categories"]["metrics"]
+def _summary(bundle: dict) -> list[tuple[str, int]]:
+    general = bundle["general"]["metrics"]
+    callbacks = bundle["callbacks"]
+    field = bundle["field"]["metrics"]
     return [
-        ("Поступившие заявки", g["created"]),
-        ("События решений", g["resolved_events"]),
-        ("События закрытия", g["closed_events"]),
-        ("Активные заявки сейчас", g["active_now"]),
-        ("Контрольные звонки", c["total_events"]),
-        ("Отправленные выездные задания", f["sent_handoffs"]),
-        ("Полученные отчёты монтажников", f["reported_handoffs"]),
-        ("Проверенные инженером работы", f["verified_handoffs"]),
-        ("События переноса", f["reschedule_events"]),
-        ("Категории не указаны", r["without_category"]),
-        ("Решения без установленной причины", r["decisions_without_reason"]),
+        ("Поступившие заявки", general["created"]),
+        ("Уникальные решённые заявки", general["resolved_unique_tickets"]),
+        ("Уникальные закрытые заявки", general["closed_unique_tickets"]),
+        ("Активные заявки сейчас", general["active_now"]),
+        ("Контрольные звонки", callbacks["total_events"]),
+        ("Уникальные заявки с обзвоном", callbacks["unique_tickets"]),
+        ("Выездные задания переданы", field["sent_handoffs"]),
+        ("Отчёты о выполнении получены", field["reported_handoffs"]),
+        ("Работы подтверждены инженером", field["verified_handoffs"]),
+        ("Ожидают отчёта сейчас", field["awaiting_report_now"]),
     ]
+
+
+def _share(count: int, total: int) -> float:
+    return round(count / total, 4) if total else 0.0
 
 
 class _Sheet:
@@ -217,9 +399,9 @@ class _Sheet:
             {"bold": True, "bg_color": "#173a36", "font_color": "#ffffff", "text_wrap": True}
         )
         self.number_fmt = book.add_format({"num_format": "#,##0"})
-        self.decimal_fmt = book.add_format({"num_format": "#,##0.00"})
+        self.decimal_fmt = book.add_format({"num_format": "0.0%"})
         self.date_fmt = book.add_format({"num_format": DATE_FORMAT})
-        self.text_fmt = book.add_format({"text_wrap": True})
+        self.text_fmt = book.add_format({"text_wrap": True, "valign": "top"})
         self._row([name], self.title_fmt)
         self._row([f"Период UTC+3: {bundle['start']} — {bundle['end']}"])
         self._row([f"Сформирован: {_local_text(bundle['generated_at'])} UTC+3"])
@@ -229,36 +411,44 @@ class _Sheet:
             clean = _safe_cell(value)
             target = fmt
             if target is None:
-                target = (
-                    self.date_fmt
-                    if isinstance(clean, datetime)
-                    else (
-                        self.decimal_fmt
-                        if isinstance(clean, float)
-                        else self.number_fmt
-                        if isinstance(clean, int)
-                        else self.text_fmt
-                    )
-                )
+                if isinstance(clean, datetime):
+                    target = self.date_fmt
+                elif isinstance(clean, int):
+                    target = self.number_fmt
+                else:
+                    target = self.text_fmt
             self.ws.write(self.row_index, column, clean, target)
         self.row_index += 1
 
-    def section(self, title: str, headers: tuple[str, ...], rows):
+    def section(self, title: str, headers: tuple[str, ...], rows, *, percent_columns=()):
         self._row([])
         self._row([title], self.title_fmt)
         self._row(headers, self.header_fmt)
         count = 0
         for row in rows:
-            self._row(row)
+            for column, value in enumerate(row):
+                if column in percent_columns:
+                    self.ws.write(self.row_index, column, value, self.decimal_fmt)
+                else:
+                    self._write_cell(column, value)
+            self.row_index += 1
             count += 1
         if count == 0:
             self._row(["Нет данных за период"])
 
+    def _write_cell(self, column, value):
+        clean = _safe_cell(value)
+        if isinstance(clean, datetime):
+            fmt = self.date_fmt
+        elif isinstance(clean, int):
+            fmt = self.number_fmt
+        else:
+            fmt = self.text_fmt
+        self.ws.write(self.row_index, column, clean, fmt)
+
 
 def build_xlsx(bundle: dict) -> bytes:
     output = BytesIO()
-    # The API container's /tmp is private tmpfs; TemporaryDirectory is 0700 and
-    # removed even when workbook assembly fails.
     with TemporaryDirectory(prefix="oss-report-") as scratch:
         book = Workbook(
             output,
@@ -269,150 +459,120 @@ def build_xlsx(bundle: dict) -> bytes:
                 "strings_to_urls": False,
             },
         )
-        summary = _Sheet(book, "Сводка OSS", bundle, [53, 22])
-        summary.section("Ключевые показатели", ("Показатель", "Значение"), _summary(bundle))
-        summary.section(
-            "Применимые фильтры",
-            ("Фильтр", "Значение"),
+        sheet = _Sheet(book, "Сводка", bundle, [48, 22])
+        sheet.section("Ключевые показатели", ("Показатель", "Значение"), _summary(bundle))
+        sheet.section(
+            "Пояснения",
+            ("Правило расчёта",),
             [
-                ("Монтажное направление", DIRECTION_NAMES.get(bundle["direction"], "Все")),
-                ("Категория обращений", bundle["category_filter"] or "Все"),
-            ],
-        )
-        summary.section(
-            "Правила",
-            ("Пояснение",),
-            [
-                ("События считаются по времени UTC+3; текущие состояния не ограничены периодом.",),
-                ("Отправка монтажного задания не означает выполнение работы.",),
+                ("Период рассчитан по календарным границам UTC+3.",),
+                ("Решённые и закрытые — уникальные заявки; повторные события не удваивают итог.",),
+                ("Активные и ожидающие отчёта — текущие состояния на момент формирования.",),
+                ("Отправка выездного задания не означает выполнение работы.",),
             ],
         )
 
-        g = bundle["general"]
-        sh = _Sheet(book, "Общая статистика", bundle, [26, 48, 20, 22, 24, 26, 23])
-        sh.section(
-            "Показатели",
-            ("Показатель", "Значение"),
-            _metric_rows(g["metrics"], GENERAL_LABELS),
+        categories = bundle["categories"]
+        sheet = _Sheet(book, "Причины и решения", bundle, [42, 18, 18, 18, 68])
+        created_total = categories["metrics"]["created_tickets"]
+        decision_total = categories["metrics"]["decision_events"]
+        sheet.section(
+            "Категории обращений при регистрации",
+            ("Категория", "Заявки", "Доля"),
+            [
+                (row["name"] or "Без категории", row["count"], _share(row["count"], created_total))
+                for row in categories["categories"]
+            ],
+            percent_columns=(2,),
         )
-        sh.section(
-            "Динамика",
-            ("Дата UTC+3", "Поступили", "Закрыты"),
-            [(item["date"], item["created"], item["closed"]) for item in g["daily"]],
-        )
-        for title, key in (
-            ("Типы", "types"),
-            ("Статусы", "statuses"),
-            ("Приоритеты", "priorities"),
-        ):
-            sh.section(title, ("Значение", "Заявки"), g["distribution"][key].items())
-        sh.section(
-            "Заявки, созданные за период",
-            ("№", "Тема", "Тип", "Статус", "Приоритет", "Исполнитель", "Создана UTC+3"),
+        sheet.section(
+            "Причины, установленные инженерами",
+            ("Причина", "Решения", "Доля"),
             [
                 (
-                    r["number"],
-                    r["subject"],
-                    r["ticket_type"],
-                    r["status"],
-                    r["priority"],
-                    r["assignee_name"],
-                    r["created_at"],
+                    row["name"] or "Причина не указана",
+                    row["count"],
+                    _share(row["count"], decision_total),
                 )
-                for r in g["details"]["items"]
+                for row in categories["reasons"]
+            ],
+            percent_columns=(2,),
+        )
+        sheet.section(
+            "Краткие результаты инженерной работы",
+            ("Заявка", "Проблема", "Причина", "Решение", "Дата UTC+3"),
+            [
+                (
+                    row["ticket_number"],
+                    row["subject"],
+                    row["reason_name"],
+                    row["decision_text"],
+                    row["created_at"],
+                )
+                for row in bundle["decision_cases"]
             ],
         )
 
-        e = bundle["employees"]
-        sh = _Sheet(book, "Сотрудники", bundle, [38, 26, 20, 20, 20, 20, 20, 20, 20])
-        sh.section(
-            "Действия сотрудников",
+        sheet = _Sheet(book, "Работа сотрудников", bundle, [38, 18, 18, 20, 18, 18, 18])
+        sheet.section(
+            "Действия за период",
             (
                 "Сотрудник",
-                "Профиль",
-                "Созданы",
-                "Решения",
-                "Звонки",
-                "Уникальные заявки со звонками",
-                "Устранена",
-                "Осталась",
-                "Нет ответа",
+                "Созданы заявки",
+                "Решения (события)",
+                "Уникальные решённые",
+                "Закрытия (события)",
+                "Уникальные закрытые",
+                "Контрольные звонки",
             ),
             [
                 (
-                    r["display_name"],
-                    r["role"],
-                    r["created_tickets"],
-                    r["decision_events"],
-                    r["callback_events"],
-                    r["callback_tickets"],
-                    r["outcomes"].get("CONFIRMED", 0),
-                    r["outcomes"].get("STILL_BROKEN", 0),
-                    r["outcomes"].get("NO_ANSWER", 0),
+                    row["display_name"],
+                    row["created_tickets"],
+                    row["decision_events"],
+                    row["decision_tickets"],
+                    row["closed_events"],
+                    row["closed_tickets"],
+                    row["callback_events"],
                 )
-                for r in e["items"]
-            ],
-        )
-        sh.section(
-            "Динамика действий",
-            ("Сотрудник ID", "Дата UTC+3", "Созданы", "Решения", "Звонки"),
-            [
-                (str(r["user_id"]), r["date"], r["created"], r["decisions"], r["callbacks"])
-                for r in e["daily"]
+                for row in bundle["employees"]["items"]
             ],
         )
 
-        c = bundle["callbacks"]
-        sh = _Sheet(book, "Контрольные звонки", bundle, [22, 48, 36, 28, 24, 25])
-        sh.section(
+        callbacks = bundle["callbacks"]
+        sheet = _Sheet(book, "Обзвоны", bundle, [18, 52, 34, 30, 24])
+        sheet.section(
             "Итоги",
             ("Показатель", "Значение"),
-            [("События звонков", c["total_events"]), ("Уникальные заявки", c["unique_tickets"])],
-        )
-        sh.section(
-            "Результаты",
-            ("Результат", "Звонки"),
-            [(OUTCOME_NAMES.get(k, k), v) for k, v in c["outcomes"].items()],
-        )
-        sh.section(
-            "Динамика",
-            ("Дата UTC+3", "Результат", "Звонки"),
             [
-                (r["date"], OUTCOME_NAMES.get(r["outcome"], r["outcome"]), r["count"])
-                for r in c["daily"]
+                ("Контрольные звонки (события)", callbacks["total_events"]),
+                ("Уникальные заявки", callbacks["unique_tickets"]),
+                *[
+                    (OUTCOME_NAMES.get(key, key), value)
+                    for key, value in callbacks["outcomes"].items()
+                ],
             ],
         )
-        sh.section(
-            "По сотрудникам",
-            ("Сотрудник", "Результат", "Звонки"),
-            [
-                (r["display_name"], OUTCOME_NAMES.get(r["outcome"], r["outcome"]), r["count"])
-                for r in c["employees"]
-            ],
-        )
-        sh.section(
-            "Журнал звонков",
-            ("Заявка", "Тема", "Сотрудник", "Результат", "Когда UTC+3"),
+        sheet.section(
+            "История звонков",
+            ("Заявка", "Тема", "Сотрудник", "Результат", "Дата UTC+3"),
             [
                 (
-                    r["ticket_number"],
-                    r["subject"],
-                    r["actor_name"],
-                    OUTCOME_NAMES.get(r["outcome"], r["outcome"]),
-                    r["occurred_at"],
+                    row["ticket_number"],
+                    row["subject"],
+                    row["actor_name"],
+                    OUTCOME_NAMES.get(row["outcome"], row["outcome"]),
+                    row["occurred_at"],
                 )
-                for r in c["details"]["items"]
+                for row in callbacks["details"]["items"]
             ],
         )
 
-        f = bundle["field"]
-        sh = _Sheet(book, "Монтажные работы", bundle, [32, 48, 24, 23, 23, 24, 24])
-        sh.section(
-            "Показатели", ("Показатель", "Значение"), _metric_rows(f["metrics"], FIELD_LABELS)
-        )
-        sh.section(
-            "Направления",
-            ("Направление", "Отправлены", "Отчёты", "Проверены", "Переносы"),
+        field = bundle["field"]
+        sheet = _Sheet(book, "Выездные и незавершённые работы", bundle, [18, 34, 24, 24, 24, 52])
+        sheet.section(
+            "Выездные работы по направлениям",
+            ("Направление", "Передано", "Отчёты о выполнении", "Подтверждено", "Переносы"),
             [
                 (
                     DIRECTION_NAMES.get(key, key),
@@ -421,74 +581,58 @@ def build_xlsx(bundle: dict) -> bytes:
                     value["verified"],
                     value["reschedules"],
                 )
-                for key, value in f["directions"].items()
+                for key, value in field["directions"].items()
             ],
         )
-        sh.section(
-            "Причины переносов",
-            ("Причина", "События"),
-            [(r["reason"], r["count"]) for r in f["reschedule_reasons"]],
-        )
-        sh.section(
-            "Динамика",
-            ("Дата UTC+3", "Отправлены", "Отчёты", "Проверены", "Переносы"),
-            [
-                (r["date"], r["sent"], r["reported"], r["verified"], r["reschedules"])
-                for r in f["daily"]
-            ],
-        )
-        sh.section(
-            "Выездные задания с событиями за период",
-            ("Заявка", "Тема", "Направление", "Состояние", "Отправлена", "Отчёт", "Проверена"),
+        sheet.section(
+            "Невыполненные и проблемные заявки (текущее состояние)",
+            ("Заявка", "Категория", "Ответственный", "Создана UTC+3", "Статус", "Причина задержки"),
             [
                 (
-                    r["ticket_number"],
-                    r["subject"],
-                    DIRECTION_NAMES.get(r["direction"] or "UNKNOWN"),
-                    r["work_status"],
-                    r["sent_at"],
-                    r["reported_at"],
-                    r["verified_at"],
+                    row["number"],
+                    row["category"],
+                    row["assignee_name"],
+                    row["created_at"],
+                    STATUS_NAMES.get(row["status"], row["status"]),
+                    row["delay_reason"],
                 )
-                for r in f["details"]["items"]
+                for row in bundle["active_tickets"]
             ],
         )
 
-        r = bundle["categories"]
-        d = bundle["decisions"]
-        sh = _Sheet(book, "Причины обращений", bundle, [25, 48, 48, 23])
-        sh.section(
-            "Показатели", ("Показатель", "Значение"), _metric_rows(r["metrics"], REASON_LABELS)
+        sheet = _Sheet(
+            book, "Детализация заявок", bundle, [14, 22, 42, 34, 34, 70, 32, 32, 20, 22, 30]
         )
-        sh.section(
-            "Категории при регистрации",
-            ("Категория", "Заявки"),
-            [(item["name"], item["count"]) for item in r["categories"]],
-        )
-        sh.section(
-            "Причины инженерных решений",
-            ("Причина", "События"),
-            [(item["name"], item["count"]) for item in r["reasons"]],
-        )
-        sh.section(
-            "Динамика по категориям",
-            ("Дата UTC+3", "Категория", "Заявки"),
-            [(item["date"], item["category"], item["count"]) for item in r["daily"]],
-        )
-        sh.section(
-            "Обращения",
-            ("Заявка", "Тема", "Категория при регистрации", "Создана UTC+3"),
+        sheet.section(
+            "Одна строка на заявку, созданную за выбранный период",
+            (
+                "Номер",
+                "Дата UTC+3",
+                "Тема",
+                "Категория при регистрации",
+                "Установленная причина",
+                "Актуальный текст решения",
+                "Создатель",
+                "Исполнитель",
+                "Статус",
+                "Дата закрытия UTC+3",
+                "Последний контрольный звонок",
+            ),
             [
-                (item["ticket_number"], item["subject"], item["name"], item["occurred_at"])
-                for item in r["details"]["items"]
-            ],
-        )
-        sh.section(
-            "Версии решений",
-            ("Заявка", "Тема", "Установленная причина", "Решена UTC+3"),
-            [
-                (item["ticket_number"], item["subject"], item["name"], item["occurred_at"])
-                for item in d["details"]["items"]
+                (
+                    row["number"],
+                    row["created_at"],
+                    row["subject"],
+                    row["category"],
+                    row["reason_name"],
+                    row["decision_text"],
+                    row["creator_name"],
+                    row["assignee_name"],
+                    STATUS_NAMES.get(row["status"], row["status"]),
+                    row["closed_at"],
+                    OUTCOME_NAMES.get(row["callback_outcome"], row["callback_outcome"]),
+                )
+                for row in bundle["tickets"]
             ],
         )
         book.close()
@@ -506,108 +650,66 @@ def _paragraph(value, style: ParagraphStyle) -> Paragraph:
     return Paragraph(escape(_local_text(value)), style)
 
 
-def _chart(title: str, rows: list[tuple[str, int]]) -> Drawing | None:
-    values = [(label, count) for label, count in rows[:10] if count is not None]
-    if not values:
-        return None
-    canvas = Drawing(750, 36 + len(values) * 24)
-    canvas.add(
-        String(
-            0,
-            canvas.height - 15,
-            title,
-            fontName="OSS-Bold",
-            fontSize=10,
-            fillColor=colors.HexColor("#173a36"),
-        )
-    )
-    ceiling = max(1, *(count for _, count in values))
-    for index, (label, count) in enumerate(values):
-        y = canvas.height - 42 - index * 24
-        canvas.add(
-            String(
-                0, y, label[:38], fontName="OSS", fontSize=8, fillColor=colors.HexColor("#334750")
-            )
-        )
-        canvas.add(
-            Rect(
-                255,
-                y - 1,
-                400 * count / ceiling,
-                9,
-                fillColor=colors.HexColor("#178c74"),
-                strokeColor=None,
-            )
-        )
-        canvas.add(
-            String(
-                665,
-                y,
-                str(count),
-                fontName="OSS-Bold",
-                fontSize=8,
-                fillColor=colors.HexColor("#173a36"),
-            )
-        )
-    return canvas
+def _short(value, length: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= length else text[: length - 1].rstrip() + "…"
 
 
 def build_pdf(bundle: dict) -> bytes:
+    """Build a deliberately concise three-page executive report."""
     _font()
     output = BytesIO()
+    page_size = landscape(A4)
     doc = SimpleDocTemplate(
         output,
-        pagesize=landscape(A4),
-        leftMargin=30,
-        rightMargin=30,
-        topMargin=42,
-        bottomMargin=42,
+        pagesize=page_size,
+        leftMargin=28,
+        rightMargin=28,
+        topMargin=30,
+        bottomMargin=32,
         title="OSS Control Center — управленческий отчёт",
         author="OSS Control Center",
     )
     heading = ParagraphStyle(
         "oss-heading",
         fontName="OSS-Bold",
-        fontSize=15,
-        leading=19,
+        fontSize=12,
+        leading=14,
         textColor=colors.HexColor("#173a36"),
-        spaceAfter=12,
+        spaceBefore=6,
+        spaceAfter=5,
     )
     title = ParagraphStyle(
-        "oss-title", parent=heading, fontSize=23, leading=29, alignment=TA_CENTER, spaceAfter=18
+        "oss-title", parent=heading, fontSize=19, leading=22, alignment=TA_CENTER, spaceAfter=6
     )
     body = ParagraphStyle(
-        "oss-body", fontName="OSS", fontSize=8, leading=11, textColor=colors.HexColor("#263941")
+        "oss-body", fontName="OSS", fontSize=7.2, leading=9, textColor=colors.HexColor("#263941")
     )
-    note = ParagraphStyle("oss-note", parent=body, fontSize=9, leading=14, spaceAfter=8)
+    note = ParagraphStyle("oss-note", parent=body, fontSize=7.5, leading=10, spaceAfter=4)
     header = ParagraphStyle(
         "oss-table-head", parent=body, fontName="OSS-Bold", textColor=colors.white
     )
     story = [
-        Spacer(1, 45),
         _paragraph("OSS Control Center", title),
-        _paragraph("Единый управленческий отчёт", title),
-        _paragraph(f"Период: {bundle['start']} — {bundle['end']} (UTC+3)", note),
-        _paragraph(f"Сформирован: {_local_text(bundle['generated_at'])} (UTC+3)", note),
+        _paragraph("Управленческий отчёт", title),
         _paragraph(
-            "Данные получены из PostgreSQL OSS. События и текущие состояния показаны отдельно.",
+            f"Период: {bundle['start']} — {bundle['end']} (UTC+3) · "
+            f"сформирован {_local_text(bundle['generated_at'])}",
             note,
         ),
-        Spacer(1, 20),
-        _paragraph("Краткая сводка", heading),
     ]
 
     def section(name: str):
-        story.extend((Spacer(1, 16), _paragraph(name, heading)))
+        story.append(_paragraph(name, heading))
 
-    def table(headers: tuple[str, ...], rows, widths: list[int]):
+    def table(headers, rows, widths, *, limit=None):
+        materialized = list(rows)
+        if limit is not None:
+            materialized = materialized[:limit]
+        if not materialized:
+            return False
         data = [[_paragraph(value, header) for value in headers]]
-        count = 0
-        for row in rows:
-            data.append([_paragraph(value, body) for value in row])
-            count += 1
-        if not count:
-            data.append([_paragraph("Нет данных за период", body)] + [""] * (len(headers) - 1))
+        data.extend([[_paragraph(value, body) for value in row] for row in materialized])
         grid = LongTable(data, colWidths=widths, repeatRows=1, hAlign="LEFT", splitInRow=1)
         grid.setStyle(
             TableStyle(
@@ -620,227 +722,189 @@ def build_pdf(bundle: dict) -> bytes:
                         [colors.white, colors.HexColor("#f2f6f5")],
                     ),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                 ]
             )
         )
         story.append(grid)
+        story.append(Spacer(1, 5))
+        return True
 
-    table(("Показатель", "Значение"), _summary(bundle), [570, 204])
-    story.append(PageBreak())
-    g = bundle["general"]
-    section("Общая статистика обращений")
-    table(("Показатель", "Значение"), _metric_rows(g["metrics"], GENERAL_LABELS), [570, 204])
-    for distribution_title, distribution_key in (
-        ("Типы", "types"),
-        ("Статусы", "statuses"),
-        ("Приоритеты", "priorities"),
-    ):
-        table(
-            (distribution_title, "Заявки"), g["distribution"][distribution_key].items(), [570, 204]
+    section("Ключевые показатели")
+    summary = _summary(bundle)
+    paired = []
+    for index in range(0, len(summary), 2):
+        left = summary[index]
+        right = summary[index + 1] if index + 1 < len(summary) else ("", "")
+        paired.append((left[0], left[1], right[0], right[1]))
+    table(("Показатель", "Значение", "Показатель", "Значение"), paired, [260, 70, 260, 70])
+
+    categories = bundle["categories"]
+    section("Причины обращений и установленные причины неисправностей")
+    created_total = categories["metrics"]["created_tickets"]
+    decision_total = categories["metrics"]["decision_events"]
+    category_rows = [
+        (row["name"] or "Без категории", row["count"], f"{_share(row['count'], created_total):.1%}")
+        for row in categories["categories"]
+    ]
+    reason_rows = [
+        (
+            row["name"] or "Причина не указана",
+            row["count"],
+            f"{_share(row['count'], decision_total):.1%}",
         )
-    chart = _chart(
-        "Поступившие заявки по датам", [(str(r["date"]), r["created"]) for r in g["daily"][-10:]]
-    )
-    if chart:
-        story.append(chart)
-    table(
-        ("Дата UTC+3", "Поступили", "Закрыты"),
-        [(r["date"], r["created"], r["closed"]) for r in g["daily"]],
-        [258, 258, 258],
-    )
-    table(
-        ("Заявка", "Тема", "Тип", "Статус", "Создана UTC+3"),
-        [
-            (r["number"], r["subject"], r["ticket_type"], r["status"], r["created_at"])
-            for r in g["details"]["items"]
-        ],
-        [65, 325, 115, 115, 154],
-    )
+        for row in categories["reasons"]
+    ]
+    max_rows = max(len(category_rows[:9]), len(reason_rows[:9]))
+    combined = []
+    for index in range(max_rows):
+        left = category_rows[index] if index < len(category_rows) else ("", "", "")
+        right = reason_rows[index] if index < len(reason_rows) else ("", "", "")
+        combined.append((*left, *right))
+    if not table(
+        ("Категория обращения", "Кол-во", "Доля", "Причина решения", "Кол-во", "Доля"),
+        combined,
+        [230, 48, 48, 230, 48, 48],
+    ):
+        story.append(_paragraph("За выбранный период категории и решения отсутствуют.", note))
 
-    e = bundle["employees"]
+    story.append(PageBreak())
     section("Работа сотрудников")
     table(
-        ("Сотрудник", "Созданы", "Решения", "Звонки", "Заявки со звонками"),
+        ("Сотрудник", "Создано", "Решено уник.", "Закрыто уник.", "Обзвоны"),
         [
             (
-                r["display_name"],
-                r["created_tickets"],
-                r["decision_events"],
-                r["callback_events"],
-                r["callback_tickets"],
+                row["display_name"],
+                row["created_tickets"],
+                row["decision_tickets"],
+                row["closed_tickets"],
+                row["callback_events"],
             )
-            for r in e["items"]
+            for row in bundle["employees"]["items"]
         ],
-        [310, 116, 116, 116, 116],
+        [310, 110, 110, 110, 110],
+        limit=15,
     )
+    callbacks = bundle["callbacks"]
+    section("Контрольные звонки")
     table(
-        ("Сотрудник ID", "Дата UTC+3", "Созданы", "Решения", "Звонки"),
-        [
-            (r["user_id"], r["date"], r["created"], r["decisions"], r["callbacks"])
-            for r in e["daily"]
-        ],
-        [310, 116, 116, 116, 116],
-    )
-    table(
-        ("Сотрудник", "Устранена", "Осталась", "Нет ответа"),
+        ("Показатель", "Количество", "Показатель", "Количество"),
         [
             (
-                r["display_name"],
-                r["outcomes"].get("CONFIRMED", 0),
-                r["outcomes"].get("STILL_BROKEN", 0),
-                r["outcomes"].get("NO_ANSWER", 0),
-            )
-            for r in e["items"]
-        ],
-        [300, 158, 158, 158],
-    )
-
-    c = bundle["callbacks"]
-    section("Контрольный обзвон")
-    table(
-        ("Показатель", "Значение"),
-        [("События звонков", c["total_events"]), ("Уникальные заявки", c["unique_tickets"])],
-        [570, 204],
-    )
-    chart = _chart(
-        "Исходы звонков",
-        [(OUTCOME_NAMES.get(key, key), value) for key, value in c["outcomes"].items()],
-    )
-    if chart:
-        story.append(chart)
-    table(
-        ("Дата UTC+3", "Исход", "Звонки"),
-        [
-            (r["date"], OUTCOME_NAMES.get(r["outcome"], r["outcome"]), r["count"])
-            for r in c["daily"]
-        ],
-        [258, 258, 258],
-    )
-    table(
-        ("Сотрудник", "Результат", "Звонки"),
-        [
-            (r["display_name"], OUTCOME_NAMES.get(r["outcome"], r["outcome"]), r["count"])
-            for r in c["employees"]
-        ],
-        [300, 300, 174],
-    )
-    table(
-        ("Заявка", "Тема", "Сотрудник", "Результат", "Когда UTC+3"),
-        [
+                "События звонков",
+                callbacks["total_events"],
+                "Уникальные заявки",
+                callbacks["unique_tickets"],
+            ),
             (
-                r["ticket_number"],
-                r["subject"],
-                r["actor_name"],
-                OUTCOME_NAMES.get(r["outcome"], r["outcome"]),
-                r["occurred_at"],
-            )
-            for r in c["details"]["items"]
+                "Проблема устранена",
+                callbacks["outcomes"].get("CONFIRMED", 0),
+                "Проблема осталась",
+                callbacks["outcomes"].get("STILL_BROKEN", 0),
+            ),
+            ("Не дозвонились", callbacks["outcomes"].get("NO_ANSWER", 0), "", ""),
         ],
-        [65, 240, 170, 155, 144],
+        [260, 70, 260, 70],
     )
-
-    f = bundle["field"]
-    section("Монтажные работы: Сухум / Очамчира")
+    field = bundle["field"]
+    section("Выездные работы")
     story.append(
         _paragraph(
-            "Отправка задания не подтверждает выполнение. Отчёты и проверки считаются отдельно.",
+            "Передано — сообщение отправлено монтажникам; выполнение подтверждается "
+            "отчётом, а затем проверкой инженера.",
             note,
         )
     )
-    table(("Показатель", "Значение"), _metric_rows(f["metrics"], FIELD_LABELS), [570, 204])
-    table(
-        ("Направление", "Отправлены", "Отчёты", "Проверены", "Переносы"),
-        [
-            (DIRECTION_NAMES.get(k, k), v["sent"], v["reported"], v["verified"], v["reschedules"])
-            for k, v in f["directions"].items()
-        ],
-        [310, 116, 116, 116, 116],
-    )
-    table(
-        ("Причина переноса", "События"),
-        [(r["reason"], r["count"]) for r in f["reschedule_reasons"]],
-        [570, 204],
-    )
-    table(
-        ("Дата UTC+3", "Отправлены", "Отчёты", "Проверены", "Переносы"),
-        [
-            (r["date"], r["sent"], r["reported"], r["verified"], r["reschedules"])
-            for r in f["daily"]
-        ],
-        [310, 116, 116, 116, 116],
-    )
-    table(
-        ("Заявка", "Тема", "Направление", "Состояние", "Отправлена UTC+3"),
-        [
+    direction_rows = []
+    for direction in ("SUKHUM", "OCHAMCHIRA"):
+        values = field["directions"].get(
+            direction, {"sent": 0, "reported": 0, "verified": 0, "reschedules": 0}
+        )
+        direction_rows.append(
             (
-                r["ticket_number"],
-                r["subject"],
-                DIRECTION_NAMES.get(r["direction"] or "UNKNOWN"),
-                r["work_status"],
-                r["sent_at"],
+                DIRECTION_NAMES[direction],
+                values["sent"],
+                values["reported"],
+                values["verified"],
+                values["reschedules"],
             )
-            for r in f["details"]["items"]
-        ],
-        [65, 300, 130, 135, 144],
-    )
-
-    r = bundle["categories"]
-    d = bundle["decisions"]
-    section("Причины обращений и инженерных решений")
-    story.append(
-        _paragraph(
-            "Категория при регистрации и причина решения — разные данные и разные даты событий.",
-            note,
+        )
+    direction_rows.append(
+        (
+            "Текущее состояние",
+            "—",
+            field["metrics"]["awaiting_report_now"],
+            "ожидают отчёта",
+            field["metrics"]["date_pending_now"],
         )
     )
-    table(("Показатель", "Значение"), _metric_rows(r["metrics"], REASON_LABELS), [570, 204])
-    chart = _chart(
-        "Категории обращений",
-        [(item["name"] or "Без категории", item["count"]) for item in r["categories"]],
-    )
-    if chart:
-        story.append(chart)
     table(
-        ("Категория при регистрации", "Заявки"),
-        [(item["name"], item["count"]) for item in r["categories"]],
-        [570, 204],
+        ("Направление", "Передано", "Отчёты", "Подтверждено", "Переносы / без даты"),
+        direction_rows,
+        [250, 110, 110, 110, 110],
     )
-    table(
-        ("Установленная причина", "Решения"),
-        [(item["name"], item["count"]) for item in r["reasons"]],
-        [570, 204],
-    )
-    table(
-        ("Дата UTC+3", "Категория", "Заявки"),
-        [(item["date"], item["category"], item["count"]) for item in r["daily"]],
-        [180, 470, 124],
-    )
-    table(
-        ("Заявка", "Тема", "Категория", "Создана UTC+3"),
+
+    story.append(PageBreak())
+    section("Невыполненные и проблемные заявки — текущее состояние")
+    active = bundle["active_tickets"]
+    if not table(
+        ("№", "Категория", "Ответственный", "Дата", "Статус", "Причина задержки"),
         [
-            (item["ticket_number"], item["subject"], item["name"], item["occurred_at"])
-            for item in r["details"]["items"]
+            (
+                row["number"],
+                _short(row["category"] or row["subject"] or "Без категории", 32),
+                row["assignee_name"],
+                row["created_at"],
+                STATUS_NAMES.get(row["status"], row["status"]),
+                _short(row["delay_reason"], 55),
+            )
+            for row in active
         ],
-        [65, 350, 205, 154],
-    )
-    table(
-        ("Заявка", "Тема", "Причина", "Решение UTC+3"),
+        [48, 155, 135, 105, 90, 175],
+        limit=12,
+    ):
+        story.append(_paragraph("Невыполненных заявок нет.", note))
+    elif len(active) > 12:
+        story.append(
+            _paragraph(
+                f"Показаны 12 из {len(active)} активных заявок. Полный список доступен в Excel.",
+                note,
+            )
+        )
+
+    section("Краткие результаты инженерной работы")
+    cases = bundle["decision_cases"]
+    if not table(
+        ("№", "Проблема", "Установленная причина", "Краткий результат"),
         [
-            (item["ticket_number"], item["subject"], item["name"], item["occurred_at"])
-            for item in d["details"]["items"]
+            (
+                row["ticket_number"],
+                _short(row["subject"], 42),
+                row["reason_name"] or "Причина не указана",
+                _short(row["decision_text"] or row["reason_name"], 170),
+            )
+            for row in cases
         ],
-        [65, 350, 205, 154],
-    )
+        [48, 190, 175, 295],
+        limit=8,
+    ):
+        story.append(_paragraph("Инженерных решений за период нет.", note))
+    elif len(cases) > 8:
+        story.append(
+            _paragraph(
+                f"Показаны 8 из {len(cases)} заявок с решениями. Полные тексты доступны в Excel.",
+                note,
+            )
+        )
 
     def footer(canvas, document):
-        canvas.setFont("OSS", 8)
+        canvas.setFont("OSS", 7)
         canvas.setFillColor(colors.HexColor("#667b80"))
-        canvas.drawString(34, 24, "OSS Control Center · данные UTC+3")
-        canvas.drawRightString(landscape(A4)[0] - 34, 24, str(document.page))
+        canvas.drawString(30, 18, "OSS Control Center · данные UTC+3")
+        canvas.drawRightString(page_size[0] - 30, 18, f"Страница {document.page}")
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return output.getvalue()

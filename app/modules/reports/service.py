@@ -98,10 +98,28 @@ def employees_report(db: Session, *, start: date, end: date, user: User, read_al
         select(
             TicketResolution.engineer_id.label("user_id"),
             func.count(TicketResolution.id).label("count"),
+            func.count(func.distinct(TicketResolution.ticket_id)).label("unique_tickets"),
         )
         .join(Ticket, Ticket.id == TicketResolution.ticket_id)
         .where(*visible, TicketResolution.created_at >= lower, TicketResolution.created_at < upper)
         .group_by(TicketResolution.engineer_id)
+        .subquery()
+    )
+    closings = (
+        select(
+            TicketEvent.actor_id.label("user_id"),
+            func.count(TicketEvent.id).label("count"),
+            func.count(func.distinct(TicketEvent.ticket_id)).label("unique_tickets"),
+        )
+        .join(Ticket, Ticket.id == TicketEvent.ticket_id)
+        .where(
+            *visible,
+            TicketEvent.actor_id.is_not(None),
+            TicketEvent.occurred_at >= lower,
+            TicketEvent.occurred_at < upper,
+            TicketEvent.event_type.in_(CLOSED),
+        )
+        .group_by(TicketEvent.actor_id)
         .subquery()
     )
     callbacks = (
@@ -127,17 +145,22 @@ def employees_report(db: Session, *, start: date, end: date, user: User, read_al
             User.is_active,
             func.coalesce(created.c.count, 0),
             func.coalesce(decisions.c.count, 0),
+            func.coalesce(decisions.c.unique_tickets, 0),
+            func.coalesce(closings.c.count, 0),
+            func.coalesce(closings.c.unique_tickets, 0),
             func.coalesce(callbacks.c.count, 0),
             func.coalesce(callbacks.c.unique_tickets, 0),
             *[func.coalesce(callbacks.c[outcome], 0) for outcome in CALLBACK_OUTCOMES],
         )
         .outerjoin(created, created.c.user_id == User.id)
         .outerjoin(decisions, decisions.c.user_id == User.id)
+        .outerjoin(closings, closings.c.user_id == User.id)
         .outerjoin(callbacks, callbacks.c.user_id == User.id)
         .where(
             (
                 created.c.count.is_not(None)
                 | decisions.c.count.is_not(None)
+                | closings.c.count.is_not(None)
                 | callbacks.c.count.is_not(None)
             )
             if not read_all
@@ -156,9 +179,12 @@ def employees_report(db: Session, *, start: date, end: date, user: User, read_al
                 "is_active": row[3],
                 "created_tickets": row[4],
                 "decision_events": row[5],
-                "callback_events": row[6],
-                "callback_tickets": row[7],
-                "outcomes": dict(zip(CALLBACK_OUTCOMES, row[8:], strict=True)),
+                "decision_tickets": row[6],
+                "closed_events": row[7],
+                "closed_tickets": row[8],
+                "callback_events": row[9],
+                "callback_tickets": row[10],
+                "outcomes": dict(zip(CALLBACK_OUTCOMES, row[11:], strict=True)),
             }
             for row in rows
         ],
@@ -292,6 +318,17 @@ def report(
             or 0
         )
 
+    def event_ticket_count(kinds: tuple[str, ...] | str) -> int:
+        kinds = (kinds,) if isinstance(kinds, str) else kinds
+        return (
+            db.scalar(
+                select(func.count(func.distinct(TicketEvent.ticket_id)))
+                .join(Ticket, Ticket.id == TicketEvent.ticket_id)
+                .where(*events, TicketEvent.event_type.in_(kinds))
+            )
+            or 0
+        )
+
     def distribution(column) -> dict[str, int]:
         return {
             key: count
@@ -365,7 +402,9 @@ def report(
         "metrics": {
             "created": ticket_count(cohort),
             "resolved_events": event_count(RESOLVED),
+            "resolved_unique_tickets": event_ticket_count(RESOLVED),
             "closed_events": event_count(CLOSED),
+            "closed_unique_tickets": event_ticket_count(CLOSED),
             "returned_events": event_count(RETURNED),
             "active_now": ticket_count([*visible, Ticket.status.in_(("OPEN", "IN_PROGRESS"))]),
             "average_resolution_seconds": average_seconds((RESOLVED,), resolution_seconds),

@@ -5789,6 +5789,7 @@ def test_management_exports_are_complete_scoped_and_safe(
 ) -> None:
     engineer = seed_user(ticket_engine, "export_engineer", Role.ENGINEER)
     operator = seed_user(ticket_engine, "export_operator", Role.OPERATOR)
+    idle = seed_user(ticket_engine, "export_idle", Role.ENGINEER)
     login(ticket_client, engineer.login)
     internal_response = ticket_client.post(
         "/api/v1/tickets", headers=csrf(ticket_client),
@@ -5801,6 +5802,12 @@ def test_management_exports_are_complete_scoped_and_safe(
     now = datetime.now(UTC)
     day = (now + timedelta(hours=3)).date().isoformat()
     with Session(ticket_engine) as db:
+        idle_account = db.get(User, idle.id)
+        assert idle_account is not None
+        idle_account.is_active = False
+        engineer_account = db.get(User, engineer.id)
+        assert engineer_account is not None
+        engineer_account.is_active = False
         decision = None
         for _ in range(2):
             decision = TicketResolution(
@@ -5810,6 +5817,19 @@ def test_management_exports_are_complete_scoped_and_safe(
             db.add(decision)
             db.flush()
         assert decision is not None
+        for index, event_type in enumerate(
+            ("ticket_resolved", "ticket_resolved", "ticket_closed_without_call")
+        ):
+            db.add(
+                TicketEvent(
+                    ticket_id=UUID(manual["id"]),
+                    event_type=event_type,
+                    actor_id=engineer.id,
+                    event_data={"synthetic": True},
+                    ticket_version=index + 2,
+                    occurred_at=now,
+                )
+            )
         db.add(TicketCallback(
             ticket_id=UUID(manual["id"]), decision_id=decision.id,
             client_request_id=uuid4(), actor_id=operator.id, outcome="NO_ANSWER",
@@ -5851,27 +5871,40 @@ def test_management_exports_are_complete_scoped_and_safe(
     assert "no-store" in excel.headers["cache-control"]
     book = load_workbook(BytesIO(excel.content), read_only=True, data_only=False)
     assert book.sheetnames == [
-        "Сводка OSS", "Общая статистика", "Сотрудники", "Контрольные звонки",
-        "Монтажные работы", "Причины обращений",
+        "Сводка", "Причины и решения", "Работа сотрудников", "Обзвоны",
+        "Выездные и незавершённые работы", "Детализация заявок",
     ]
-    general_cells = [cell for row in book["Общая статистика"] for cell in row]
-    assert any(cell.value == "'=1+1" and cell.data_type == "s" for cell in general_cells)
-    assert not any(cell.value == "Private export ticket" for cell in general_cells)
-    field_values = [cell.value for row in book["Монтажные работы"] for cell in row]
-    assert 2 in field_values and "Попросил позже" in field_values
-    reason_values = [cell.value for row in book["Причины обращений"] for cell in row]
+    all_cells = [cell for sheet in book for row in sheet for cell in row]
+    assert any(cell.value == "'=1+1" and cell.data_type == "s" for cell in all_cells)
+    assert not any(cell.value == "Private export ticket" for cell in all_cells)
+    assert not any(cell.value == idle.display_name for cell in all_cells)
+    summary_values = [cell.value for row in book["Сводка"] for cell in row]
+    assert "Уникальные решённые заявки" in summary_values
+    assert "Уникальные закрытые заявки" in summary_values
+    employee_values = [cell.value for row in book["Работа сотрудников"] for cell in row]
+    assert "Уникальные решённые" in employee_values
+    assert "Уникальные закрытые" in employee_values
+    assert engineer.display_name in employee_values
+    field_values = [
+        cell.value for row in book["Выездные и незавершённые работы"] for cell in row
+    ]
+    assert "Ожидается отчёт монтажников" in field_values
+    reason_values = [cell.value for row in book["Причины и решения"] for cell in row]
     assert "Обрыв линии" in reason_values
+    detail_rows = list(book["Детализация заявок"].iter_rows(values_only=True))
+    assert sum(row[0] == manual["number"] for row in detail_rows) == 1
     book.close()
 
     pdf = ticket_client.get("/api/v1/reports/export.pdf", params=params)
     assert pdf.status_code == 200, pdf.text[:300] if pdf.status_code != 200 else ""
     assert pdf.content.startswith(b"%PDF-")
-    text_content = "\n".join(
-        page.extract_text() or "" for page in PdfReader(BytesIO(pdf.content)).pages
-    )
-    assert "Контрольный обзвон" in text_content
+    pdf_reader = PdfReader(BytesIO(pdf.content))
+    assert len(pdf_reader.pages) <= 3
+    text_content = "\n".join(page.extract_text() or "" for page in pdf_reader.pages)
+    assert "Контрольные звонки" in text_content
     assert "Обрыв линии" in text_content
     assert "Private export ticket" not in text_content
+    assert str(engineer.id) not in text_content
 
     no_events = ticket_client.get("/api/v1/reports/export.xlsx", params={
         "start": "2000-01-01", "end": "2000-01-01",
@@ -5880,7 +5913,7 @@ def test_management_exports_are_complete_scoped_and_safe(
     empty_book = load_workbook(BytesIO(no_events.content), read_only=True)
     assert any(
         cell.value == "Нет данных за период"
-        for row in empty_book["Контрольные звонки"] for cell in row
+        for row in empty_book["Обзвоны"] for cell in row
     )
     empty_book.close()
 

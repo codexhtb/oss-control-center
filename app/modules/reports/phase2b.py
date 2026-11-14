@@ -11,6 +11,34 @@ from app.modules.reports.service import _day, _visible, utc_bounds
 from app.modules.tickets.models import Ticket, TicketEvent, TicketResolution
 
 
+def initial_category_expression():
+    """Return the category snapshot captured when the ticket was registered."""
+    category_change = (
+        select(TicketEvent.id)
+        .where(
+            TicketEvent.ticket_id == Ticket.id,
+            TicketEvent.event_type == "ticket_edited",
+            TicketEvent.event_data["changes"].has_key("category_name"),
+        )  # noqa: W601
+        .order_by(TicketEvent.occurred_at, TicketEvent.id)
+        .limit(1)
+        .correlate(Ticket)
+    )
+    first_category = (
+        select(TicketEvent.event_data["changes"]["category_name"]["before"].astext)
+        .where(
+            TicketEvent.ticket_id == Ticket.id,
+            TicketEvent.event_type == "ticket_edited",
+            TicketEvent.event_data["changes"].has_key("category_name"),
+        )  # noqa: W601
+        .order_by(TicketEvent.occurred_at, TicketEvent.id)
+        .limit(1)
+        .correlate(Ticket)
+        .scalar_subquery()
+    )
+    return case((category_change.exists(), first_category), else_=Ticket.category_name)
+
+
 def field_work_report(
     db: Session,
     *,
@@ -223,30 +251,7 @@ def reasons_report(
     visible = _visible(user, read_all)
     # Ticket edits can change category_name. The first edit's "before" snapshot
     # retains the registration value, including an originally absent category.
-    category_change = (
-        select(TicketEvent.id)
-        .where(
-            TicketEvent.ticket_id == Ticket.id,
-            TicketEvent.event_type == "ticket_edited",
-            TicketEvent.event_data["changes"].has_key("category_name"),
-        )  # noqa: W601
-        .order_by(TicketEvent.occurred_at, TicketEvent.id)
-        .limit(1)
-        .correlate(Ticket)
-    )
-    first_category = (
-        select(TicketEvent.event_data["changes"]["category_name"]["before"].astext)
-        .where(
-            TicketEvent.ticket_id == Ticket.id,
-            TicketEvent.event_type == "ticket_edited",
-            TicketEvent.event_data["changes"].has_key("category_name"),
-        )  # noqa: W601
-        .order_by(TicketEvent.occurred_at, TicketEvent.id)
-        .limit(1)
-        .correlate(Ticket)
-        .scalar_subquery()
-    )
-    initial_category = case((category_change.exists(), first_category), else_=Ticket.category_name)
+    initial_category = initial_category_expression()
     scope = [*visible, *([initial_category == category] if category else [])]
     ticket_scope = [*scope, Ticket.created_at >= lower, Ticket.created_at < upper]
     decision_scope = [
