@@ -314,7 +314,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
             <div><dt>Дата и время платежа</dt><dd>{ticket.payment_occurred_at ? formatDate(ticket.payment_occurred_at) : '—'}</dd></div>
             <div><dt>Сумма платежа</dt><dd>{ticket.payment_amount ?? '—'}</dd></div>
           </> : <>
-          <div><dt>{ticket.ticket_type === 'MANUAL' ? 'Обратившийся' : 'Абонент'}</dt><dd>{ticket.ticket_type === 'MANUAL' ? ticket.caller_full_name || 'Не указан' : ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
+          <div><dt>{ticket.ticket_type === 'MANUAL' || ticket.ticket_type === 'NEW_CONNECTION' ? 'Обратившийся' : 'Абонент'}</dt><dd>{ticket.ticket_type === 'MANUAL' || ticket.ticket_type === 'NEW_CONNECTION' ? ticket.caller_full_name || 'Не указан' : ticket.subscriber?.full_name || ticket.subscriber?.organization_name || 'Не привязан'}</dd></div>
           <div><dt>Лицевой счёт</dt><dd>{ticket.account_no || '—'}</dd></div>
           <div><dt>Телефон</dt><dd>{primaryPhone || '—'}</dd></div>
           <div><dt>Город</dt><dd>{ticket.city || '—'}</dd></div>

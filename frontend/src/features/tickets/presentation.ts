@@ -15,6 +15,7 @@ export const resolutionReasonLabel: Record<ResolutionReason, string> = {
 export const typeLabel: Record<TicketType, string> = {
   SUBSCRIBER_LINKED: 'По абоненту',
   MANUAL: 'Ручная',
+  NEW_CONNECTION: 'Новое подключение',
   INTERNAL: 'Внутренняя',
   ERRONEOUS_PAYMENT: 'Ошибочный платёж',
 }

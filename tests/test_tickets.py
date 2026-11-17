@@ -2364,19 +2364,27 @@ def test_category_ticket_idempotency_and_manual_phone(
     )
 
 
-def test_new_connection_uses_manual_ticket_category_address_and_telegram_preview(
-    ticket_engine: Engine, ticket_client: TestClient
+@pytest.mark.parametrize("direction", ["SUKHUM", "OCHAMCHIRA"])
+def test_new_connection_uses_dedicated_type_address_and_telegram_preview(
+    ticket_engine: Engine, ticket_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch, direction: str,
 ) -> None:
+    monkeypatch.setenv("TELEGRAM_OCHAMCHIRA_CHAT_ID", "-1004473201977")
     operator = seed_user(ticket_engine, "new_connection_operator", Role.OPERATOR)
     engineer = seed_user(ticket_engine, "new_connection_engineer", Role.ENGINEER)
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
     with Session(ticket_engine) as db:
-        category = TicketCategory(name="Новое подключение", sort_order=90, is_active=True)
-        db.add(category)
+        category = db.scalar(select(TicketCategory).where(TicketCategory.is_other.is_(True)))
+        assert category is not None
+        category.name = "Новое подключение"
         db.commit()
         category_id = str(category.id)
+    with Session(ticket_engine) as db:
+        assert db.get(TicketCategory, UUID(category_id)).name == "Новое подключение"
     login(ticket_client, operator.login)
     payload = {
-        "ticket_type": "MANUAL",
+        "ticket_type": "NEW_CONNECTION",
         "category_id": category_id,
         "caller_full_name": "Синтетический Заявитель",
         "caller_phone": "+7 900 000 00 01",
@@ -2393,10 +2401,14 @@ def test_new_connection_uses_manual_ticket_category_address_and_telegram_preview
     response = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["ticket_type"] == "MANUAL"
+    assert body["ticket_type"] == "NEW_CONNECTION"
     assert body["subject"] == body["category_name"] == "Новое подключение"
     assert body["address_override"] == payload["address_override"]
     assert body["subscriber_snapshot_id"] is None and body["account_no"] is None
+    filtered = ticket_client.get("/api/v1/tickets", params={"ticket_type": "NEW_CONNECTION"}).json()
+    assert body["id"] in {item["id"] for item in filtered["items"]}
+    manual = ticket_client.get("/api/v1/tickets", params={"ticket_type": "MANUAL"}).json()
+    assert body["id"] not in {item["id"] for item in manual["items"]}
     replay = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
     assert replay.status_code == 200 and replay.json()["id"] == body["id"]
     assert ticket_client.post(
@@ -2419,9 +2431,25 @@ def test_new_connection_uses_manual_ticket_category_address_and_telegram_preview
     )
     assert claim.status_code == 200, claim.text
     path = f"/api/v1/tickets/{body['id']}"
+    for invalid in (
+        {"ticket_type": "MANUAL", "reason": "Incorrect type"},
+        {"address_override": None},
+        {"subject": "Changed subject"},
+        {"category_id": None},
+    ):
+        rejected = ticket_client.patch(
+            path, headers={**csrf(ticket_client), "If-Match": '"2"'}, json=invalid,
+        )
+        assert rejected.status_code in (409, 422), rejected.text
+    edited = ticket_client.patch(
+        path, headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"description": "Согласовать время подключения"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["description"] == "Согласовать время подключения"
     requested = ticket_client.post(
         path + "/field-work-request",
-        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        headers={**csrf(ticket_client), "If-Match": '"3"'},
         json={"reason": "Подключить нового абонента"},
     )
     assert requested.status_code == 200, requested.text
@@ -2429,11 +2457,44 @@ def test_new_connection_uses_manual_ticket_category_address_and_telegram_preview
     assert draft.status_code == 200, draft.text
     preview = draft.json()["handoff"]["message_preview"]
     for fragment in (
-        "Тема: Новое подключение", "Категория: Новое подключение",
-        "Обратившийся: Синтетический Заявитель", "Контактный номер: +7 900 000 00 01",
-        "Адрес: Улица Тестовая, дом 5", "Причина передачи: Подключить нового абонента",
+        "Тип: Новое подключение", "ФИО: Синтетический Заявитель",
+        "Телефон: +7 900 000 00 01", "Город: Тестовый город",
+        "Адрес подключения: Улица Тестовая, дом 5",
+        "Причина передачи: Подключить нового абонента",
     ):
         assert fragment in preview
+    approved = preview + "\nУточнение инженера: согласовать подключение."
+    sent = ticket_client.post(
+        path + f"/field-work-handoffs/{draft.json()['handoff']['id']}/send",
+        headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "direction": direction,
+              "message_text": approved},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["delivery_status"] == "SENT"
+    assert gateway.calls[0][1] == approved
+    with Session(ticket_engine) as db:
+        handoff = db.get(FieldWorkHandoff, UUID(draft.json()["handoff"]["id"]))
+        assert handoff is not None and handoff.message_text == approved
+    day = (datetime.now(UTC) + timedelta(hours=3)).date().isoformat()
+    excel = ticket_client.get("/api/v1/reports/export.xlsx", params={"start": day, "end": day})
+    assert excel.status_code == 200, excel.text[:300] if excel.status_code != 200 else ""
+    book = load_workbook(BytesIO(excel.content), read_only=True)
+    summary = [cell.value for row in book["Сводка"] for cell in row]
+    assert "Новое подключение" in summary
+    assert "Новых подключений поступило" in summary
+    assert "Новых подключений активны сейчас" in summary
+    details = list(book["Детализация заявок"].iter_rows(values_only=True))
+    assert any(row[0] == body["number"] and row[2] == "Новое подключение" for row in details)
+    book.close()
+    if direction == "SUKHUM":
+        pdf = ticket_client.get("/api/v1/reports/export.pdf", params={"start": day, "end": day})
+        assert pdf.status_code == 200
+        pages = PdfReader(BytesIO(pdf.content)).pages
+        assert len(pages) <= 3
+        assert "Новых подключений поступило" in "\n".join(
+            page.extract_text() or "" for page in pages
+        )
 
 
 def test_manual_name_optional_description_and_linked_topics(

@@ -19,7 +19,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const [searchParams] = useSearchParams()
   const linkedLookupId = searchParams.get('lookup')
   const queryClient = useQueryClient()
-  const [type, setType] = useState<TicketType | 'NEW_CONNECTION'>('SUBSCRIBER_LINKED')
+  const [type, setType] = useState<TicketType>('SUBSCRIBER_LINKED')
   const [subject, setSubject] = useState('')
   const [description, setDescription] = useState('')
   const [categoryId, setCategoryId] = useState('')
@@ -111,14 +111,14 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const expired = card ? card.is_expired || Date.now() >= new Date(card.expires_at).getTime() : false
   const readyOrCustom = type === 'INTERNAL' || type === 'ERRONEOUS_PAYMENT' || type === 'NEW_CONNECTION' && !!connectionCategory || categoryId === '' && type === 'MANUAL' || (categoryId === '__custom__' ? !!subject.trim() : !!selectedCategory)
   const paymentReady = !!callerFullName.trim() && !!correctAccountNo.trim() && !!erroneousAccountNo.trim() && correctAccountNo.trim() !== erroneousAccountNo.trim() && !!paymentDate && !Number.isNaN(new Date(paymentDate).getTime()) && /^\d+(?:\.\d{1,2})?$/.test(paymentAmount) && Number(paymentAmount) > 0
-  const canSubmit = (type !== 'INTERNAL' || !!description.trim()) && readyOrCustom && (type !== 'MANUAL' && type !== 'NEW_CONNECTION' || (!!callerFullName.trim() && !!callerPhone && !!city.trim())) && (type !== 'NEW_CONNECTION' && !(type === 'MANUAL' && selectedCategory?.name === 'Новое подключение') || !!connectionAddress.trim()) && (type !== 'ERRONEOUS_PAYMENT' || paymentReady) && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
+  const canSubmit = (type !== 'INTERNAL' || !!description.trim()) && readyOrCustom && (type !== 'MANUAL' && type !== 'NEW_CONNECTION' || (!!callerFullName.trim() && !!callerPhone && !!city.trim())) && (type !== 'NEW_CONNECTION' || !!connectionAddress.trim()) && (type !== 'ERRONEOUS_PAYMENT' || paymentReady) && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
 
   function edited() {
     setRequestId(crypto.randomUUID())
     mutation.reset()
   }
 
-  function chooseType(next: TicketType | 'NEW_CONNECTION') {
+  function chooseType(next: TicketType) {
     if (type === next) return
     setType(next)
     setSubject('')
@@ -147,7 +147,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
       client_request_id: requestId,
     }
     const payload: CreateTicketInput = type === 'NEW_CONNECTION' && connectionCategory
-      ? { ...common, subject: undefined, ticket_type: 'MANUAL', category_id: connectionCategory.id, caller_full_name: callerFullName.trim(), caller_phone: manualPhone.trim(), city: city.trim(), address_override: connectionAddress.trim() }
+      ? { ...common, subject: undefined, ticket_type: 'NEW_CONNECTION', category_id: connectionCategory.id, caller_full_name: callerFullName.trim(), caller_phone: manualPhone.trim(), city: city.trim(), address_override: connectionAddress.trim() }
       : type === 'ERRONEOUS_PAYMENT'
       ? { ...common, subject: undefined, ticket_type: type, caller_full_name: callerFullName.trim(), correct_account_no: correctAccountNo.trim(), erroneous_account_no: erroneousAccountNo.trim(), payment_occurred_at: new Date(paymentDate).toISOString(), payment_amount: paymentAmount }
       : type === 'SUBSCRIBER_LINKED' && card
@@ -157,7 +157,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
           ...(serviceId ? { selected_service_id: serviceId } : {}),
           ...(connectionId ? { connection_snapshot_id: connectionId } : {}),
           ...(hasActive && otherProblem ? { duplicate_reason: duplicateReason.trim() } : {}) }
-      : { ...common, ticket_type: type as 'MANUAL' | 'INTERNAL', ...(type === 'MANUAL' ? { ...(selectedCategory ? { category_id: selectedCategory.id } : {}), ...(selectedCategory?.name === 'Новое подключение' ? { address_override: connectionAddress.trim() } : {}), caller_full_name: callerFullName.trim(), caller_phone: callerPhone, city: city.trim() } : {}) }
+      : { ...common, ticket_type: type as 'MANUAL' | 'INTERNAL', ...(type === 'MANUAL' ? { ...(selectedCategory ? { category_id: selectedCategory.id } : {}), caller_full_name: callerFullName.trim(), caller_phone: callerPhone, city: city.trim() } : {}) }
     mutation.mutate(payload)
   }
 
@@ -227,12 +227,11 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
               <label className="field"><span>Комментарий <small>необязательно</small></span><textarea value={description} maxLength={10000} rows={3} onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
             </> : type !== 'INTERNAL' ? <>
               {!linked && <label className="field"><span>ФИО обратившегося <em>*</em></span><input value={callerFullName} maxLength={160} required onChange={(event) => { setCallerFullName(event.target.value); edited() }} /></label>}
-              <label className="field"><span>Тема обращения {linked && <em>*</em>}</span><select aria-label="Тема обращения" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); edited() }} required={linked}><option value="">{linked ? 'Выберите тему' : 'Ручное обращение'}</option>{categories.data?.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__custom__">Своя тема</option></select></label>
+              <label className="field"><span>Тема обращения {linked && <em>*</em>}</span><select aria-label="Тема обращения" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); edited() }} required={linked}><option value="">{linked ? 'Выберите тему' : 'Ручное обращение'}</option>{categories.data?.filter((item) => item.is_active && (type !== 'MANUAL' || item.name !== 'Новое подключение')).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__custom__">Своя тема</option></select></label>
               {categories.isError && <Notice tone="error">Не удалось загрузить темы обращений. {errorText(categories.error)}</Notice>}
               {categoryId === '__custom__' && <label className="field"><span>Своя тема <em>*</em></span><input id="ticket-subject" name="subject" value={subject} maxLength={160} placeholder="Название обращения" onChange={(event) => { setSubject(event.target.value); edited() }} required /></label>}
               {!linked && <label className="field"><span>Контактный номер <em>*</em></span><input type="tel" value={manualPhone} maxLength={50} required onChange={(event) => { setManualPhone(event.target.value); edited() }} /></label>}
               {!linked && <label className="field"><span>Город <em>*</em></span><input value={city} maxLength={160} required onChange={(event) => { setCity(event.target.value); edited() }} /></label>}
-              {type === 'MANUAL' && selectedCategory?.name === 'Новое подключение' && <label className="field"><span>Адрес подключения <em>*</em></span><input value={connectionAddress} maxLength={300} required onChange={(event) => { setConnectionAddress(event.target.value); edited() }} /></label>}
               <label className="field"><span>{linked ? 'Комментарий' : 'Описание проблемы'} <small>необязательно</small></span><textarea id="ticket-description" name="description" value={description} maxLength={10000} rows={linked ? 3 : 4} placeholder={linked ? 'Дополнительные сведения со слов абонента' : 'Что произошло?'} onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
               {!linked && <label className="field form-fields__priority"><span>Приоритет</span><select id="ticket-priority" name="priority" value={priority} onChange={(event) => { setPriority(event.target.value as TicketPriority); edited() }}>{priorities.map((item) => <option key={item} value={item}>{priorityLabel[item]}</option>)}</select></label>}
             </> : <>

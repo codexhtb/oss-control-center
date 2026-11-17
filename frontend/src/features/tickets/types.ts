@@ -1,4 +1,4 @@
-export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'INTERNAL' | 'ERRONEOUS_PAYMENT'
+export type TicketType = 'SUBSCRIBER_LINKED' | 'MANUAL' | 'NEW_CONNECTION' | 'INTERNAL' | 'ERRONEOUS_PAYMENT'
 export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'
 export type TicketPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
 // Stable catalog code; legacy values remain valid and new codes come from the API.
@@ -415,6 +415,8 @@ export type CreateTicketInput = {
   client_request_id: string
 } & (
   | { ticket_type: 'MANUAL' | 'INTERNAL' }
+  | { ticket_type: 'NEW_CONNECTION'; category_id: string; caller_full_name: string;
+      caller_phone: string; city: string; address_override: string }
   | {
       ticket_type: 'ERRONEOUS_PAYMENT'
       caller_full_name: string

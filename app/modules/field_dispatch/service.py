@@ -82,16 +82,34 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     ticket = db.get(Ticket, handoff.ticket_id)
     if ticket is None or ticket.deleted_at is not None:
         raise ApiError(404, "ticket_not_found", "Ticket not found")
-    if ticket.ticket_type == TicketType.MANUAL:
+    if ticket.ticket_type in (TicketType.MANUAL, TicketType.NEW_CONNECTION):
         values = {
             "caller_full_name": ticket.caller_full_name,
             "caller_phone": ticket.caller_phone,
             "city": ticket.city,
         }
+        if ticket.ticket_type == TicketType.NEW_CONNECTION:
+            values["address_override"] = ticket.address_override
         missing = tuple(key for key, value in values.items() if not value)
         if missing:
             return MessageData(None, missing)
         engineer = db.get(User, handoff.created_by) or sender
+        if ticket.ticket_type == TicketType.NEW_CONNECTION:
+            lines = [
+                f"Заявка №{ticket.number}",
+                "Тип: Новое подключение",
+                f"ФИО: {ticket.caller_full_name}",
+                f"Телефон: {ticket.caller_phone}",
+                f"Город: {ticket.city}",
+                f"Адрес подключения: {ticket.address_override}",
+                f"Комментарий: {ticket.description or 'не указан'}",
+                f"Причина передачи: {handoff.reason}",
+                f"Отправил инженер: {engineer.display_name}",
+            ]
+            text = "\n".join(lines)
+            if len(text) > 4096:
+                raise ApiError(422, "telegram_message_too_long", "Telegram message is too long")
+            return MessageData(text, ())
         lines = [
             f"Заявка #{ticket.number}",
             f"Тема: {ticket.subject or 'Ручное обращение'}",

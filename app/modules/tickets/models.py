@@ -158,7 +158,8 @@ class Ticket(Base):
             name="ck_tickets_delete_fields",
         ),
         CheckConstraint(
-            "ticket_type IN ('MANUAL', 'ERRONEOUS_PAYMENT') OR length(description) > 0",
+            "ticket_type IN ('MANUAL', 'NEW_CONNECTION', 'ERRONEOUS_PAYMENT') "
+            "OR length(description) > 0",
             name="ck_tickets_description",
         ),
         CheckConstraint(
@@ -191,11 +192,18 @@ class Ticket(Base):
         CheckConstraint(
             "(ticket_type = 'SUBSCRIBER_LINKED' AND subscriber_snapshot_id IS NOT NULL "
             "AND account_no IS NOT NULL AND length(account_no) > 0) OR "
-            "(ticket_type IN ('MANUAL', 'INTERNAL', 'ERRONEOUS_PAYMENT') "
+            "(ticket_type IN ('MANUAL', 'NEW_CONNECTION', 'INTERNAL', 'ERRONEOUS_PAYMENT') "
             "AND subscriber_snapshot_id IS NULL "
             "AND account_no IS NULL AND connection_snapshot_id IS NULL "
             "AND selected_service_id IS NULL)",
             name="ck_tickets_type_snapshot",
+        ),
+        CheckConstraint(
+            "ticket_type <> 'NEW_CONNECTION' OR (caller_full_name IS NOT NULL "
+            "AND caller_phone IS NOT NULL AND city IS NOT NULL "
+            "AND address_override IS NOT NULL AND category_id IS NOT NULL "
+            "AND category_name = 'Новое подключение' AND subject = 'Новое подключение')",
+            name="ck_tickets_new_connection",
         ),
         CheckConstraint(
             "selected_service_id IS NULL OR length(selected_service_id) > 0",

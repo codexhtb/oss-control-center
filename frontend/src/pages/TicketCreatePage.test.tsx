@@ -43,7 +43,7 @@ beforeEach(() => {
   vi.mocked(ticketApi.lookup).mockReset()
   vi.mocked(ticketApi.categories).mockReset().mockResolvedValue([
     { id: categoryId, name: 'Нет интернета', sort_order: 10, is_active: true, is_other: false, version: 1 },
-    { id: connectionCategoryId, name: 'Новое подключение', sort_order: 20, is_active: true, is_other: false, version: 1 },
+    { id: connectionCategoryId, name: 'Новое подключение', sort_order: 20, is_active: true, is_other: true, version: 1 },
   ])
   vi.mocked(ticketApi.activeSubscriberTickets).mockReset().mockResolvedValue({
     items: [], page: 1, size: 20, total_visible: 0, has_hidden_active: false,
@@ -70,7 +70,7 @@ it('creates an erroneous payment with structured fields and no category or descr
   expect(await screen.findByText('Карточка открыта')).toBeInTheDocument()
 })
 
-it('creates a new connection as a manual ticket without NetUP and keeps fields on API failure', async () => {
+it('creates a dedicated new connection without NetUP and keeps fields on API failure', async () => {
   vi.mocked(ticketApi.create).mockRejectedValueOnce(new Error('Temporary error')).mockResolvedValueOnce({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
   renderCreate()
   fireEvent.click(screen.getByRole('button', { name: /Новое подключение/ }))
@@ -84,7 +84,7 @@ it('creates a new connection as a manual ticket without NetUP and keeps fields o
   await waitFor(() => expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
   await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
-    ticket_type: 'MANUAL', category_id: connectionCategoryId, caller_full_name: 'Синтетический заявитель',
+    ticket_type: 'NEW_CONNECTION', category_id: connectionCategoryId, caller_full_name: 'Синтетический заявитель',
     caller_phone: '+7 900 123 45 67', city: 'Тестовый город', address_override: 'Тестовая, 5',
     description: 'После обеда', priority: 'NORMAL',
   })))

@@ -20,7 +20,7 @@ from reportlab.platypus import (
     Spacer,
     TableStyle,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 from xlsxwriter import Workbook
 
@@ -33,14 +33,16 @@ from app.modules.reports.phase2b import (
     reasons_report,
 )
 from app.modules.reports.service import (
+    CLOSED,
     LOCAL_TZ,
+    RESOLVED,
     _visible,
     callbacks_report,
     employees_report,
     report,
     utc_bounds,
 )
-from app.modules.tickets.models import Ticket, TicketCallback, TicketResolution
+from app.modules.tickets.models import Ticket, TicketCallback, TicketEvent, TicketResolution
 
 FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 BOLD_FONT_FILE = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
@@ -58,6 +60,11 @@ STATUS_NAMES = {
     "IN_PROGRESS": "В работе",
     "RESOLVED": "Решена",
     "CLOSED": "Закрыта",
+}
+TYPE_NAMES = {
+    "SUBSCRIBER_LINKED": "По абоненту", "MANUAL": "Ручная",
+    "NEW_CONNECTION": "Новое подключение", "INTERNAL": "Внутренняя",
+    "ERRONEOUS_PAYMENT": "Ошибочный платёж",
 }
 
 
@@ -122,6 +129,7 @@ def _ticket_rows(
             Ticket.number,
             Ticket.created_at,
             Ticket.subject,
+            Ticket.ticket_type,
             initial_category.label("initial_category"),
             decision.reason_name,
             decision.decision_text,
@@ -131,6 +139,8 @@ def _ticket_rows(
             Ticket.closed_at,
             callback.outcome,
             callback.occurred_at,
+            Ticket.caller_full_name,
+            Ticket.address_override,
         )
         .join(creator, creator.id == Ticket.created_by)
         .outerjoin(assignee, assignee.id == Ticket.assigned_engineer_id)
@@ -146,6 +156,7 @@ def _ticket_rows(
         "number",
         "created_at",
         "subject",
+        "ticket_type",
         "category",
         "reason_name",
         "decision_text",
@@ -155,6 +166,8 @@ def _ticket_rows(
         "closed_at",
         "callback_outcome",
         "callback_at",
+        "caller_full_name",
+        "address_override",
     )
     return [dict(zip(keys, row, strict=True)) for row in rows]
 
@@ -291,6 +304,21 @@ def load_bundle(
     """Reuse report calculations and load bounded management-only detail."""
     base = {"db": db, "start": start, "end": end, "user": user, "read_all": read_all}
     general = report(**base, page=1, size=1)
+    lower, upper = utc_bounds(start, end)
+    new_scope = [*_visible(user, read_all), Ticket.ticket_type == "NEW_CONNECTION"]
+    new_connections = {
+        "created": db.scalar(select(func.count(Ticket.id)).where(
+            *new_scope, Ticket.created_at >= lower, Ticket.created_at < upper
+        )) or 0,
+        "active_now": db.scalar(select(func.count(Ticket.id)).where(
+            *new_scope, Ticket.status.in_(("OPEN", "IN_PROGRESS"))
+        )) or 0,
+    }
+    for key, kinds in (("resolved", (RESOLVED,)), ("closed", CLOSED)):
+        new_connections[key] = db.scalar(select(func.count(func.distinct(TicketEvent.ticket_id)))
+            .join(Ticket, Ticket.id == TicketEvent.ticket_id)
+            .where(*new_scope, TicketEvent.event_type.in_(kinds),
+                   TicketEvent.occurred_at >= lower, TicketEvent.occurred_at < upper)) or 0
     employees = employees_report(**base)
     employees["items"] = [
         row
@@ -353,6 +381,7 @@ def load_bundle(
         "direction": direction,
         "category_filter": category,
         "general": general,
+        "new_connections": new_connections,
         "employees": employees,
         "callbacks": callbacks,
         "field": field,
@@ -368,6 +397,7 @@ def _summary(bundle: dict) -> list[tuple[str, int]]:
     general = bundle["general"]["metrics"]
     callbacks = bundle["callbacks"]
     field = bundle["field"]["metrics"]
+    connections = bundle["new_connections"]
     return [
         ("Поступившие заявки", general["created"]),
         ("Уникальные решённые заявки", general["resolved_unique_tickets"]),
@@ -379,6 +409,10 @@ def _summary(bundle: dict) -> list[tuple[str, int]]:
         ("Отчёты о выполнении получены", field["reported_handoffs"]),
         ("Работы подтверждены инженером", field["verified_handoffs"]),
         ("Ожидают отчёта сейчас", field["awaiting_report_now"]),
+        ("Новых подключений поступило", connections["created"]),
+        ("Новых подключений решено (уник.)", connections["resolved"]),
+        ("Новых подключений закрыто (уник.)", connections["closed"]),
+        ("Новых подключений активны сейчас", connections["active_now"]),
     ]
 
 
@@ -461,6 +495,10 @@ def build_xlsx(bundle: dict) -> bytes:
         )
         sheet = _Sheet(book, "Сводка", bundle, [48, 22])
         sheet.section("Ключевые показатели", ("Показатель", "Значение"), _summary(bundle))
+        sheet.section("Типы заявок", ("Тип", "Поступило"), [
+            (TYPE_NAMES.get(kind, kind), count)
+            for kind, count in bundle["general"]["distribution"]["types"].items()
+        ])
         sheet.section(
             "Пояснения",
             ("Правило расчёта",),
@@ -601,13 +639,15 @@ def build_xlsx(bundle: dict) -> bytes:
         )
 
         sheet = _Sheet(
-            book, "Детализация заявок", bundle, [14, 22, 42, 34, 34, 70, 32, 32, 20, 22, 30]
+            book, "Детализация заявок", bundle,
+            [14, 22, 24, 42, 34, 34, 70, 32, 32, 20, 22, 30, 32, 42],
         )
         sheet.section(
             "Одна строка на заявку, созданную за выбранный период",
             (
                 "Номер",
                 "Дата UTC+3",
+                "Тип",
                 "Тема",
                 "Категория при регистрации",
                 "Установленная причина",
@@ -617,11 +657,14 @@ def build_xlsx(bundle: dict) -> bytes:
                 "Статус",
                 "Дата закрытия UTC+3",
                 "Последний контрольный звонок",
+                "ФИО заявителя",
+                "Адрес подключения",
             ),
             [
                 (
                     row["number"],
                     row["created_at"],
+                    TYPE_NAMES.get(row["ticket_type"], row["ticket_type"]),
                     row["subject"],
                     row["category"],
                     row["reason_name"],
@@ -631,6 +674,8 @@ def build_xlsx(bundle: dict) -> bytes:
                     STATUS_NAMES.get(row["status"], row["status"]),
                     row["closed_at"],
                     OUTCOME_NAMES.get(row["callback_outcome"], row["callback_outcome"]),
+                    row["caller_full_name"],
+                    row["address_override"],
                 )
                 for row in bundle["tickets"]
             ],

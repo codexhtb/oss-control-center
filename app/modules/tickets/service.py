@@ -159,10 +159,10 @@ def edit_ticket(
         if ticket.status not in (TicketStatus.OPEN, TicketStatus.IN_PROGRESS):
             raise ApiError(409, "source_locked", "Source cannot be changed after resolution")
         if (
-            ticket.ticket_type == TicketType.ERRONEOUS_PAYMENT
-            or target_type == TicketType.ERRONEOUS_PAYMENT
+            ticket.ticket_type in (TicketType.ERRONEOUS_PAYMENT, TicketType.NEW_CONNECTION)
+            or target_type in (TicketType.ERRONEOUS_PAYMENT, TicketType.NEW_CONNECTION)
         ):
-            raise ApiError(409, "type_locked", "Payment ticket type cannot be changed")
+            raise ApiError(409, "type_locked", "This ticket type cannot be changed")
         if type_changed and (ticket.status != TicketStatus.OPEN or ticket.assigned_engineer_id):
             raise ApiError(409, "type_locked", "Type can change only before work starts")
         if any(
@@ -224,6 +224,8 @@ def edit_ticket(
             ("connection_snapshot_id", connection_id),
         ):
             set_field(field, value)
+    if target_type == TicketType.NEW_CONNECTION and "category_id" in fields:
+        raise ApiError(422, "fixed_category", "New connection category is fixed")
     if "category_id" in fields:
         category = None
         if payload.category_id is not None:
@@ -240,6 +242,8 @@ def edit_ticket(
             if "subject" in fields and payload.subject != category.name:
                 raise ApiError(422, "category_subject_conflict", "Subject is set by category")
             set_field("subject", category.name)
+    if target_type == TicketType.NEW_CONNECTION and "subject" in fields:
+        raise ApiError(422, "fixed_subject", "New connection subject is fixed")
     if target_type == TicketType.ERRONEOUS_PAYMENT:
         if "category_id" in fields and payload.category_id is not None:
             raise ApiError(422, "invalid_category", "Payment tickets have no category")
@@ -272,10 +276,11 @@ def edit_ticket(
             set_field(field, getattr(payload, field))
     if not ticket.description and target_type not in (
         TicketType.MANUAL,
+        TicketType.NEW_CONNECTION,
         TicketType.ERRONEOUS_PAYMENT,
     ):
         raise ApiError(422, "invalid_description", "Description is required for this ticket type")
-    if target_type == TicketType.MANUAL and not all(
+    if target_type in (TicketType.MANUAL, TicketType.NEW_CONNECTION) and not all(
         (ticket.caller_full_name, ticket.caller_phone, ticket.city)
     ):
         raise ApiError(
@@ -283,6 +288,8 @@ def edit_ticket(
         )
     if target_type == TicketType.MANUAL and ticket.subject is None:
         set_field("subject", "Ручное обращение")
+    if target_type == TicketType.NEW_CONNECTION and not ticket.address_override:
+        raise ApiError(422, "address_required", "Connection address is required")
     if (
         target_type in (TicketType.SUBSCRIBER_LINKED, TicketType.INTERNAL)
         and ticket.caller_full_name
@@ -485,12 +492,13 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         if category is None or not category.is_active:
             raise ApiError(422, "invalid_category", "Select an active category")
         category_name = category.name
+        if payload.ticket_type == TicketType.MANUAL and category.name == "Новое подключение":
+            raise ApiError(422, "invalid_category", "Use the new connection ticket type")
         if (
-            payload.ticket_type == TicketType.MANUAL
-            and category.name == "Новое подключение"
-            and not payload.address_override
+            payload.ticket_type == TicketType.NEW_CONNECTION
+            and category.name != "Новое подключение"
         ):
-            raise ApiError(422, "address_required", "Connection address is required")
+            raise ApiError(422, "invalid_category", "Select the new connection category")
         if category.is_other:
             subject = payload.subject or category.name
         else:
@@ -505,7 +513,9 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
             or ("Ручное обращение" if payload.ticket_type == TicketType.MANUAL else None)
         )
     description = payload.description or (
-        "" if payload.ticket_type in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT) else subject
+        "" if payload.ticket_type in (
+            TicketType.MANUAL, TicketType.NEW_CONNECTION, TicketType.ERRONEOUS_PAYMENT
+        ) else subject
     )
     account_no = None
     snapshot_id = None
@@ -639,7 +649,9 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         expected_subject = payload.subject or ticket.category_name
     expected_description = payload.description or (
         ""
-        if ticket.ticket_type in (TicketType.MANUAL, TicketType.ERRONEOUS_PAYMENT)
+        if ticket.ticket_type in (
+            TicketType.MANUAL, TicketType.NEW_CONNECTION, TicketType.ERRONEOUS_PAYMENT
+        )
         else expected_subject
     )
     if (

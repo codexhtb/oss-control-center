@@ -119,17 +119,23 @@ class CreateTicket(StrictModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> "CreateTicket":
-        if self.ticket_type == TicketType.MANUAL and not all(
+        if self.ticket_type in (TicketType.MANUAL, TicketType.NEW_CONNECTION) and not all(
             (self.caller_full_name, self.caller_phone, self.city)
         ):
             raise ValueError("caller_full_name, caller_phone and city are required")
-        if self.ticket_type != TicketType.MANUAL and self.address_override is not None:
-            raise ValueError("address_override on creation is only valid for MANUAL")
+        if self.ticket_type == TicketType.NEW_CONNECTION:
+            if not self.address_override or self.category_id is None or self.subject is not None:
+                raise ValueError("new connection needs address and category; subject is automatic")
+        if (
+            self.ticket_type not in (TicketType.MANUAL, TicketType.NEW_CONNECTION)
+            and self.address_override is not None
+        ):
+            raise ValueError("address_override is only valid for MANUAL or NEW_CONNECTION")
         if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
             if self.category_id is None and self.subject is None and self.description is None:
                 raise ValueError("category_id, subject or description is required")
             if self.caller_full_name is not None:
-                raise ValueError("caller_full_name is only valid for MANUAL")
+                raise ValueError("caller_full_name is only valid for MANUAL or NEW_CONNECTION")
         if self.ticket_type == TicketType.INTERNAL and self.description is None:
             raise ValueError("description is required for INTERNAL")
         if self.ticket_type == TicketType.INTERNAL and self.caller_full_name is not None:
@@ -161,7 +167,7 @@ class CreateTicket(StrictModel):
                 raise ValueError("ticket_type is required without lookup_id")
             forbidden = {"lookup_id", "connection_snapshot_id", "selected_service_id"}
             if forbidden & self.model_fields_set:
-                raise ValueError("billing fields are forbidden for MANUAL and INTERNAL")
+                raise ValueError("billing fields are forbidden for this ticket type")
             if "duplicate_reason" in self.model_fields_set:
                 raise ValueError("duplicate_reason is only valid for SUBSCRIBER_LINKED")
         return self
