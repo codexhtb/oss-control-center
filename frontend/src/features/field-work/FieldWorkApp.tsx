@@ -196,7 +196,7 @@ export function FieldWorkApp() {
             {items.map((item) => <button className="fw-card" key={item.id} onClick={() => void open(item.id)}>
               <span className="fw-card__top"><strong>Заявка №{item.ticket_number}</strong><span>{directionName[item.direction]}</span></span>
               <span className="fw-card__subject">{item.subject}</span>
-              <span className="fw-card__bottom"><span>{tab === 'open' ? 'Передано' : tab === 'completed' ? 'Отчёт' : 'Проверено'} · {formatDate(tab === 'open' ? item.sent_at : tab === 'completed' ? item.reported_at : item.verified_at)}</span><ChevronRight size={18} /></span>
+              <span className="fw-card__bottom"><span>{tab === 'open' ? item.sent_at ? 'Передано' : 'Опубликовано' : tab === 'completed' ? 'Отчёт' : 'Проверено'} · {formatDate(tab === 'open' ? item.sent_at || item.published_at : tab === 'completed' ? item.reported_at : item.verified_at)}</span><ChevronRight size={18} /></span>
             </button>)}
             {page && items.length < page.total && <button className="fw-more" disabled={loading} onClick={() => void load(page.page + 1)}>Показать ещё</button>}
           </section> : !loading ? <div className="fw-state">Заданий пока нет</div> : null}
@@ -212,7 +212,7 @@ export function FieldWorkApp() {
               <div><span>Телефон</span><strong>{selected.phone || 'Не указан'}</strong></div>
               <div><span>Населённый пункт</span><strong>{selected.city || 'Не указан'}</strong></div>
               <div><span>Адрес</span><strong>{selected.address || 'Не указан'}</strong></div>
-              <div><span>Передано</span><strong>{formatDate(selected.sent_at)}</strong></div>
+              <div><span>{selected.sent_at ? 'Передано в Telegram' : 'Опубликовано в Mini App'}</span><strong>{formatDate(selected.sent_at || selected.published_at)}</strong></div>
               <div><span>Дата выезда</span><strong>{visitDate(selected)}</strong></div>
               {selected.schedule_reason && <div><span>Причина переноса</span><strong>{selected.schedule_reason}</strong></div>}
             </div>

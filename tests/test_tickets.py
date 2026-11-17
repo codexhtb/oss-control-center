@@ -511,6 +511,123 @@ def _miniapp_headers(token: str, telegram_id: int) -> dict[str, str]:
     return {"X-Telegram-Init-Data": urlencode(fields)}
 
 
+def test_field_work_publication_without_telegram_delivery(
+    ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publication is visible to installers, yet never claims a Telegram receipt."""
+    from app.api.v1 import field_work_miniapp
+
+    token = "synthetic-field-publication-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    monkeypatch.setenv("TELEGRAM_OCHAMCHIRA_CHAT_ID", "-1004473201977")
+    engineer = seed_user(ticket_engine, "published_engineer", Role.ENGINEER)
+    admin = seed_user(ticket_engine, "published_admin", Role.ADMIN)
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    login(ticket_client, admin.login)
+    installers = {}
+    for telegram_id, directions in (
+        (8201, ["OCHAMCHIRA"]), (8202, ["SUKHUM"]),
+    ):
+        result = ticket_client.post(
+            "/api/v1/field-work/installers", headers=csrf(ticket_client),
+            json={"telegram_user_id": telegram_id, "name": f"Installer {telegram_id}",
+                  "directions": directions},
+        )
+        assert result.status_code == 201, result.text
+        installers[telegram_id] = result.json()["id"]
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic published work")
+    path = f"/api/v1/tickets/{ticket['id']}"
+    assert ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'},
+    ).status_code == 200
+    requested = ticket_client.post(
+        path + "/field-work-request", headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Check connection"},
+    )
+    assert requested.status_code == 200, requested.text
+    handoff_id = ticket_client.get(path + "/field-work-handoffs/latest").json()["handoff"]["id"]
+    publication_url = path + f"/field-work-handoffs/{handoff_id}/publish"
+    operator = seed_user(ticket_engine, "published_operator", Role.OPERATOR)
+    login(ticket_client, operator.login)
+    assert ticket_client.post(
+        publication_url, headers=csrf(ticket_client), json={"direction": "OCHAMCHIRA"},
+    ).status_code == 403
+    login(ticket_client, engineer.login)
+    published = ticket_client.post(
+        publication_url, headers=csrf(ticket_client),
+        json={"direction": "OCHAMCHIRA"},
+    )
+    assert published.status_code == 200, published.text
+    assert published.json()["delivery_status"] == "PUBLISHED"
+    assert published.json()["published_at"] is not None
+    assert published.json()["telegram_message_id"] is None
+    assert published.json()["sent_at"] is None
+    assert gateway.calls == []
+    repeated = ticket_client.post(
+        publication_url, headers=csrf(ticket_client), json={"direction": "OCHAMCHIRA"},
+    )
+    assert repeated.status_code == 200
+    assert ticket_client.post(
+        publication_url, headers=csrf(ticket_client), json={"direction": "SUKHUM"},
+    ).status_code == 409
+    assert ticket_client.post(
+        path + f"/field-work-handoffs/{handoff_id}/send", headers=csrf(ticket_client),
+        json={"client_request_id": str(uuid4()), "direction": "OCHAMCHIRA"},
+    ).status_code == 409
+    miniapp = "/api/v1/field-work/miniapp"
+    allowed = _miniapp_headers(token, 8201)
+    assert ticket_client.get(f"{miniapp}/handoffs?queue=open", headers=allowed).json()["total"] == 1
+    assert ticket_client.get(f"{miniapp}/handoffs/{handoff_id}", headers=allowed).status_code == 200
+    assert ticket_client.get(f"{miniapp}/handoffs/{handoff_id}",
+                             headers=_miniapp_headers(token, 8202)).status_code == 404
+    unknown = ticket_client.get(f"{miniapp}/handoffs", headers=_miniapp_headers(token, 9999))
+    assert unknown.status_code == 403
+    moved = ticket_client.post(
+        f"{miniapp}/handoffs/{handoff_id}/reschedules", headers=allowed,
+        json={"reason": "Customer asked to wait", "expected_version": 0},
+    )
+    assert moved.status_code == 200, moved.text
+    with Session(ticket_engine) as db:
+        handoff = db.get(FieldWorkHandoff, UUID(handoff_id))
+        assert handoff.schedule_status == "DATE_PENDING"
+        assert handoff.schedule_card_status == "NOT_REQUIRED"
+    assert ticket_client.post(
+        f"{miniapp}/handoffs/{handoff_id}/report", headers=allowed,
+        json={"client_request_id": str(uuid4()), "work_text": "Invalid partner",
+              "partner_installer_id": installers[8202]},
+    ).status_code == 422
+    report = ticket_client.post(
+        f"{miniapp}/handoffs/{handoff_id}/report", headers=allowed,
+        json={"client_request_id": str(uuid4()), "work_text": "Synthetic completion"},
+    )
+    assert report.status_code == 200, report.text
+    completed = ticket_client.get(f"{miniapp}/handoffs?queue=completed", headers=allowed)
+    assert completed.json()["total"] == 1
+    messages = ticket_client.get(path + f"/field-work-handoffs/{handoff_id}/messages")
+    assert messages.json()["total"] == 1
+    with Session(ticket_engine) as db:
+        handoff = db.get(FieldWorkHandoff, UUID(handoff_id))
+        assert handoff.delivery_status == "PUBLISHED"
+        assert handoff.work_status == "REPORTED"
+        assert handoff.telegram_message_id is None
+        update = db.scalar(select(FieldDispatchUpdate).where(
+            FieldDispatchUpdate.handoff_id == handoff.id,
+            FieldDispatchUpdate.kind == "MINIAPP_REPORT",
+        ))
+        assert update.card_edit_status == "NOT_REQUIRED"
+        assert db.scalar(select(func.count()).select_from(TicketAudit).where(
+            TicketAudit.ticket_id == UUID(ticket["id"]),
+            TicketAudit.action == "field_work_published",
+        )) == 1
+    verified = ticket_client.post(path + f"/field-work-handoffs/{handoff_id}/verify",
+                                  headers=csrf(ticket_client))
+    assert verified.status_code == 200, verified.text
+    history = ticket_client.get(f"{miniapp}/handoffs?queue=history", headers=allowed)
+    assert history.json()["total"] == 1
+
+
 def test_field_work_miniapp_report_reschedule_and_existing_workflow(
     ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

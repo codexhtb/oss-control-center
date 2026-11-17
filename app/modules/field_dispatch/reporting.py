@@ -24,7 +24,10 @@ def record_completed_work(
 
     Caller must hold a row lock on handoff and commit the surrounding transaction.
     """
-    if handoff.delivery_status != "SENT" or handoff.work_status != "AWAITING_REPORT":
+    if (
+        handoff.delivery_status not in {"SENT", "PUBLISHED"}
+        or handoff.work_status != "AWAITING_REPORT"
+    ):
         raise ApiError(409, "field_work_already_reported", "Field work already reported")
     db.add(report)
     db.add(FieldReportNotification(handoff_id=handoff.id, message_id=report.id))

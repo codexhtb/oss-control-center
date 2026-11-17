@@ -197,6 +197,7 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
         if handoff.sent_by
         else None
     )
+
     verified_by_name = (
         db.scalar(select(User.display_name).where(User.id == handoff.verified_by))
         if handoff.verified_by
@@ -230,6 +231,73 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
             "completion_prompt_sent_at": completion_prompt.sent_at if completion_prompt else None,
         }
     )
+
+def publish_handoff(
+    db: Session,
+    actor_id: UUID,
+    ticket_id: UUID,
+    handoff_id: UUID,
+    direction: Direction,
+    visit_address: str | None = None,
+    *,
+    update_visit_address: bool = False,
+) -> FieldWorkHandoff:
+    """Make a draft visible to installers without claiming Telegram delivery."""
+    actor = _actor(db, actor_id)
+    handoff = db.scalar(
+        select(FieldWorkHandoff)
+        .where(FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    ticket = db.scalar(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
+    if handoff is None or ticket is None or ticket.deleted_at is not None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    if handoff.delivery_status == "PUBLISHED":
+        if handoff.direction != direction or (
+            update_visit_address and handoff.visit_address != visit_address
+        ):
+            raise ApiError(409, "field_publication_conflict", "Published field work differs")
+        return handoff
+    if handoff.delivery_status != "DRAFT" or handoff.work_status != "AWAITING_REPORT":
+        raise ApiError(409, "field_publication_state", "Only a draft can be published")
+    if ticket.status != TicketStatus.IN_PROGRESS:
+        raise ApiError(409, "invalid_transition", "Field work can be published only in progress")
+    if handoff.direction is not None and handoff.direction != direction:
+        raise ApiError(409, "field_direction_locked", "Field work destination cannot be changed")
+    snapshot = (
+        db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
+        if ticket.subscriber_snapshot_id else None
+    )
+    if update_visit_address:
+        if visit_address is not None and (
+            ticket.address_override
+            or (snapshot is not None and _address(snapshot.actual_address, snapshot.house_number))
+        ):
+            raise ApiError(422, "field_address_from_snapshot", "Address is already in snapshot")
+        handoff.visit_address = visit_address
+    handoff.direction = direction
+    handoff.chat_id = destination_for_direction(db, direction)
+    message = _message(db, handoff, actor)
+    if message.missing:
+        raise ApiError(409, "field_dispatch_incomplete", "Required dispatch data is missing")
+    now = datetime.now(UTC)
+    handoff.delivery_status = "PUBLISHED"
+    handoff.published_by = actor_id
+    handoff.published_at = now
+    handoff.updated_at = now
+    db.add(TicketEvent(
+        ticket_id=ticket_id, event_type="field_work_published", actor_id=actor_id,
+        event_data={"handoff_id": str(handoff.id), "direction": direction},
+        ticket_version=ticket.version,
+    ))
+    db.add(TicketAudit(
+        ticket_id=ticket_id, actor_id=actor_id, action="field_work_published",
+        outcome="success", origin="API",
+    ))
+    db.commit()
+    db.refresh(handoff)
+    return handoff
 
 
 @dataclass(frozen=True)
@@ -286,6 +354,8 @@ def prepare_send(
         if prior.status == "SENDING":
             raise ApiError(409, "field_send_in_progress", "Telegram delivery is in progress")
         return handoff
+    if handoff.delivery_status == "PUBLISHED":
+        raise ApiError(409, "field_already_published", "Field work is published in Mini App")
     if handoff.delivery_status == "SENT":
         if direction is not None and direction != handoff.direction:
             raise ApiError(409, "field_send_locked", "Sent destination cannot be changed")

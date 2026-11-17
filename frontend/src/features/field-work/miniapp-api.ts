@@ -8,7 +8,8 @@ export type Handoff = {
   direction: Direction
   work_status: 'AWAITING_REPORT' | 'REPORTED' | 'VERIFIED'
   subject: string
-  sent_at: string
+  sent_at: string | null
+  published_at: string | null
   reported_at: string | null
   verified_at: string | null
   scheduled_for: string | null

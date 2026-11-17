@@ -32,13 +32,25 @@ class ConfirmAbsentFieldWork(BaseModel):
     confirmed_absent: Literal[True]
 
 
+class PublishFieldWork(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direction: Literal["SUKHUM", "OCHAMCHIRA"]
+    visit_address: str | None = Field(default=None, max_length=500)
+
+    @field_validator("visit_address")
+    @classmethod
+    def valid_visit_address(cls, value: str | None) -> str | None:
+        return SendFieldWork.valid_visit_address(value)
+
+
 class FieldWorkHandoffView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     ticket_id: UUID
     reason: str
-    delivery_status: Literal["DRAFT", "SENDING", "SENT", "FAILED", "UNCERTAIN"]
+    delivery_status: Literal["DRAFT", "SENDING", "SENT", "FAILED", "UNCERTAIN", "PUBLISHED"]
     work_status: Literal["AWAITING_REPORT", "REPORTED", "VERIFIED"]
     chat_id: str
     direction: Literal["SUKHUM", "OCHAMCHIRA"] | None = None
@@ -66,6 +78,7 @@ class FieldWorkHandoffView(BaseModel):
     created_at: datetime
     send_started_at: datetime | None
     sent_at: datetime | None
+    published_at: datetime | None = None
     reported_at: datetime | None
     verified_by: UUID | None
     verified_by_name: str | None = None

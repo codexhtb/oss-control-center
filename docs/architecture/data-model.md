@@ -1,5 +1,10 @@
 # Модель данных и ERD
 
+**`0048_field_work_publication`:** `field_work_handoffs.delivery_status=PUBLISHED`
+означает публикацию только в Mini App; `published_at/by` обязательны, Telegram
+`sent_at/message_id` отсутствуют. Исторический `SENT` сохраняет прежнюю семантику
+подтверждённой доставки. См. [этап 3](oss-field-work-phase3.md).
+
 **`0047_field_work_miniapp_reports`:** `field_external_messages` хранит стабильные
 ID основного монтажника и напарника, снимок имени напарника и UUID запроса для
 `MINIAPP_REPORT`. Уникальные индексы защищают от двух отчётов на один handoff и

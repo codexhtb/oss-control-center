@@ -14,7 +14,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   previousTickets: vi.fn(),
   decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
-  assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(), confirmFieldWorkAbsent: vi.fn(),
+  assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(), publishFieldWork: vi.fn(), confirmFieldWorkAbsent: vi.fn(),
   fieldWorkMessages: vi.fn(), fieldWorkReschedules: vi.fn(), rescheduleFieldWork: vi.fn(), verifyFieldWork: vi.fn(),
   addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
@@ -300,6 +300,39 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
   await waitFor(() => expect(ticketApi.sendFieldWork).toHaveBeenCalledWith(
     ticketId, handoff.id, expect.any(String), undefined, 'Исправленный текст для монтажников', 'SUKHUM',
   ))
+})
+
+it('publishes a draft to Mini App without sending a Telegram card', async () => {
+  const staff = session('engineer')
+  const privileged: MeResponse = { ...staff, permissions: [...staff.permissions, 'tickets.field_work'] }
+  vi.mocked(ticketApi.get).mockResolvedValue({ ...base, status: 'IN_PROGRESS' })
+  const handoff = {
+    id: '00000000-0000-4000-8000-000000000040', ticket_id: ticketId,
+    reason: 'Проверить кабель', delivery_status: 'DRAFT' as const,
+    work_status: 'AWAITING_REPORT' as const, chat_id: '-5319791765',
+    telegram_message_id: null, message_preview: 'Заявка #73', ready_to_send: true,
+    missing_fields: [], created_by: staff.user.id, sent_by: null, sent_by_name: null,
+    last_error_code: null, created_at: base.created_at, send_started_at: null,
+    sent_at: null, reported_at: null, verified_by: null, verified_by_name: null,
+    verified_at: null, updated_at: base.updated_at,
+  }
+  vi.mocked(ticketApi.latestFieldWork).mockResolvedValue({ handoff })
+  vi.mocked(ticketApi.publishFieldWork).mockResolvedValue({
+    ...handoff, direction: 'OCHAMCHIRA', delivery_status: 'PUBLISHED',
+    published_at: base.updated_at, ready_to_send: false,
+  })
+  renderDetail('engineer', privileged)
+  const publish = await screen.findByRole('button', { name: 'Опубликовать в OSS Field Work' })
+  expect(publish).toBeDisabled()
+  fireEvent.change(screen.getByRole('combobox', { name: 'Монтажное направление' }), {
+    target: { value: 'OCHAMCHIRA' },
+  })
+  expect(publish).toBeEnabled()
+  fireEvent.click(publish)
+  await waitFor(() => expect(ticketApi.publishFieldWork).toHaveBeenCalledWith(
+    ticketId, handoff.id, 'OCHAMCHIRA', null,
+  ))
+  expect(ticketApi.sendFieldWork).not.toHaveBeenCalled()
 })
 
 it.each([

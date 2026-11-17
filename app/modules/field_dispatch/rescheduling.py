@@ -57,7 +57,10 @@ def record_reschedule(
     update_record_id: UUID | None = None,
     expected_version: int | None = None,
 ) -> FieldWorkReschedule:
-    if handoff.delivery_status != "SENT" or handoff.work_status != "AWAITING_REPORT":
+    if (
+        handoff.delivery_status not in {"SENT", "PUBLISHED"}
+        or handoff.work_status != "AWAITING_REPORT"
+    ):
         raise ApiError(409, "field_work_already_completed", "Field work cannot be rescheduled")
     ticket = db.get(Ticket, handoff.ticket_id)
     if ticket is None or ticket.deleted_at is not None or ticket.status != TicketStatus.IN_PROGRESS:
@@ -79,7 +82,9 @@ def record_reschedule(
     handoff.schedule_status = "SCHEDULED" if scheduled_date is not None else "DATE_PENDING"
     handoff.scheduled_for = scheduled_for.astimezone(UTC) if scheduled_for else None
     handoff.scheduled_date = scheduled_date
-    handoff.schedule_card_status = "PENDING"
+    handoff.schedule_card_status = (
+        "PENDING" if handoff.delivery_status == "SENT" else "NOT_REQUIRED"
+    )
     handoff.schedule_card_attempts = 0
     handoff.schedule_card_error_code = None
     handoff.updated_at = now

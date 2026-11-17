@@ -29,7 +29,7 @@ class FieldWorkHandoff(Base):
     __table_args__ = (
         UniqueConstraint("ticket_id", "ticket_version", name="uq_field_handoffs_ticket_version"),
         CheckConstraint(
-            "delivery_status IN ('DRAFT','SENDING','SENT','FAILED','UNCERTAIN')",
+            "delivery_status IN ('DRAFT','SENDING','SENT','FAILED','UNCERTAIN','PUBLISHED')",
             name="ck_field_handoffs_delivery",
         ),
         CheckConstraint(
@@ -62,6 +62,12 @@ class FieldWorkHandoff(Base):
             "(delivery_status <> 'SENT' AND telegram_message_id IS NULL "
             "AND sent_at IS NULL)",
             name="ck_field_handoffs_sent_receipt",
+        ),
+        CheckConstraint(
+            "(delivery_status = 'PUBLISHED' AND direction IS NOT NULL "
+            "AND published_at IS NOT NULL AND published_by IS NOT NULL) OR "
+            "(delivery_status <> 'PUBLISHED' AND published_at IS NULL AND published_by IS NULL)",
+            name="ck_field_handoffs_publication",
         ),
         CheckConstraint(
             "(delivery_status IN ('FAILED','UNCERTAIN') AND last_error_code IS NOT NULL) OR "
@@ -127,6 +133,10 @@ class FieldWorkHandoff(Base):
     )
     send_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
     reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verified_by: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")

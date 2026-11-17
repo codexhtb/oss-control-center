@@ -227,6 +227,7 @@ def _item(handoff: FieldWorkHandoff, ticket: Ticket) -> dict:
         "work_status": handoff.work_status,
         "subject": ticket.subject or ticket.category_name or "Обращение",
         "sent_at": handoff.sent_at,
+        "published_at": handoff.published_at,
         "reported_at": handoff.reported_at,
         "verified_at": handoff.verified_at,
         "scheduled_for": handoff.scheduled_for,
@@ -248,7 +249,7 @@ def queue_handoffs(
     if direction is not None and direction not in allowed:
         raise ApiError(403, "direction_forbidden", "Direction access denied")
     conditions = (
-        FieldWorkHandoff.delivery_status == "SENT",
+        FieldWorkHandoff.delivery_status.in_(("SENT", "PUBLISHED")),
         FieldWorkHandoff.work_status == QUEUE_STATUS[queue],
         FieldWorkHandoff.direction.in_((direction,) if direction else allowed),
         Ticket.deleted_at.is_(None),
@@ -265,7 +266,10 @@ def queue_handoffs(
         or 0
     )
     ordering = (
-        (FieldWorkHandoff.sent_at.asc(), FieldWorkHandoff.id.asc())
+        (
+            func.coalesce(FieldWorkHandoff.sent_at, FieldWorkHandoff.published_at).asc(),
+            FieldWorkHandoff.id.asc(),
+        )
         if queue == "open"
         else (FieldWorkHandoff.reported_at.desc(), FieldWorkHandoff.id.desc())
         if queue == "completed"
@@ -293,7 +297,7 @@ def handoff_detail(handoff_id: UUID, auth: InstallerDep, db: SessionDep):
         .join(Ticket, Ticket.id == FieldWorkHandoff.ticket_id)
         .where(
             FieldWorkHandoff.id == handoff_id,
-            FieldWorkHandoff.delivery_status == "SENT",
+            FieldWorkHandoff.delivery_status.in_(("SENT", "PUBLISHED")),
             FieldWorkHandoff.work_status.in_(tuple(QUEUE_STATUS.values())),
             FieldWorkHandoff.direction.in_(allowed),
             Ticket.deleted_at.is_(None),
@@ -409,7 +413,10 @@ def complete_handoff(handoff_id: UUID, payload: CompleteWork, auth: InstallerDep
             "work_status": handoff.work_status,
             "report_id": existing.id,
         }
-    if handoff.delivery_status != "SENT" or handoff.work_status != "AWAITING_REPORT":
+    if (
+        handoff.delivery_status not in {"SENT", "PUBLISHED"}
+        or handoff.work_status != "AWAITING_REPORT"
+    ):
         raise ApiError(409, "field_work_already_reported", "Field work already reported")
     if active_dialog(db, handoff.id, lock=True) is not None:
         raise ApiError(409, "field_dialog_active", "A Telegram dialog is still active")

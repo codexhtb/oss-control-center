@@ -262,7 +262,7 @@ export interface FieldWorkHandoff {
   id: string
   ticket_id: string
   reason: string
-  delivery_status: 'DRAFT' | 'SENDING' | 'SENT' | 'FAILED' | 'UNCERTAIN'
+  delivery_status: 'DRAFT' | 'SENDING' | 'SENT' | 'FAILED' | 'UNCERTAIN' | 'PUBLISHED'
   work_status: 'AWAITING_REPORT' | 'REPORTED' | 'VERIFIED'
   chat_id: string
   direction?: 'SUKHUM' | 'OCHAMCHIRA' | null
@@ -288,6 +288,7 @@ export interface FieldWorkHandoff {
   created_at: string
   send_started_at: string | null
   sent_at: string | null
+  published_at?: string | null
   reported_at: string | null
   verified_by: string | null
   verified_by_name: string | null
@@ -300,7 +301,7 @@ export interface FieldWorkHandoff {
 export interface FieldExternalMessage {
   id: string
   handoff_id: string
-  kind: 'TEXT_REPLY' | 'COMPLETION_CALLBACK' | 'COMPLETION_REPORT'
+  kind: 'TEXT_REPLY' | 'COMPLETION_CALLBACK' | 'COMPLETION_REPORT' | 'MINIAPP_REPORT'
   sender_name: string
   body: string | null
   telegram_created_at: string

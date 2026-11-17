@@ -153,7 +153,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const fieldMessages = useQuery({
     queryKey: ['ticket-field-work-messages', id, handoffId],
     queryFn: ({ signal }) => ticketApi.fieldWorkMessages(id, handoffId!, signal),
-    enabled: !!handoffId && fieldHandoff.data?.handoff?.delivery_status === 'SENT',
+    enabled: !!handoffId && ['SENT', 'PUBLISHED'].includes(fieldHandoff.data?.handoff?.delivery_status ?? ''),
   })
 
   async function runAction(name: string, action: () => Promise<unknown>, after?: () => void) {
@@ -208,6 +208,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const primaryPhone = ticket.caller_phone || ticket.subscriber?.phone || null
   const hasTicketAddress = !!(ticket.address_override || ticket.subscriber?.actual_address)?.trim()
   const handoff = fieldHandoff.data?.handoff
+  const fieldWorkAvailable = handoff?.delivery_status === 'SENT' || handoff?.delivery_status === 'PUBLISHED'
   const canEditFieldMessage = handoff?.delivery_status === 'DRAFT' || handoff?.delivery_status === 'FAILED'
   const withVisitAddress = (text: string) => !hasTicketAddress && canEditFieldMessage
     ? text.replace(/^Адрес: .*$/m, () => `Адрес: ${visitAddress.trim() || 'не указан'}`) : text
@@ -374,14 +375,15 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                 {fieldHandoff.isPending && <p className="rail-note">Проверяем сохранённую передачу…</p>}
                 {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
                 {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
-                  <strong>Передача в Telegram</strong>
+                  <strong>{fieldHandoff.data.handoff.delivery_status === 'PUBLISHED' ? 'Выездное задание в OSS Field Work' : 'Передача в Telegram'}</strong>
                   {canEditFieldMessage ? <label className="field"><span>Монтажное направление</span><select aria-label="Монтажное направление" value={fieldDirection} onChange={(event) => setFieldDirection(event.target.value as '' | 'SUKHUM' | 'OCHAMCHIRA')} disabled={fieldHandoff.data.handoff.direction != null}><option value="">Выберите группу</option><option value="SUKHUM">Сухум — OSS Sukhum</option><option value="OCHAMCHIRA">Очамчира — OSS Ochamchira</option></select></label> : fieldHandoff.data.handoff.group_name && <p className="rail-note">Группа: {fieldHandoff.data.handoff.group_name}</p>}
                   {canEditFieldMessage ? <><label className="field"><span>Текст сообщения для Telegram</span><textarea aria-label="Текст сообщения для Telegram" rows={8} maxLength={4096} value={fieldMessage} onChange={(event) => setEditedFieldMessage({ id: handoffId!, text: event.target.value })} /><small>{fieldMessage.length} / 4096 символов. Текст сохранится при отправке.</small></label><Button variant="quiet" disabled={!!busy || !originalFieldMessage} onClick={() => setEditedFieldMessage({ id: handoffId!, text: originalFieldMessage })}>Восстановить исходный текст</Button></>
                     : <pre>{fieldHandoff.data.handoff.message_preview || 'Сообщение нельзя сформировать из сохранённого snapshot.'}</pre>}
                   {!hasTicketAddress && canEditFieldMessage && <label className="field"><span>Адрес для выезда (необязательно)</span><input aria-label="Адрес для выезда" maxLength={500} value={visitAddress} onChange={(event) => { const next = event.target.value; setVisitAddress(next); if (editedFieldMessage && editedFieldMessage.id === handoffId) setEditedFieldMessage({ id: handoffId!, text: editedFieldMessage.text.replace(/^Адрес: .*$/m, () => `Адрес: ${next.trim() || 'не указан'}`) }) }} placeholder="Можно отправить без адреса" /><small>Используется только в этой Telegram-передаче; данные NetUP не изменятся.</small></label>}
                   {fieldHandoff.data.handoff.missing_fields.length > 0 && <p className="rail-note">Не хватает данных: {fieldHandoff.data.handoff.missing_fields.join(', ')}.</p>}
                   {fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Отправлено{fieldHandoff.data.handoff.sent_at ? ` ${formatDate(fieldHandoff.data.handoff.sent_at)}` : ''}. ID сообщения: {fieldHandoff.data.handoff.telegram_message_id}</p>}
-                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-live="polite">
+                  {fieldHandoff.data.handoff.delivery_status === 'PUBLISHED' && <p className="rail-note">Опубликовано для монтажников {fieldHandoff.data.handoff.published_at ? formatDate(fieldHandoff.data.handoff.published_at) : ''}. Сообщение в Telegram-группу не отправлялось.</p>}
+                  {fieldWorkAvailable && <div className="field-work-status" aria-live="polite">
                     <strong>{fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' ? 'Ожидается результат монтажников' : fieldHandoff.data.handoff.work_status === 'REPORTED' ? 'Монтажники сообщили о выполнении' : 'Результат подтверждён инженером'}</strong>
                     {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'REQUESTING' && <span>Бот готовит запрос описания работ.</span>}
                     {fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && fieldHandoff.data.handoff.completion_prompt_status === 'WAITING' && <span>Бот запросил описание выполненных работ{fieldHandoff.data.handoff.completion_prompt_sent_at ? ` ${formatDate(fieldHandoff.data.handoff.completion_prompt_sent_at)}` : ''}.</span>}
@@ -390,7 +392,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                     {fieldHandoff.data.handoff.reported_at && <span>Ответ: {formatDate(fieldHandoff.data.handoff.reported_at)}</span>}
                     {fieldHandoff.data.handoff.verified_at && <span>Подтвердил: {fieldHandoff.data.handoff.verified_by_name || 'инженер'}, {formatDate(fieldHandoff.data.handoff.verified_at)}</span>}
                   </div>}
-                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-status" aria-label="Планирование выезда">
+                  {fieldWorkAvailable && <div className="field-work-status" aria-label="Планирование выезда">
                     <strong>{fieldHandoff.data.handoff.work_status !== 'AWAITING_REPORT' ? 'Выезд выполнен' : fieldHandoff.data.handoff.schedule_status === 'DATE_PENDING' ? 'Выезд перенесён — дата не согласована' : fieldHandoff.data.handoff.schedule_status === 'SCHEDULED' ? 'Выезд перенесён' : 'Выезд ожидает выполнения'}</strong>
                     {fieldHandoff.data.handoff.scheduled_for && <span>Согласованное время: {formatAbkhazia(fieldHandoff.data.handoff.scheduled_for)} (Абхазия, UTC+3)</span>}
                     {!fieldHandoff.data.handoff.scheduled_for && fieldHandoff.data.handoff.scheduled_date && <span>Согласованная дата: {fieldHandoff.data.handoff.scheduled_date.split('-').reverse().join('.')} · время не согласовано</span>}
@@ -398,13 +400,13 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                     {fieldHandoff.data.handoff.schedule_card_status === 'FAILED' && <span>Не удалось обновить карточку в Telegram. Бот повторит попытку.</span>}
                     {fieldHandoff.data.handoff.scheduled_by_name && fieldHandoff.data.handoff.schedule_changed_at && <span>Перенёс: {fieldHandoff.data.handoff.scheduled_by_name}, {formatAbkhazia(fieldHandoff.data.handoff.schedule_changed_at)} (UTC+3)</span>}
                   </div>}
-                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && <div className="ticket-action-form">
+                  {fieldWorkAvailable && fieldHandoff.data.handoff.work_status === 'AWAITING_REPORT' && <div className="ticket-action-form">
                     <strong>Согласовать или изменить дату</strong>
                     <label className="field"><span>Причина изменения</span><input aria-label="Причина изменения даты" maxLength={2000} value={scheduleReason} onChange={(event) => setScheduleReason(event.target.value)} /></label>
                     <label className="field"><span>Новая дата и время (Абхазия, UTC+3)</span><input aria-label="Новая дата и время выезда" type="datetime-local" value={scheduleDate} onChange={(event) => setScheduleDate(event.target.value)} /></label>
                     <Button disabled={!!busy || !scheduleReason.trim() || !scheduleDate || new Date(`${scheduleDate}:00+03:00`).getTime() <= Date.now()} onClick={() => void runAction('field-reschedule', () => ticketApi.rescheduleFieldWork(id, fieldHandoff.data!.handoff!.id, scheduleReason.trim(), `${scheduleDate}:00+03:00`, fieldHandoff.data!.handoff!.schedule_version ?? 0), () => { setScheduleReason(''); setScheduleDate('') })}>Сохранить дату</Button>
                   </div>}
-                  {fieldHandoff.data.handoff.delivery_status === 'SENT' && <div className="field-work-replies" aria-label="История переносов">
+                  {fieldWorkAvailable && <div className="field-work-replies" aria-label="История переносов">
                     <strong>История переносов</strong>
                     {fieldReschedules.isPending && <p className="rail-note">Загружаем историю переносов…</p>}
                     {fieldReschedules.isError && <Notice tone="error">Не удалось загрузить историю переносов.</Notice>}
@@ -412,7 +414,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                     {fieldReschedules.data?.items.map((entry) => <article key={entry.id}><div><strong>{entry.scheduled_for ? formatAbkhazia(entry.scheduled_for) : entry.scheduled_date ? `${entry.scheduled_date.split('-').reverse().join('.')} · время не согласовано` : 'Дата не согласована'}</strong><time dateTime={entry.created_at}>{formatAbkhazia(entry.created_at)} (UTC+3)</time></div><p>{entry.reason} · {entry.author_name}</p></article>)}
                     <Pager page={schedulePage} total={fieldReschedules.data?.total ?? 0} change={setSchedulePage} />
                   </div>}
-                  {fieldMessages.isPending && fieldHandoff.data.handoff.delivery_status === 'SENT' && <p className="rail-note">Загружаем ответы монтажников…</p>}
+                  {fieldMessages.isPending && fieldWorkAvailable && <p className="rail-note">Загружаем ответы монтажников…</p>}
                   {fieldMessages.isError && <Notice tone="error">Не удалось загрузить ответы монтажников.</Notice>}
                   {fieldMessages.data?.items.length ? <div className="field-work-replies" aria-label="Ответы монтажников">{fieldMessages.data.items.map((message) => <article key={message.id}>
                     <div><strong>{message.sender_name}</strong><time dateTime={message.telegram_created_at}>{formatDate(message.telegram_created_at)}</time></div>
@@ -423,6 +425,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
                   {fieldHandoff.data.handoff.delivery_status === 'FAILED' && <Notice tone="error">{fieldHandoff.data.handoff.last_error_code === 'telegram_connect_failed' ? 'Нет соединения с Telegram Bot API. Повторите после восстановления связи.' : 'Отправка в Telegram не состоялась. Можно повторить отдельным действием.'}</Notice>}
                   {fieldHandoff.data.handoff.delivery_status === 'UNCERTAIN' && <div className="ticket-action-form"><Notice tone="error">Telegram не подтвердил отправку. Проверьте историю группы {fieldHandoff.data.handoff.group_name || 'монтажников'}{fieldHandoff.data.handoff.send_started_at ? ` около ${formatAbkhazia(fieldHandoff.data.handoff.send_started_at)} (UTC+3)` : ' за время попытки'}. Если карточка есть, не отправляйте её повторно и обратитесь к администратору.</Notice><label className="field"><input type="checkbox" checked={cardAbsentConfirmed} onChange={(event) => setCardAbsentConfirmed(event.target.checked)} /> Я проверил группу: карточки этой заявки нет</label><Button disabled={!!busy || !cardAbsentConfirmed} onClick={() => void runAction('field-confirm-absent', () => ticketApi.confirmFieldWorkAbsent(id, fieldHandoff.data!.handoff!.id), () => setCardAbsentConfirmed(false))}>Разрешить явный повтор</Button></div>}
                   {fieldHandoff.data.handoff.ready_to_send && <Button variant="primary" disabled={!!busy || !validFieldMessage || !fieldDirection} onClick={() => void runAction('field-send', () => ticketApi.sendFieldWork(id, fieldHandoff.data!.handoff!.id, crypto.randomUUID(), !hasTicketAddress ? visitAddress.trim() || null : undefined, fieldMessage, fieldDirection as 'SUKHUM' | 'OCHAMCHIRA'))}>Отправить боту</Button>}
+                  {fieldHandoff.data.handoff.delivery_status === 'DRAFT' && <><Button variant="quiet" disabled={!!busy || !fieldDirection || !!fieldHandoff.data.handoff.missing_fields.length} onClick={() => void runAction('field-publish', () => ticketApi.publishFieldWork(id, fieldHandoff.data!.handoff!.id, fieldDirection as 'SUKHUM' | 'OCHAMCHIRA', !hasTicketAddress ? visitAddress.trim() || null : undefined))}>Опубликовать в OSS Field Work</Button><p className="rail-note">Публикация берёт данные из заявки и не отправляет сообщение в Telegram-группу. Текст выше используется только для отправки боту.</p></>}
                 </div>}
               </div></section>}
         </div>

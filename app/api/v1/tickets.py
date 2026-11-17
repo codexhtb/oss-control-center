@@ -25,6 +25,7 @@ from app.modules.field_dispatch.schemas import (
     FieldWorkHandoffView,
     FieldWorkReschedulePage,
     LatestFieldWorkHandoff,
+    PublishFieldWork,
     RescheduleFieldWork,
     SendFieldWork,
 )
@@ -34,6 +35,7 @@ from app.modules.field_dispatch.service import (
     handoff_reschedules,
     handoff_view,
     latest_handoff,
+    publish_handoff,
     reschedule_handoff,
     send_handoff,
     verify_handoff,
@@ -820,6 +822,25 @@ def latest_field_work(ticket_id: UUID, identity: FieldReadDep, db: SessionDep):
     _mutation_scope(db, identity, ticket_id)
     item = latest_handoff(db, ticket_id)
     return {"handoff": handoff_view(db, item, identity.user) if item is not None else None}
+
+
+@router.post(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/publish",
+    response_model=FieldWorkHandoffView,
+)
+def publish_field_work(
+    ticket_id: UUID,
+    handoff_id: UUID,
+    payload: PublishFieldWork,
+    identity: FieldDep,
+    db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = publish_handoff(
+        db, identity.user.id, ticket_id, handoff_id, payload.direction,
+        payload.visit_address, update_visit_address="visit_address" in payload.model_fields_set,
+    )
+    return handoff_view(db, item, identity.user)
 
 
 @router.post(
