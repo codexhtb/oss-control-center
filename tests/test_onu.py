@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from ipaddress import IPv4Address
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ import pytest
 
 from app.modules.diagnostics.config import DeviceMapping, MappingRegistry
 from app.modules.diagnostics.http import SourceUnavailable
+from app.modules.diagnostics.mapping import preserve_verified_mappings, unique_exact_mappings
 from app.modules.diagnostics.onu import BdcomOnuReader, OnuDbConfig, normalize_candidate
 from app.modules.diagnostics.onu_correlation import lookup_onu_candidates
 
@@ -202,6 +204,23 @@ def test_unique_complete_key_matches_by_confirmed_rule(pon_type, port, row) -> N
     assert result.match.billing_source == "NETUP"
     assert result.match.onu_source == "LIBRENMS_BDCOM"
     assert result.match.billing_observed_at is not None
+
+
+def test_verified_renamed_olt_enables_onu_lookup_without_inferred_port_mapping() -> None:
+    netup = [{"id": 7, "name": "synthetic-old-name", "ip": int(IPv4Address("192.0.2.7"))}]
+    libre = [{"device_id": 42, "sysName": "synthetic-new-name", "hostname": "192.0.2.7"}]
+    approved = MappingRegistry(devices=[DeviceMapping(netup_switch_id="7", librenms_device_id=42)])
+    exact = unique_exact_mappings(netup, libre)
+    assert exact.devices == []
+    mappings = preserve_verified_mappings(exact, approved, netup, libre)
+    assert mappings.device("7") is not None and mappings.device("7").ports == []
+    reader = FakeReader([gpon_row()])
+    result = lookup_onu_candidates(connection([netup_row(14)]), mappings, reader)
+    assert reader.calls == [(42, 101, 14)]
+    assert result.availability == "AVAILABLE"
+    assert result.match is not None and result.match.olt_mapping_basis == "manual_verified"
+    with pytest.raises(ValueError, match="manual inventory review"):
+        preserve_verified_mappings(exact, approved, netup, [{**libre[0], "hostname": "192.0.2.8"}])
 
 
 def test_composite_miss_does_not_confirm_vlan_candidate() -> None:
