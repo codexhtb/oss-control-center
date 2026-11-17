@@ -2364,6 +2364,78 @@ def test_category_ticket_idempotency_and_manual_phone(
     )
 
 
+def test_new_connection_uses_manual_ticket_category_address_and_telegram_preview(
+    ticket_engine: Engine, ticket_client: TestClient
+) -> None:
+    operator = seed_user(ticket_engine, "new_connection_operator", Role.OPERATOR)
+    engineer = seed_user(ticket_engine, "new_connection_engineer", Role.ENGINEER)
+    with Session(ticket_engine) as db:
+        category = TicketCategory(name="Новое подключение", sort_order=90, is_active=True)
+        db.add(category)
+        db.commit()
+        category_id = str(category.id)
+    login(ticket_client, operator.login)
+    payload = {
+        "ticket_type": "MANUAL",
+        "category_id": category_id,
+        "caller_full_name": "Синтетический Заявитель",
+        "caller_phone": "+7 900 000 00 01",
+        "city": "Тестовый город",
+        "address_override": "Улица Тестовая, дом 5",
+        "priority": "NORMAL",
+        "client_request_id": str(uuid4()),
+    }
+    for missing in ("caller_full_name", "caller_phone", "city", "address_override"):
+        invalid = {key: value for key, value in payload.items() if key != missing}
+        assert ticket_client.post(
+            "/api/v1/tickets", headers=csrf(ticket_client), json=invalid
+        ).status_code == 422
+    response = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["ticket_type"] == "MANUAL"
+    assert body["subject"] == body["category_name"] == "Новое подключение"
+    assert body["address_override"] == payload["address_override"]
+    assert body["subscriber_snapshot_id"] is None and body["account_no"] is None
+    replay = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json=payload)
+    assert replay.status_code == 200 and replay.json()["id"] == body["id"]
+    assert ticket_client.post(
+        "/api/v1/tickets", headers=csrf(ticket_client),
+        json={**payload, "address_override": "Другой адрес"},
+    ).status_code == 409
+    details = ticket_client.get(f"/api/v1/tickets/{body['id']}").json()
+    assert details["caller_full_name"] == payload["caller_full_name"]
+    assert details["address_override"] == payload["address_override"]
+    with Session(ticket_engine) as db:
+        saved = db.get(Ticket, UUID(body["id"]))
+        assert saved is not None and saved.address_override == payload["address_override"]
+        assert saved.subscriber_snapshot_id is None
+    for query in ("Синтетический Заявитель", "тИчЕсКиЙ зАяВ"):
+        search = ticket_client.get("/api/v1/tickets", params={"q": query}).json()
+        assert body["id"] in {item["id"] for item in search["items"]}
+    login(ticket_client, engineer.login)
+    claim = ticket_client.post(
+        f"/api/v1/tickets/{body['id']}/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claim.status_code == 200, claim.text
+    path = f"/api/v1/tickets/{body['id']}"
+    requested = ticket_client.post(
+        path + "/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": "Подключить нового абонента"},
+    )
+    assert requested.status_code == 200, requested.text
+    draft = ticket_client.get(path + "/field-work-handoffs/latest")
+    assert draft.status_code == 200, draft.text
+    preview = draft.json()["handoff"]["message_preview"]
+    for fragment in (
+        "Тема: Новое подключение", "Категория: Новое подключение",
+        "Обратившийся: Синтетический Заявитель", "Контактный номер: +7 900 000 00 01",
+        "Адрес: Улица Тестовая, дом 5", "Причина передачи: Подключить нового абонента",
+    ):
+        assert fragment in preview
+
+
 def test_manual_name_optional_description_and_linked_topics(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:

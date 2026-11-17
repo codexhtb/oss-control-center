@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowRight, CreditCard, FilePlus2, Layers3, Search, UserRound } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CreditCard, FilePlus2, Layers3, Search, UserRound, UserRoundPlus } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import type { MeResponse } from '../shared/api/types'
@@ -19,7 +19,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const [searchParams] = useSearchParams()
   const linkedLookupId = searchParams.get('lookup')
   const queryClient = useQueryClient()
-  const [type, setType] = useState<TicketType>('SUBSCRIBER_LINKED')
+  const [type, setType] = useState<TicketType | 'NEW_CONNECTION'>('SUBSCRIBER_LINKED')
   const [subject, setSubject] = useState('')
   const [description, setDescription] = useState('')
   const [categoryId, setCategoryId] = useState('')
@@ -27,6 +27,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const [manualPhone, setManualPhone] = useState('')
   const [callerFullName, setCallerFullName] = useState('')
   const [city, setCity] = useState('')
+  const [connectionAddress, setConnectionAddress] = useState('')
   const [correctAccountNo, setCorrectAccountNo] = useState('')
   const [erroneousAccountNo, setErroneousAccountNo] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
@@ -95,6 +96,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const linked = type === 'SUBSCRIBER_LINKED'
   const categories = useQuery({ queryKey: ['ticket-categories'], queryFn: ({ signal }) => ticketApi.categories(signal), enabled: canCreate })
   const selectedCategory = categories.data?.find((item) => item.id === categoryId && item.is_active)
+  const connectionCategory = categories.data?.find((item) => item.name === 'Новое подключение' && item.is_active)
   const phoneChoices = [...new Set([card?.subscriber.phone, ...(card?.subscriber.contacts.map((contact) => contact.value) ?? [])].filter((value): value is string => !!value?.trim()))]
   const callerPhone = linked && phoneChoice !== '__manual__' && phoneChoice.startsWith('number:') ? phoneChoices[Number(phoneChoice.slice(7))] : manualPhone.trim()
   const active = useQuery({
@@ -107,13 +109,32 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
   const ambiguousService = eligibleServices.length > 1
   const ambiguousConnection = (card?.connections.length ?? 0) > 1
   const expired = card ? card.is_expired || Date.now() >= new Date(card.expires_at).getTime() : false
-  const readyOrCustom = type === 'INTERNAL' || type === 'ERRONEOUS_PAYMENT' || categoryId === '' && type === 'MANUAL' || (categoryId === '__custom__' ? !!subject.trim() : !!selectedCategory)
+  const readyOrCustom = type === 'INTERNAL' || type === 'ERRONEOUS_PAYMENT' || type === 'NEW_CONNECTION' && !!connectionCategory || categoryId === '' && type === 'MANUAL' || (categoryId === '__custom__' ? !!subject.trim() : !!selectedCategory)
   const paymentReady = !!callerFullName.trim() && !!correctAccountNo.trim() && !!erroneousAccountNo.trim() && correctAccountNo.trim() !== erroneousAccountNo.trim() && !!paymentDate && !Number.isNaN(new Date(paymentDate).getTime()) && /^\d+(?:\.\d{1,2})?$/.test(paymentAmount) && Number(paymentAmount) > 0
-  const canSubmit = (type !== 'INTERNAL' || !!description.trim()) && readyOrCustom && (type !== 'MANUAL' || (!!callerFullName.trim() && !!callerPhone && !!city.trim())) && (type !== 'ERRONEOUS_PAYMENT' || paymentReady) && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
+  const canSubmit = (type !== 'INTERNAL' || !!description.trim()) && readyOrCustom && (type !== 'MANUAL' && type !== 'NEW_CONNECTION' || (!!callerFullName.trim() && !!callerPhone && !!city.trim())) && (type !== 'NEW_CONNECTION' && !(type === 'MANUAL' && selectedCategory?.name === 'Новое подключение') || !!connectionAddress.trim()) && (type !== 'ERRONEOUS_PAYMENT' || paymentReady) && (!linked || (!!card && !expired && active.isSuccess && (!hasActive || (otherProblem && !!duplicateReason.trim())) && (card.services.length === 0 || eligibleServices.length > 0) && (eligibleServices.length === 0 || !!serviceId) && (!ambiguousConnection || !!connectionId)))
 
   function edited() {
     setRequestId(crypto.randomUUID())
     mutation.reset()
+  }
+
+  function chooseType(next: TicketType | 'NEW_CONNECTION') {
+    if (type === next) return
+    setType(next)
+    setSubject('')
+    setDescription('')
+    setCategoryId('')
+    setCallerFullName('')
+    setManualPhone('')
+    setCity('')
+    setConnectionAddress('')
+    setPhoneChoice('')
+    setPriority('NORMAL')
+    setCorrectAccountNo('')
+    setErroneousAccountNo('')
+    setPaymentDate('')
+    setPaymentAmount('')
+    edited()
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -125,7 +146,9 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
       priority,
       client_request_id: requestId,
     }
-    const payload: CreateTicketInput = type === 'ERRONEOUS_PAYMENT'
+    const payload: CreateTicketInput = type === 'NEW_CONNECTION' && connectionCategory
+      ? { ...common, subject: undefined, ticket_type: 'MANUAL', category_id: connectionCategory.id, caller_full_name: callerFullName.trim(), caller_phone: manualPhone.trim(), city: city.trim(), address_override: connectionAddress.trim() }
+      : type === 'ERRONEOUS_PAYMENT'
       ? { ...common, subject: undefined, ticket_type: type, caller_full_name: callerFullName.trim(), correct_account_no: correctAccountNo.trim(), erroneous_account_no: erroneousAccountNo.trim(), payment_occurred_at: new Date(paymentDate).toISOString(), payment_amount: paymentAmount }
       : type === 'SUBSCRIBER_LINKED' && card
       ? { ...common, ticket_type: type, lookup_id: card.lookup_id,
@@ -134,7 +157,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
           ...(serviceId ? { selected_service_id: serviceId } : {}),
           ...(connectionId ? { connection_snapshot_id: connectionId } : {}),
           ...(hasActive && otherProblem ? { duplicate_reason: duplicateReason.trim() } : {}) }
-      : { ...common, ticket_type: type as 'MANUAL' | 'INTERNAL', ...(type === 'MANUAL' ? { ...(selectedCategory ? { category_id: selectedCategory.id } : {}), caller_full_name: callerFullName.trim(), caller_phone: callerPhone, city: city.trim() } : {}) }
+      : { ...common, ticket_type: type as 'MANUAL' | 'INTERNAL', ...(type === 'MANUAL' ? { ...(selectedCategory ? { category_id: selectedCategory.id } : {}), ...(selectedCategory?.name === 'Новое подключение' ? { address_override: connectionAddress.trim() } : {}), caller_full_name: callerFullName.trim(), caller_phone: callerPhone, city: city.trim() } : {}) }
     mutation.mutate(payload)
   }
 
@@ -160,10 +183,11 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
         <form className="create-card" onSubmit={submit}>
           <div className="form-section-heading"><span className="step-number">01</span><div><h2>Тип заявки</h2><p>Общий workflow для обращений и внутренних задач.</p></div></div>
           <div className="type-picker" role="group" aria-label="Тип заявки">
-            <button type="button" className={`type-option ${type === 'MANUAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('MANUAL'); setManualPhone(''); setCity(''); edited() }}><FilePlus2 size={20} /><strong>Ручная</strong><span>Обращение без привязки к NetUP</span></button>
-            {session.user.role !== 'operator' && <button type="button" className={`type-option ${type === 'INTERNAL' ? 'type-option--selected' : ''}`} onClick={() => { setType('INTERNAL'); edited() }}><Layers3 size={20} /><strong>Внутренняя</strong><span>Задача команды OSS</span></button>}
-            <button type="button" className={`type-option ${linked ? 'type-option--selected' : ''}`} onClick={() => { setType('SUBSCRIBER_LINKED'); setPhoneChoice(''); setManualPhone(''); edited() }}><UserRound size={20} /><strong>По абоненту</strong><span>Из Subscriber 360</span></button>
-            <button type="button" className={`type-option ${type === 'ERRONEOUS_PAYMENT' ? 'type-option--selected' : ''}`} onClick={() => { setType('ERRONEOUS_PAYMENT'); edited() }}><CreditCard size={20} /><strong>Ошибочный платёж</strong><span>Перевод на неверный лицевой счёт</span></button>
+            <button type="button" className={`type-option ${type === 'MANUAL' ? 'type-option--selected' : ''}`} onClick={() => chooseType('MANUAL')}><FilePlus2 size={20} /><strong>Ручная</strong><span>Обращение без привязки к NetUP</span></button>
+            {session.user.role !== 'operator' && <button type="button" className={`type-option ${type === 'INTERNAL' ? 'type-option--selected' : ''}`} onClick={() => chooseType('INTERNAL')}><Layers3 size={20} /><strong>Внутренняя</strong><span>Задача команды OSS</span></button>}
+            <button type="button" className={`type-option ${linked ? 'type-option--selected' : ''}`} onClick={() => chooseType('SUBSCRIBER_LINKED')}><UserRound size={20} /><strong>По абоненту</strong><span>Из Subscriber 360</span></button>
+            <button type="button" className={`type-option ${type === 'ERRONEOUS_PAYMENT' ? 'type-option--selected' : ''}`} onClick={() => chooseType('ERRONEOUS_PAYMENT')}><CreditCard size={20} /><strong>Ошибочный платёж</strong><span>Перевод на неверный лицевой счёт</span></button>
+            <button type="button" className={`type-option ${type === 'NEW_CONNECTION' ? 'type-option--selected' : ''}`} onClick={() => chooseType('NEW_CONNECTION')}><UserRoundPlus size={20} /><strong>Новое подключение</strong><span>Заявка на подключение нового абонента</span></button>
           </div>
           {linked && <div className="lookup-section">
             {existingLookup.isError && <Notice tone="error">Не удалось открыть сохранённую карточку. {errorText(existingLookup.error)}</Notice>}
@@ -186,7 +210,15 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
           </div>}
           <div className="form-section-heading form-section-heading--later"><span className="step-number">{linked ? '03' : '02'}</span><div><h2>Содержание</h2></div></div>
           <div className="form-fields">
-            {type === 'ERRONEOUS_PAYMENT' ? <>
+            {type === 'NEW_CONNECTION' ? <>
+              {!connectionCategory && <Notice tone="error">В справочнике нет активной темы «Новое подключение». Попросите администратора добавить или включить её.</Notice>}
+              <label className="field"><span>ФИО заявителя <em>*</em></span><input value={callerFullName} maxLength={160} required onChange={(event) => { setCallerFullName(event.target.value); edited() }} /></label>
+              <label className="field"><span>Контактный телефон <em>*</em></span><input type="tel" value={manualPhone} maxLength={50} required onChange={(event) => { setManualPhone(event.target.value); edited() }} /></label>
+              <label className="field"><span>Город / населённый пункт <em>*</em></span><input value={city} maxLength={160} required onChange={(event) => { setCity(event.target.value); edited() }} /></label>
+              <label className="field"><span>Адрес подключения <em>*</em></span><input value={connectionAddress} maxLength={300} required placeholder="Улица, дом, квартира или описание места" onChange={(event) => { setConnectionAddress(event.target.value); edited() }} /></label>
+              <label className="field"><span>Комментарий / пожелания <small>необязательно</small></span><textarea value={description} maxLength={10000} rows={3} onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
+              <label className="field form-fields__priority"><span>Приоритет</span><select value={priority} onChange={(event) => { setPriority(event.target.value as TicketPriority); edited() }}>{priorities.map((item) => <option key={item} value={item}>{priorityLabel[item]}</option>)}</select></label>
+            </> : type === 'ERRONEOUS_PAYMENT' ? <>
               <label className="field"><span>Наименование обратившегося <em>*</em></span><input value={callerFullName} maxLength={160} required onChange={(event) => { setCallerFullName(event.target.value); edited() }} /></label>
               <label className="field"><span>Верный лицевой счёт <em>*</em></span><input value={correctAccountNo} maxLength={100} required onChange={(event) => { setCorrectAccountNo(event.target.value); edited() }} /></label>
               <label className="field"><span>Ошибочный лицевой счёт <em>*</em></span><input value={erroneousAccountNo} maxLength={100} required onChange={(event) => { setErroneousAccountNo(event.target.value); edited() }} /></label>
@@ -200,6 +232,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
               {categoryId === '__custom__' && <label className="field"><span>Своя тема <em>*</em></span><input id="ticket-subject" name="subject" value={subject} maxLength={160} placeholder="Название обращения" onChange={(event) => { setSubject(event.target.value); edited() }} required /></label>}
               {!linked && <label className="field"><span>Контактный номер <em>*</em></span><input type="tel" value={manualPhone} maxLength={50} required onChange={(event) => { setManualPhone(event.target.value); edited() }} /></label>}
               {!linked && <label className="field"><span>Город <em>*</em></span><input value={city} maxLength={160} required onChange={(event) => { setCity(event.target.value); edited() }} /></label>}
+              {type === 'MANUAL' && selectedCategory?.name === 'Новое подключение' && <label className="field"><span>Адрес подключения <em>*</em></span><input value={connectionAddress} maxLength={300} required onChange={(event) => { setConnectionAddress(event.target.value); edited() }} /></label>}
               <label className="field"><span>{linked ? 'Комментарий' : 'Описание проблемы'} <small>необязательно</small></span><textarea id="ticket-description" name="description" value={description} maxLength={10000} rows={linked ? 3 : 4} placeholder={linked ? 'Дополнительные сведения со слов абонента' : 'Что произошло?'} onChange={(event) => { setDescription(event.target.value); edited() }} /></label>
               {!linked && <label className="field form-fields__priority"><span>Приоритет</span><select id="ticket-priority" name="priority" value={priority} onChange={(event) => { setPriority(event.target.value as TicketPriority); edited() }}>{priorities.map((item) => <option key={item} value={item}>{priorityLabel[item]}</option>)}</select></label>}
             </> : <>

@@ -69,6 +69,7 @@ class CreateTicket(StrictModel):
     caller_phone: str | None = Field(default=None, max_length=50)
     city: str | None = Field(default=None, max_length=160)
     caller_full_name: str | None = Field(default=None, max_length=160)
+    address_override: str | None = Field(default=None, max_length=300)
     correct_account_no: str | None = Field(default=None, max_length=100)
     erroneous_account_no: str | None = Field(default=None, max_length=100)
     payment_occurred_at: datetime | None = None
@@ -96,7 +97,8 @@ class CreateTicket(StrictModel):
         return value
 
     @field_validator(
-        "caller_phone", "city", "caller_full_name", "correct_account_no", "erroneous_account_no"
+        "caller_phone", "city", "caller_full_name", "address_override",
+        "correct_account_no", "erroneous_account_no"
     )
     @classmethod
     def validate_contact_field(cls, value: str | None) -> str | None:
@@ -121,6 +123,8 @@ class CreateTicket(StrictModel):
             (self.caller_full_name, self.caller_phone, self.city)
         ):
             raise ValueError("caller_full_name, caller_phone and city are required")
+        if self.ticket_type != TicketType.MANUAL and self.address_override is not None:
+            raise ValueError("address_override on creation is only valid for MANUAL")
         if self.ticket_type == TicketType.SUBSCRIBER_LINKED:
             if self.category_id is None and self.subject is None and self.description is None:
                 raise ValueError("category_id, subject or description is required")

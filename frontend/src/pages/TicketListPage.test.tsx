@@ -94,6 +94,24 @@ it('shows the report attention indicator only while confirmation is pending', as
   expect(await screen.findByText('Отчёт ждёт подтверждения')).toBeInTheDocument()
 })
 
+it('shows manual caller and phone, payment caller, linked subscriber and internal label', async () => {
+  vi.mocked(ticketApi.list).mockResolvedValue({
+    items: [
+      { ...ticket, caller_full_name: 'Ручной заявитель', caller_phone: '+7 900 000 00 00' },
+      { ...ticket, id: 'payment', number: 43, ticket_type: 'ERRONEOUS_PAYMENT', caller_full_name: 'Плательщик' },
+      { ...ticket, id: 'linked', number: 44, ticket_type: 'SUBSCRIBER_LINKED', subscriber_name: 'Абонент NetUP', account_no: '5113' },
+      { ...ticket, id: 'internal', number: 45, ticket_type: 'INTERNAL' },
+    ], page: 1, size: 20, total: 4,
+  })
+  renderList('/tickets', 'engineer')
+  expect(await screen.findByText('Ручной заявитель')).toBeInTheDocument()
+  expect(screen.getByText('+7 900 000 00 00')).toBeInTheDocument()
+  expect(screen.getByText('Плательщик')).toBeInTheDocument()
+  expect(screen.getByText('Абонент NetUP')).toBeInTheDocument()
+  expect(screen.getByText('ЛС 5113')).toBeInTheDocument()
+  expect(screen.getAllByText('Внутренняя').length).toBeGreaterThan(0)
+})
+
 it('shows server-counted engineer queues and keeps search in the queue view', async () => {
   vi.mocked(ticketApi.list).mockImplementation(async (filters) => ({
     items: filters.size === 1 ? [] : [ticket], page: filters.page, size: filters.size,

@@ -1,5 +1,7 @@
 # Модель данных и ERD
 
+**Новое подключение:** отдельный режим формы создаёт обычную заявку `MANUAL` без NetUP snapshot. Существующая активная категория «Новое подключение» сохраняется через `category_id` и историческое `category_name`, тема равна её названию. Уже существующее `tickets.address_override` хранит обязательный для этого режима адрес; `caller_full_name`, `caller_phone`, `city` и необязательное `description` остаются полями заявки. Новых таблиц и миграций нет.
+
 **`0041_reschedule_inline_dialog`:** `field_reschedule_dialogs` хранит этап кнопочного диалога, инициатора и ревизию Telegram-карточки для безопасного повтора. `scheduled_date` в передаче и истории хранит согласованную дату без времени. `schedule_card_version/status/attempts` отслеживает синхронизацию исходной карточки. Перенос остаётся в PostgreSQL при ошибке Telegram.
 
 **`0040_field_work_rescheduling`:** `field_work_handoffs.schedule_status` (`ORIGINAL`/`DATE_PENDING`/`SCHEDULED`), `scheduled_for` и `schedule_version` хранят актуальный график независимо от состояния работ. `field_work_reschedules` хранит неизменяемые версии причины, даты, автора, источника OSS/Telegram и связанных Telegram ID; уникальный `update_record_id` защищает импорт от дублей. Исторические передачи получают `ORIGINAL`, версию `0` и пустую дату. `field_work_completion_prompts.prompt_type` разделяет завершение и перенос, `CANCELED` закрывает отменённый диалог. Статус заявки, отчёт и подтверждение инженером остаются независимыми.

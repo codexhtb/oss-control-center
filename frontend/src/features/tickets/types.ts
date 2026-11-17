@@ -410,6 +410,7 @@ export type CreateTicketInput = {
   caller_phone?: string
   city?: string
   caller_full_name?: string
+  address_override?: string
   priority: TicketPriority
   client_request_id: string
 } & (

@@ -485,6 +485,12 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         if category is None or not category.is_active:
             raise ApiError(422, "invalid_category", "Select an active category")
         category_name = category.name
+        if (
+            payload.ticket_type == TicketType.MANUAL
+            and category.name == "Новое подключение"
+            and not payload.address_override
+        ):
+            raise ApiError(422, "address_required", "Connection address is required")
         if category.is_other:
             subject = payload.subject or category.name
         else:
@@ -530,6 +536,7 @@ def create_ticket(db: Session, actor_id: UUID, payload: CreateTicket) -> tuple[T
         caller_phone=payload.caller_phone,
         city=payload.city,
         caller_full_name=payload.caller_full_name,
+        address_override=payload.address_override,
         correct_account_no=payload.correct_account_no,
         erroneous_account_no=payload.erroneous_account_no,
         payment_occurred_at=payload.payment_occurred_at,
@@ -648,6 +655,7 @@ def _replayed(db: Session, ticket: Ticket, payload: CreateTicket) -> tuple[Ticke
         or ticket.caller_phone != payload.caller_phone
         or ticket.city != payload.city
         or ticket.caller_full_name != payload.caller_full_name
+        or ticket.address_override != payload.address_override
         or ticket.correct_account_no != payload.correct_account_no
         or ticket.erroneous_account_no != payload.erroneous_account_no
         or ticket.payment_occurred_at != payload.payment_occurred_at
@@ -826,6 +834,7 @@ def list_tickets(
             for column in (
                 Ticket.account_no,
                 Ticket.caller_phone,
+                Ticket.caller_full_name,
                 Ticket.category_name,
                 Ticket.subject,
                 Ticket.description,

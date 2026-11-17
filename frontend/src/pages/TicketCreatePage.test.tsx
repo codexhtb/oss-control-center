@@ -11,6 +11,7 @@ import { TicketCreatePage } from './TicketCreatePage'
 vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: { create: vi.fn(), lookup: vi.fn(), getLookup: vi.fn(), activeSubscriberTickets: vi.fn(), categories: vi.fn() } }))
 
 const categoryId = '00000000-0000-4000-8000-000000000099'
+const connectionCategoryId = '00000000-0000-4000-8000-000000000098'
 
 const subscriberDefaults = {
   contacts: [], email: null, subscriber_id: null, field_meta: {},
@@ -40,7 +41,10 @@ function renderCreate(role: 'operator' | 'engineer' = 'operator') {
 beforeEach(() => {
   vi.mocked(ticketApi.create).mockReset()
   vi.mocked(ticketApi.lookup).mockReset()
-  vi.mocked(ticketApi.categories).mockReset().mockResolvedValue([{ id: categoryId, name: 'Нет интернета', sort_order: 10, is_active: true, is_other: false, version: 1 }])
+  vi.mocked(ticketApi.categories).mockReset().mockResolvedValue([
+    { id: categoryId, name: 'Нет интернета', sort_order: 10, is_active: true, is_other: false, version: 1 },
+    { id: connectionCategoryId, name: 'Новое подключение', sort_order: 20, is_active: true, is_other: false, version: 1 },
+  ])
   vi.mocked(ticketApi.activeSubscriberTickets).mockReset().mockResolvedValue({
     items: [], page: 1, size: 20, total_visible: 0, has_hidden_active: false,
   })
@@ -64,6 +68,39 @@ it('creates an erroneous payment with structured fields and no category or descr
     subject: undefined, description: undefined,
   })))
   expect(await screen.findByText('Карточка открыта')).toBeInTheDocument()
+})
+
+it('creates a new connection as a manual ticket without NetUP and keeps fields on API failure', async () => {
+  vi.mocked(ticketApi.create).mockRejectedValueOnce(new Error('Temporary error')).mockResolvedValueOnce({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
+  renderCreate()
+  fireEvent.click(screen.getByRole('button', { name: /Новое подключение/ }))
+  expect(screen.queryByRole('combobox', { name: 'Тема обращения' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText(/ФИО заявителя/), { target: { value: 'Синтетический заявитель' } })
+  fireEvent.change(screen.getByLabelText(/Контактный телефон/), { target: { value: '+7 900 123 45 67' } })
+  fireEvent.change(screen.getByLabelText(/Город \/ населённый пункт/), { target: { value: 'Тестовый город' } })
+  expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
+  fireEvent.change(screen.getByLabelText(/Адрес подключения/), { target: { value: 'Тестовая, 5' } })
+  fireEvent.change(screen.getByLabelText(/Комментарий \/ пожелания/), { target: { value: 'После обеда' } })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    ticket_type: 'MANUAL', category_id: connectionCategoryId, caller_full_name: 'Синтетический заявитель',
+    caller_phone: '+7 900 123 45 67', city: 'Тестовый город', address_override: 'Тестовая, 5',
+    description: 'После обеда', priority: 'NORMAL',
+  })))
+  expect(await screen.findByText(/Не удалось связаться с сервером/)).toBeInTheDocument()
+  expect(screen.getByLabelText(/Адрес подключения/)).toHaveValue('Тестовая, 5')
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  expect(await screen.findByText('Карточка открыта')).toBeInTheDocument()
+})
+
+it('does not carry new connection contacts into an ordinary manual ticket', async () => {
+  renderCreate()
+  fireEvent.click(screen.getByRole('button', { name: /Новое подключение/ }))
+  fireEvent.change(screen.getByLabelText(/ФИО заявителя/), { target: { value: 'Предыдущий заявитель' } })
+  fireEvent.click(screen.getByRole('button', { name: /Ручная/ }))
+  expect(screen.getByLabelText(/ФИО обратившегося/)).toHaveValue('')
+  expect(screen.queryByLabelText(/Адрес подключения/)).not.toBeInTheDocument()
 })
 
 it.each([
