@@ -288,6 +288,8 @@ def _delete_prompt(db: Session, gateway: TelegramBotGateway, prompt_id: UUID) ->
 
 def _card_text(handoff: FieldWorkHandoff, report: FieldExternalMessage) -> str:
     suffix = f"\n\n✅ Выполнено\nМонтажник: {report.sender_name}"
+    if report.partner_name:
+        suffix += f"\nРаботали вместе: {report.partner_name}"
     original = handoff.message_text or ""
     if len(original) + len(suffix) > 4096:
         original = original[: 4095 - len(suffix)].rstrip() + "…"
@@ -302,9 +304,9 @@ def _sync_report_action(
     record = db.scalar(
         select(FieldDispatchUpdate)
         .where(
-            FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
+            FieldDispatchUpdate.bot_identity.in_(("oss_field_service_bot", "oss_field_miniapp")),
             FieldDispatchUpdate.update_id == update_id,
-            FieldDispatchUpdate.kind == "COMPLETION_REPORT",
+            FieldDispatchUpdate.kind.in_(("COMPLETION_REPORT", "MINIAPP_REPORT")),
             FieldDispatchUpdate.outcome == "PROCESSED",
         )
         .with_for_update()
@@ -326,13 +328,13 @@ def _sync_report_action(
     report = db.scalar(
         select(FieldExternalMessage).where(
             FieldExternalMessage.update_record_id == record.id,
-            FieldExternalMessage.kind == "COMPLETION_REPORT",
+            FieldExternalMessage.kind == record.kind,
         )
     )
     handoff = db.get(FieldWorkHandoff, record.handoff_id) if record.handoff_id else None
     if (
         report is None
-        or report.telegram_message_id is None
+        or (action == "report_delete" and report.telegram_message_id is None)
         or handoff is None
         or (
             action == "card_edit"
@@ -406,9 +408,9 @@ def _sync_report_action(
 def _sync_completion(db: Session, gateway: TelegramBotGateway, update_id: int) -> None:
     record = db.scalar(
         select(FieldDispatchUpdate).where(
-            FieldDispatchUpdate.bot_identity == "oss_field_service_bot",
+            FieldDispatchUpdate.bot_identity.in_(("oss_field_service_bot", "oss_field_miniapp")),
             FieldDispatchUpdate.update_id == update_id,
-            FieldDispatchUpdate.kind == "COMPLETION_REPORT",
+            FieldDispatchUpdate.kind.in_(("COMPLETION_REPORT", "MINIAPP_REPORT")),
             FieldDispatchUpdate.outcome == "PROCESSED",
         )
     )
@@ -709,7 +711,7 @@ def _retry_sync(db: Session, gateway: TelegramBotGateway) -> None:
     records = db.scalars(
         select(FieldDispatchUpdate)
         .where(
-            FieldDispatchUpdate.kind == "COMPLETION_REPORT",
+            FieldDispatchUpdate.kind.in_(("COMPLETION_REPORT", "MINIAPP_REPORT")),
             FieldDispatchUpdate.outcome == "PROCESSED",
             or_(
                 and_(

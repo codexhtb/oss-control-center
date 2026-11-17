@@ -108,7 +108,7 @@ class FieldWorkRescheduleView(BaseModel):
     reason: str
     scheduled_for: datetime | None
     scheduled_date: date | None = None
-    source: Literal["TELEGRAM", "OSS"]
+    source: Literal["TELEGRAM", "OSS", "MINIAPP"]
     author_name: str
     created_at: datetime
 
@@ -125,8 +125,9 @@ class FieldExternalMessageView(BaseModel):
 
     id: UUID
     handoff_id: UUID
-    kind: Literal["TEXT_REPLY", "COMPLETION_CALLBACK", "COMPLETION_REPORT"]
+    kind: Literal["TEXT_REPLY", "COMPLETION_CALLBACK", "COMPLETION_REPORT", "MINIAPP_REPORT"]
     sender_name: str
+    partner_name: str | None = None
     body: str | None
     telegram_created_at: datetime
     received_at: datetime

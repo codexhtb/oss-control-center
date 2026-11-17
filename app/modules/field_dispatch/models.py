@@ -223,7 +223,7 @@ class FieldDispatchUpdate(Base):
     __table_args__ = (
         UniqueConstraint("bot_identity", "update_id", name="uq_field_updates_bot_update"),
         CheckConstraint(
-            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT',"
+            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT','MINIAPP_REPORT',"
             "'RESCHEDULE_CALLBACK','RESCHEDULE_REPORT','RESCHEDULE_CANCEL','RESCHEDULE_INVALID',"
             "'GROUP_BIND','GROUP_STATUS','GROUP_EVENT','UNSUPPORTED')",
             name="ck_field_updates_kind",
@@ -297,7 +297,7 @@ class FieldExternalMessage(Base):
     __table_args__ = (
         UniqueConstraint("update_record_id", name="uq_field_messages_update"),
         CheckConstraint(
-            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT')",
+            "kind IN ('TEXT_REPLY','COMPLETION_CALLBACK','COMPLETION_REPORT','MINIAPP_REPORT')",
             name="ck_field_messages_kind",
         ),
         CheckConstraint("length(btrim(sender_name)) > 0", name="ck_field_messages_sender"),
@@ -306,7 +306,10 @@ class FieldExternalMessage(Base):
             "AND telegram_message_id IS NOT NULL) OR "
             "(kind = 'COMPLETION_CALLBACK' AND body IS NULL) OR "
             "(kind = 'COMPLETION_REPORT' AND body IS NOT NULL AND length(btrim(body)) > 0 "
-            "AND telegram_message_id IS NOT NULL)",
+            "AND telegram_message_id IS NOT NULL) OR "
+            "(kind = 'MINIAPP_REPORT' AND body IS NOT NULL AND length(btrim(body)) > 0 "
+            "AND telegram_message_id IS NULL AND primary_installer_id IS NOT NULL "
+            "AND client_request_id IS NOT NULL)",
             name="ck_field_messages_content",
         ),
         Index("ix_field_messages_handoff_created", "handoff_id", "telegram_created_at", "id"),
@@ -323,6 +326,18 @@ class FieldExternalMessage(Base):
             unique=True,
             postgresql_where=text("kind = 'COMPLETION_CALLBACK'"),
         ),
+        Index(
+            "uq_field_miniapp_request", "primary_installer_id", "client_request_id",
+            unique=True, postgresql_where=text("client_request_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_field_miniapp_report", "handoff_id", unique=True,
+            postgresql_where=text("kind = 'MINIAPP_REPORT'"),
+        ),
+        CheckConstraint(
+            "partner_installer_id IS NULL OR partner_installer_id <> primary_installer_id",
+            name="ck_field_report_distinct_installers",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -336,6 +351,14 @@ class FieldExternalMessage(Base):
         ForeignKey("field_dispatch_updates.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    primary_installer_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("field_installers.id", ondelete="RESTRICT")
+    )
+    partner_installer_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("field_installers.id", ondelete="RESTRICT")
+    )
+    partner_name: Mapped[str | None] = mapped_column(String(160))
+    client_request_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     chat_id: Mapped[str] = mapped_column(String(32), nullable=False)
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     sender_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -433,7 +456,9 @@ class FieldWorkReschedule(Base):
 
     __tablename__ = "field_work_reschedules"
     __table_args__ = (
-        CheckConstraint("source IN ('TELEGRAM','OSS')", name="ck_field_reschedules_source"),
+        CheckConstraint(
+            "source IN ('TELEGRAM','OSS','MINIAPP')", name="ck_field_reschedules_source"
+        ),
         CheckConstraint("length(btrim(reason)) > 0", name="ck_field_reschedules_reason"),
         Index("ix_field_reschedules_handoff_created", "handoff_id", "created_at", "id"),
         UniqueConstraint("update_record_id", name="uq_field_reschedules_update"),

@@ -21,6 +21,7 @@ import { ChatPage } from '../pages/ChatPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { ReportsPage } from '../pages/ReportsPage'
 import { TasksPage } from '../pages/TasksPage'
+import { FieldWorkApp } from '../features/field-work/FieldWorkApp'
 import { queryClient } from './query-client'
 
 function AppRoutes() {
@@ -80,6 +81,9 @@ function AppRoutes() {
 }
 
 export function App() {
+  if (window.location.pathname === '/field-work' || window.location.pathname === '/field-work/') {
+    return <FieldWorkApp />
+  }
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter><AppRoutes /></BrowserRouter>

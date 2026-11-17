@@ -500,6 +500,146 @@ def test_field_work_miniapp_registry_queue_and_rbac(
     assert ticket_client.get(f"{base}/handoffs", headers=headers).status_code == 403
 
 
+def _miniapp_headers(token: str, telegram_id: int) -> dict[str, str]:
+    fields = {
+        "auth_date": str(int(datetime.now(UTC).timestamp())),
+        "user": json.dumps({"id": telegram_id}),
+    }
+    check = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return {"X-Telegram-Init-Data": urlencode(fields)}
+
+
+def test_field_work_miniapp_report_reschedule_and_existing_workflow(
+    ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mini App and Telegram share one report, notification and verification path."""
+    from app.api.v1 import field_work_miniapp
+
+    token = "synthetic-miniapp-stage2-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    admin = seed_user(ticket_engine, "miniapp2_admin", Role.ADMIN)
+    login(ticket_client, admin.login)
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic stage 2 work")
+    path = f"/api/v1/tickets/{ticket['id']}"
+    assert ticket_client.post(
+        path + "/start", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    ).status_code == 200
+    registered = []
+    for telegram_id, name in ((8101, "Installer One"), (8102, "Installer Two")):
+        response = ticket_client.post("/api/v1/field-work/installers", headers=csrf(ticket_client),
+            json={"telegram_user_id": telegram_id, "name": name, "directions": ["SUKHUM"]})
+        assert response.status_code == 201, response.text
+        registered.append(response.json())
+    with Session(ticket_engine) as db:
+        first = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=2, reason="Check line",
+            delivery_status="SENT", work_status="AWAITING_REPORT", chat_id="-5319791765",
+            direction="SUKHUM", telegram_message_id=931, message_text="Synthetic card",
+            sent_at=datetime.now(UTC), sent_by=admin.id, created_by=admin.id,
+        )
+        second = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=3, reason="Second visit",
+            delivery_status="SENT", work_status="AWAITING_REPORT", chat_id="-5319791765",
+            direction="SUKHUM", telegram_message_id=932, message_text="Second card",
+            sent_at=datetime.now(UTC), sent_by=admin.id, created_by=admin.id,
+        )
+        db.add_all((first, second))
+        db.commit()
+        first_id, second_id = first.id, second.id
+    headers = _miniapp_headers(token, 8101)
+    base = "/api/v1/field-work/miniapp"
+    assert ticket_client.get(f"{base}/handoffs?queue=open", headers=headers).json()["total"] == 2
+    partners = ticket_client.get(f"{base}/partners?direction=SUKHUM", headers=headers).json()
+    assert partners["items"][0]["id"] == registered[1]["id"]
+    assert ticket_client.post(f"{base}/handoffs/{first_id}/report", headers=headers,
+        json={"client_request_id": str(uuid4()), "partner_installer_id": registered[0]["id"],
+              "work_text": "Synthetic repair"}).status_code == 422
+    pending = ticket_client.post(f"{base}/handoffs/{first_id}/reschedules", headers=headers,
+        json={"reason": "Customer away", "expected_version": 0})
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["schedule_status"] == "DATE_PENDING"
+    future_date = (datetime.now(UTC) + timedelta(days=3)).date().isoformat()
+    scheduled = ticket_client.post(f"{base}/handoffs/{first_id}/reschedules", headers=headers,
+        json={"reason": "Agreed next visit", "scheduled_date": future_date,
+              "expected_version": 1})
+    assert scheduled.status_code == 200, scheduled.text
+    assert scheduled.json()["schedule_status"] == "SCHEDULED"
+    reschedules = ticket_client.get(f"{base}/handoffs/{first_id}/reschedules", headers=headers)
+    assert reschedules.json()["total"] == 2
+    assert ticket_client.post(f"{base}/handoffs/{first_id}/reschedules", headers=headers,
+        json={"reason": "Stale", "expected_version": 0}).status_code == 409
+    request_id = str(uuid4())
+    payload = {"client_request_id": request_id, "partner_installer_id": registered[1]["id"],
+               "work_text": "Synthetic repair completed"}
+    sent = ticket_client.post(f"{base}/handoffs/{first_id}/report", headers=headers, json=payload)
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["work_status"] == "REPORTED"
+    repeated = ticket_client.post(
+        f"{base}/handoffs/{first_id}/report", headers=headers, json=payload
+    )
+    assert repeated.status_code == 200 and repeated.json()["report_id"] == sent.json()["report_id"]
+    assert ticket_client.post(
+        f"{base}/handoffs/{first_id}/report", headers=_miniapp_headers(token, 8102),
+        json={"client_request_id": str(uuid4()), "work_text": "Duplicate"},
+    ).status_code == 409
+    assert ticket_client.get(f"{base}/handoffs?queue=open", headers=headers).json()["total"] == 1
+    completed = ticket_client.get(f"{base}/handoffs?queue=completed", headers=headers)
+    assert completed.json()["total"] == 1
+    messages = ticket_client.get(path + f"/field-work-handoffs/{first_id}/messages").json()
+    assert messages["total"] == 1
+    assert messages["items"][0]["partner_name"] == "Installer Two"
+    with Session(ticket_engine) as db:
+        report = db.get(FieldExternalMessage, UUID(sent.json()["report_id"]))
+        assert report.primary_installer_id == UUID(registered[0]["id"])
+        assert report.partner_installer_id == UUID(registered[1]["id"])
+        assert db.scalar(select(func.count()).select_from(FieldReportNotification).where(
+            FieldReportNotification.handoff_id == first_id)) == 1
+        assert db.scalar(select(func.count()).select_from(TicketEvent).where(
+            TicketEvent.ticket_id == UUID(ticket["id"]),
+            TicketEvent.event_type == "field_work_reported")) == 1
+        callback = {"update_id": 9876501, "callback_query": {
+            "id": "synthetic-after-miniapp", "from": {"id": 8102, "first_name": "Installer Two"},
+            "data": f"field_done:{first_id}", "message": {"message_id": 931,
+                "chat": {"id": -5319791765, "type": "group"}},
+        }}
+        assert process_update(db, callback).outcome == "DUPLICATE"
+        update = db.get(FieldDispatchUpdate, report.update_record_id)
+        update_id = update.update_id
+    edited = []
+    class FakeGateway:
+        def edit_handoff_card(self, chat_id, message_id, text):
+            edited.append((chat_id, message_id, text))
+    with Session(ticket_engine) as db:
+        _sync_completion(db, FakeGateway(), update_id)
+        assert db.scalar(select(FieldDispatchUpdate.card_edit_status).where(
+            FieldDispatchUpdate.bot_identity == "oss_field_miniapp",
+            FieldDispatchUpdate.update_id == update_id)) == "DONE"
+    assert len(edited) == 1 and "✅ Выполнено" in edited[0][2]
+    assert "Installer Two" in edited[0][2]
+    verified = ticket_client.post(path + f"/field-work-handoffs/{first_id}/verify",
+                                  headers=csrf(ticket_client))
+    assert verified.status_code == 200, verified.text
+    assert ticket_client.get(f"{base}/handoffs?queue=history", headers=headers).json()["total"] == 1
+    completed = ticket_client.get(f"{base}/handoffs?queue=completed", headers=headers)
+    assert completed.json()["total"] == 0
+
+    def submit(telegram_id: int):
+        return ticket_client.post(f"{base}/handoffs/{second_id}/report",
+            headers=_miniapp_headers(token, telegram_id),
+            json={"client_request_id": str(uuid4()), "work_text": "Concurrent work"}).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(submit, (8101, 8102)))
+    assert sorted(statuses) == [200, 409]
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(FieldExternalMessage).where(
+            FieldExternalMessage.handoff_id == second_id,
+            FieldExternalMessage.kind == "MINIAPP_REPORT")) == 1
+        assert db.scalar(select(func.count()).select_from(FieldReportNotification).where(
+            FieldReportNotification.handoff_id == second_id)) == 1
+
+
 def test_soft_delete_own_scope_visibility_restore_and_security(
     ticket_engine: Engine, ticket_client: TestClient
 ) -> None:

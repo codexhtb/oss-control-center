@@ -470,3 +470,4 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 # OSS Field Work Mini App
 
 Критерии доступа и очереди этапа 1: [oss-field-work-phase1.md](oss-field-work-phase1.md).
+Критерии отчёта, переноса и конкуренции этапа 2: [oss-field-work-phase2.md](oss-field-work-phase2.md).

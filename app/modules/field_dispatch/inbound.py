@@ -16,12 +16,12 @@ from app.modules.field_dispatch.gateway import completion_prompt_text, reschedul
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
-    FieldReportNotification,
     FieldRescheduleDialog,
     FieldWorkCompletionPrompt,
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
 )
+from app.modules.field_dispatch.reporting import record_completed_work
 from app.modules.field_dispatch.reschedule_dialog import (
     TEXT_STAGES,
     accept_text,
@@ -868,8 +868,7 @@ def _text_reply(
         receipt.report_delete_status = "PENDING"
         receipt.card_edit_status = "PENDING"
         report_message_id = uuid4()
-        db.add(
-            FieldExternalMessage(
+        report = FieldExternalMessage(
                 id=report_message_id,
                 handoff_id=handoff.id,
                 update_record_id=receipt.id,
@@ -881,34 +880,11 @@ def _text_reply(
                 body=body,
                 telegram_created_at=event_time,
             )
-        )
-        db.add(FieldReportNotification(handoff_id=handoff.id, message_id=report_message_id))
         prompt.status = "COMPLETED"
         prompt.error_code = None
         prompt.completed_at = event_time
         prompt.deletion_status = "PENDING"
-        handoff.work_status = "REPORTED"
-        handoff.reported_at = event_time
-        handoff.updated_at = datetime.now(UTC)
-        ticket = db.get(Ticket, handoff.ticket_id)
-        db.add(
-            TicketEvent(
-                ticket_id=handoff.ticket_id,
-                event_type="field_work_reported",
-                actor_id=None,
-                event_data={"handoff_id": str(handoff.id), "message_kind": kind},
-                ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
-            )
-        )
-        db.add(
-            TicketAudit(
-                ticket_id=handoff.ticket_id,
-                actor_id=None,
-                action="field_work_reported",
-                outcome="success",
-                origin="SYSTEM",
-            )
-        )
+        record_completed_work(db, handoff, report, reported_at=event_time)
         db.commit()
         return InboundResult(update_id, "PROCESSED", kind, handoff.id, sender_name=sender_name)
 

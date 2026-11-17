@@ -365,3 +365,4 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 # OSS Field Work Mini App
 
 Контракт авторизации, реестра и очередей этапа 1: [oss-field-work-phase1.md](oss-field-work-phase1.md).
+Контракт завершения и переноса через Mini App: [oss-field-work-phase2.md](oss-field-work-phase2.md).

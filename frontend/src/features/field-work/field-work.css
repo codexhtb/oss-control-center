@@ -1,0 +1,82 @@
+.fw-app {
+  --fw-bg: #0c141b;
+  --fw-surface: #14232c;
+  --fw-surface-2: #1b3039;
+  --fw-line: #2c4650;
+  --fw-text: #ecf5f2;
+  --fw-muted: #9cb5b5;
+  --fw-accent: #2ed39a;
+  --fw-accent-text: #07291f;
+  min-height: 100dvh;
+  background: var(--fw-bg);
+  color: var(--fw-text);
+  font: 15px/1.45 Inter, system-ui, -apple-system, sans-serif;
+  padding: max(env(safe-area-inset-top), 16px) 14px max(env(safe-area-inset-bottom), 24px);
+}
+.fw-app[data-theme="light"] {
+  --fw-bg: #f2f7f5;
+  --fw-surface: #fff;
+  --fw-surface-2: #eaf3ef;
+  --fw-line: #d2e1db;
+  --fw-text: #17332e;
+  --fw-muted: #617b73;
+  --fw-accent: #087d5b;
+  --fw-accent-text: #fff;
+}
+.fw-app *, .fw-app *::before, .fw-app *::after { box-sizing: border-box; }
+.fw-shell { max-width: 720px; margin: 0 auto; }
+.fw-header { display: flex; align-items: center; gap: 12px; margin: 4px 0 22px; }
+.fw-logo { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: #0d614a; color: #effff8; font-size: 15px; font-weight: 900; letter-spacing: -.06em; flex: none; }
+.fw-logo span { color: #4cf2af; font-size: 7px; margin-left: 1px; }
+.fw-kicker { margin: 0; color: var(--fw-accent); font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.fw-header h1 { margin: 1px 0 0; color: var(--fw-text); font-size: 21px; line-height: 1.15; letter-spacing: -.025em; }
+.fw-user { margin-left: auto; max-width: 35%; color: var(--fw-muted); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-filters { display: flex; gap: 8px; margin-bottom: 16px; }
+.fw-filters select, .fw-form select, .fw-form input, .fw-form textarea { width: 100%; border: 1px solid var(--fw-line); border-radius: 12px; background: var(--fw-surface); color: var(--fw-text); font: inherit; outline: none; }
+.fw-filters select { padding: 10px 13px; }
+.fw-icon { flex: none; width: 43px; border: 1px solid var(--fw-line); border-radius: 12px; display: grid; place-items: center; background: var(--fw-surface); color: var(--fw-text); }
+.fw-tabs { display: flex; padding: 4px; gap: 3px; border-radius: 13px; background: var(--fw-surface); margin-bottom: 14px; }
+.fw-tabs button { flex: 1; border: 0; border-radius: 10px; background: transparent; color: var(--fw-muted); padding: 10px 4px; font: inherit; font-size: 13px; font-weight: 650; white-space: nowrap; }
+.fw-tabs button.active { background: var(--fw-surface-2); color: var(--fw-accent); }
+.fw-list { display: grid; gap: 9px; }
+.fw-card { width: 100%; padding: 15px; border: 1px solid var(--fw-line); border-radius: 16px; background: var(--fw-surface); color: var(--fw-text); text-align: left; font: inherit; display: grid; gap: 9px; }
+.fw-card__top, .fw-card__bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fw-card__top strong { font-size: 16px; }
+.fw-card__top span { color: var(--fw-accent); font-size: 12px; font-weight: 700; }
+.fw-card__subject { font-size: 14px; line-height: 1.35; }
+.fw-card__bottom { color: var(--fw-muted); font-size: 12px; }
+.fw-more, .fw-back { color: var(--fw-accent); background: none; border: 0; font: inherit; font-weight: 700; padding: 12px; }
+.fw-more { width: 100%; }
+.fw-back { display: flex; align-items: center; gap: 7px; padding: 3px 0 16px; }
+.fw-detail { background: var(--fw-surface); border: 1px solid var(--fw-line); border-radius: 20px; padding: 18px; }
+.fw-detail__title { display: flex; gap: 7px; margin-bottom: 11px; }
+.fw-badge { color: var(--fw-accent); background: var(--fw-surface-2); border-radius: 999px; padding: 5px 10px; font-size: 11px; font-weight: 700; }
+.fw-detail h2 { color: var(--fw-text); margin: 0; font-size: 25px; line-height: 1.2; }
+.fw-subject { color: var(--fw-muted); margin: 5px 0 17px; }
+.fw-facts { display: grid; gap: 0; border-top: 1px solid var(--fw-line); }
+.fw-facts > div { padding: 11px 0; display: grid; gap: 2px; border-bottom: 1px solid var(--fw-line); }
+.fw-facts span { color: var(--fw-muted); font-size: 12px; }
+.fw-facts strong { color: var(--fw-text); font-weight: 550; overflow-wrap: anywhere; white-space: pre-wrap; }
+.fw-actions, .fw-primary-actions, .fw-form__buttons { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+.fw-action, .fw-primary, .fw-secondary { min-height: 44px; padding: 10px 14px; border-radius: 12px; font: inherit; font-weight: 700; text-align: center; display: inline-flex; gap: 8px; justify-content: center; align-items: center; text-decoration: none; }
+.fw-action, .fw-secondary { background: var(--fw-surface-2); color: var(--fw-text); border: 1px solid var(--fw-line); }
+.fw-primary { flex: 1; background: var(--fw-accent); color: var(--fw-accent-text); border: 1px solid transparent; }
+.fw-primary:disabled, .fw-more:disabled { opacity: .55; }
+.fw-form, .fw-report, .fw-history { margin-top: 20px; border-top: 1px solid var(--fw-line); padding-top: 18px; }
+.fw-form h3, .fw-report h3, .fw-history h3 { margin: 0 0 14px; color: var(--fw-text); font-size: 16px; }
+.fw-form label { display: grid; gap: 7px; margin-bottom: 14px; font-weight: 700; font-size: 13px; }
+.fw-form label span { color: var(--fw-muted); font-weight: 400; }
+.fw-form select, .fw-form input, .fw-form textarea { padding: 11px; resize: vertical; }
+.fw-form textarea { min-height: 95px; }
+.fw-form__buttons > * { flex: 1; }
+.fw-report p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fw-report small, .fw-history small { color: var(--fw-muted); }
+.fw-history > div { display: grid; gap: 3px; border-top: 1px solid var(--fw-line); padding: 10px 0; }
+.fw-history span { white-space: pre-wrap; }
+.fw-state { padding: 42px 15px; color: var(--fw-muted); text-align: center; display: flex; gap: 10px; justify-content: center; align-items: center; }
+.fw-message { padding: 12px; margin: 10px 0; border-radius: 10px; }
+.fw-error { color: #f6b6ae; background: #5a272850; }
+.fw-spin { animation: fw-spin 1s linear infinite; }
+@keyframes fw-spin { to { transform: rotate(360deg); } }
+@media (min-width: 600px) { .fw-app { padding: 26px; } .fw-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; } }
+@media (prefers-reduced-motion: reduce) { .fw-spin { animation: none; } }

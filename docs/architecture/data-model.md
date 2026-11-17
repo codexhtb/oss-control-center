@@ -1,5 +1,13 @@
 # Модель данных и ERD
 
+**`0047_field_work_miniapp_reports`:** `field_external_messages` хранит стабильные
+ID основного монтажника и напарника, снимок имени напарника и UUID запроса для
+`MINIAPP_REPORT`. Уникальные индексы защищают от двух отчётов на один handoff и
+от повторного использования UUID. `field_dispatch_updates` ставит синхронизацию
+Telegram-карточки в существующий poller; `field_work_reschedules.source=MINIAPP`
+использует прежнюю историю переносов. Подробности —
+[OSS Field Work этап 2](oss-field-work-phase2.md).
+
 **Новое подключение:** после `0045` отдельный режим формы создаёт `NEW_CONNECTION` без NetUP snapshot. Активная категория «Новое подключение» сохраняется через `category_id` и историческое `category_name`; тема равна её названию. `tickets.address_override`, `caller_full_name`, `caller_phone`, `city` обязательны, `description` необязателен. Старые записи `MANUAL` остаются без автоматического преобразования.
 
 **`0041_reschedule_inline_dialog`:** `field_reschedule_dialogs` хранит этап кнопочного диалога, инициатора и ревизию Telegram-карточки для безопасного повтора. `scheduled_date` в передаче и истории хранит согласованную дату без времени. `schedule_card_version/status/attempts` отслеживает синхронизацию исходной карточки. Перенос остаётся в PostgreSQL при ошибке Telegram.
