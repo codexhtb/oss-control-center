@@ -76,8 +76,8 @@ services:
       - ./.dev-secrets/certs/sd.oss-ab.net.fullchain.crt:/run/domain-tls/fullchain.crt:ro
       - ./.dev-secrets/certs/sd.oss-ab.net.key:/run/domain-tls/private.key:ro
     ports:
-      - "172.17.7.2:8443:8443"
       - "0.0.0.0:443:443"
+      - "0.0.0.0:8443:8443"
     networks:
       - backend
       - edge
@@ -89,7 +89,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--cacert", "/run/dev-certs/ca.crt", "--resolve", "172.17.7.2:8443:127.0.0.1", "https://172.17.7.2:8443/"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--resolve", "sd.oss-ab.net:443:127.0.0.1", "https://sd.oss-ab.net/"]
       interval: 10s
       timeout: 5s
       retries: 5

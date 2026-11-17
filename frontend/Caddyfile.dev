@@ -1,11 +1,13 @@
 {
 	admin off
 	auto_https off
-	default_sni 172.17.7.2
+	default_sni sd.oss-ab.net
 }
 
-https://172.17.7.2:8443, https://178.217.74.174:8443 {
-	tls /run/dev-certs/server.crt /run/dev-certs/server.key
+# The normal OCC address. Source filtering belongs exclusively to the Proxmox
+# firewall; Caddy serves the complete portal and API on TCP 443.
+https://sd.oss-ab.net {
+	tls /run/domain-tls/fullchain.crt /run/domain-tls/private.key
 
 	@api path /api/v1/*
 	handle @api {
@@ -28,33 +30,45 @@ https://172.17.7.2:8443, https://178.217.74.174:8443 {
 	}
 }
 
-https://sd.oss-ab.net {
+# Public Telegram Mini App. No normal SPA fallback or administrative API is
+# exposed on TCP 8443.
+https://sd.oss-ab.net:8443 {
 	tls /run/domain-tls/fullchain.crt /run/domain-tls/private.key
 
-	# Trust only the management network as observed at the TCP socket. Forwarded
-	# headers are never used to decide whether an OCC route is available.
-	@management {
-		remote_ip 172.17.7.0/24
-		# The gateway may be the SNAT source for public ingress.
-		not remote_ip 172.17.7.1/32
-	}
-	handle @management {
-		@api path /api/v1/*
-		handle @api {
+	handle {
+		@miniapp_api path /api/v1/field-work/miniapp/*
+		handle @miniapp_api {
 			reverse_proxy api:8000 {
 				header_up X-OSS-Client-IP {remote_host}
 			}
 		}
-		handle {
+		@miniapp_page path /field-work /field-work/
+		handle @miniapp_page {
 			root * /srv
-			try_files {path} /index.html
+			rewrite * /index.html
 			header Cache-Control "no-store"
 			file_server
 		}
+		@miniapp_assets path /assets/*
+		handle @miniapp_assets {
+			root * /srv
+			file_server
+		}
+		respond "Forbidden" 403
 	}
 
-	# Public access is limited to the Mini App entry and its own API. No SPA
-	# fallback is available to untrusted clients.
+	header {
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+}
+
+# Direct IP access on 8443 has the same Mini App-only boundary. The internal
+# certificate is retained for operational probes, not for OCC access.
+https://172.17.7.2:8443, https://178.217.74.174:8443 {
+	tls /run/dev-certs/server.crt /run/dev-certs/server.key
+
 	handle {
 		@miniapp_api path /api/v1/field-work/miniapp/*
 		handle @miniapp_api {
