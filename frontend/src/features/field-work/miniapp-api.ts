@@ -59,7 +59,9 @@ export async function fieldWorkRequest<T>(initData: string, path: string, body?:
   })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { code?: string }
-    const message = response.status === 401 ? 'Сессия Telegram истекла. Откройте приложение заново.'
+    const message = payload.code === 'invalid_link_code' ? 'Код неверный или срок его действия истёк.'
+      : payload.code === 'telegram_identity_conflict' ? 'Этот Telegram уже зарегистрирован как монтажник или привязан к сотруднику.'
+      : response.status === 401 ? 'Сессия Telegram истекла. Откройте приложение заново.'
       : response.status === 403 ? 'Доступ к этому направлению не предоставлен.'
       : response.status === 409 ? 'Задание уже изменилось. Обновите данные.'
       : payload.code === 'field_schedule_date_past' ? 'Выберите будущую дату.'

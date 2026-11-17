@@ -71,3 +71,31 @@ it('blocks access outside Telegram without calling the queue API', async () => {
   expect(fetch).not.toHaveBeenCalled()
   vi.restoreAllMocks()
 })
+
+it('links verified OCC staff and allows verification without installer report actions', async () => {
+  let linked = false
+  const requests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    requests.push(path)
+    if (path.endsWith('/me') && !path.endsWith('/staff/me')) return { ok: false, status: 403, json: async () => ({ code: 'installer_forbidden' }) } as Response
+    if (path.endsWith('/staff/me') && !linked) return { ok: false, status: 403, json: async () => ({ code: 'staff_forbidden' }) } as Response
+    let body: unknown
+    if (path.endsWith('/link-staff')) { linked = true; body = { name: 'Инженер', directions: ['SUKHUM'], kind: 'staff' } }
+    else if (path.endsWith('/staff/me')) body = { name: 'Инженер', directions: ['SUKHUM'], can_verify: true }
+    else if (path.includes('/reschedules')) body = { items: [], total: 0, page: 1, page_size: 20 }
+    else if (path.endsWith('/verify')) body = { handoff_id: id, work_status: 'VERIFIED' }
+    else if (path.endsWith(`/${id}`)) body = { ...handoff, work_status: 'REPORTED', reason: 'Проверить линию', name: 'Абонент', phone: null, city: 'Сухум', address: null, account_no: null, schedule_version: 0, schedule_reason: null, schedule_author: null, report: { text: 'Линия восстановлена', installer: 'Монтажник', partner: null, reported_at: '2026-11-17T08:00:00Z' } }
+    else body = { items: [{ ...handoff, work_status: 'REPORTED' }], total: 1, page: 1, page_size: 20 }
+    return { ok: true, status: 200, json: async () => body } as Response
+  }))
+  render(<FieldWorkApp />)
+  expect(await screen.findByText('Привязать сотрудника OCC')).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Код привязки'), { target: { value: 'synthetic-code-123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Привязать Telegram' }))
+  expect(await screen.findByText('Заявка №201')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /Заявка №201/ }))
+  expect(await screen.findByText('Линия восстановлена')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /Завершить работу/ })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить работу' }))
+  await waitFor(() => expect(requests.some((path) => path.endsWith('/staff/handoffs/' + id + '/verify'))).toBe(true))
+})

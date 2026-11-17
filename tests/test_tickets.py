@@ -500,6 +500,134 @@ def test_field_work_miniapp_registry_queue_and_rbac(
     assert ticket_client.get(f"{base}/handoffs", headers=headers).status_code == 403
 
 
+def test_field_work_staff_link_and_verify_permissions(
+    ticket_client: TestClient, ticket_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.v1 import field_work_miniapp, field_work_staff
+
+    token = "synthetic-staff-bot-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    monkeypatch.setattr(field_work_staff, "configured_bot_token", lambda: token)
+    admin = seed_user(ticket_engine, "staff_admin", Role.ADMIN)
+    engineer = seed_user(ticket_engine, "staff_engineer", Role.ENGINEER)
+    login(ticket_client, "staff_admin")
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic staff verification")
+    with Session(ticket_engine) as db:
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=1,
+            reason="Synthetic check", delivery_status="SENT", work_status="REPORTED",
+            chat_id="-100123456789", direction="SUKHUM", telegram_message_id=987,
+            sent_at=datetime.now(UTC), sent_by=admin.id, created_by=admin.id,
+            reported_at=datetime.now(UTC),
+        )
+        db.add(handoff)
+        db.commit()
+        handoff_id = handoff.id
+    access = ticket_client.put(
+        f"/api/v1/field-work/staff-access/{engineer.id}", headers=csrf(ticket_client),
+        json={"is_enabled": True, "directions": ["SUKHUM"]},
+    )
+    assert access.status_code == 200, access.text
+    assert access.json()["telegram_user_id"] is None
+    assert ticket_client.put(
+        f"/api/v1/field-work/staff-access/{engineer.id}",
+        json={"is_enabled": False, "directions": ["SUKHUM"]},
+    ).status_code == 403
+    self_user = ticket_client.get(f"/api/v1/users/{admin.id}").json()
+    assert ticket_client.put(
+        f"/api/v1/users/{admin.id}/permissions", headers=csrf(ticket_client),
+        json={"permissions": [*self_user["permissions"], "settings.manage"]},
+    ).status_code == 403
+    assert ticket_client.patch(
+        f"/api/v1/users/{admin.id}/role", headers=csrf(ticket_client),
+        json={"role": "engineer"},
+    ).status_code == 403
+    assert ticket_client.put(
+        f"/api/v1/field-work/staff-access/{admin.id}", headers=csrf(ticket_client),
+        json={"is_enabled": True, "directions": ["SUKHUM"]},
+    ).status_code == 403
+    login(ticket_client, "staff_engineer")
+    code_response = ticket_client.post(
+        "/api/v1/field-work/staff-link-code", headers=csrf(ticket_client)
+    )
+    assert code_response.status_code == 200, code_response.text
+    assert code_response.headers["cache-control"] == "no-store"
+    code = code_response.json()["code"]
+    signed = _miniapp_headers(token, 889991)
+    base = "/api/v1/field-work/miniapp"
+    assert ticket_client.get(f"{base}/staff/me", headers=signed).status_code == 403
+    assert ticket_client.post(
+        f"{base}/link-staff", headers=signed, json={"code": "wrong-code-123456789"}
+    ).status_code == 403
+    linked = ticket_client.post(f"{base}/link-staff", headers=signed, json={"code": code})
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["kind"] == "staff"
+    assert ticket_client.post(
+        f"{base}/link-staff", headers=signed, json={"code": code}
+    ).status_code == 403
+    assert ticket_client.get(f"{base}/staff/me", headers=signed).json()["can_verify"] is True
+    assert ticket_client.get(
+        f"{base}/staff/handoffs?queue=completed", headers=signed
+    ).json()["total"] == 1
+    assert ticket_client.get(
+        f"{base}/staff/handoffs?direction=OCHAMCHIRA", headers=signed
+    ).status_code == 403
+    assert ticket_client.get(
+        f"{base}/staff/handoffs/{handoff_id}", headers=signed
+    ).status_code == 200
+    assert ticket_client.post(
+        f"{base}/staff/handoffs/{handoff_id}/report", headers=signed,
+        json={"work_text": "Not an installer"},
+    ).status_code == 404
+    verified = ticket_client.post(f"{base}/staff/handoffs/{handoff_id}/verify", headers=signed)
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["work_status"] == "VERIFIED"
+    assert ticket_client.post(
+        f"{base}/staff/handoffs/{handoff_id}/verify", headers=signed
+    ).status_code == 200
+    with Session(ticket_engine) as db:
+        assert db.get(FieldWorkHandoff, handoff_id).work_status == "VERIFIED"
+        assert db.scalar(select(func.count()).select_from(TicketEvent).where(
+            TicketEvent.ticket_id == UUID(ticket["id"]),
+            TicketEvent.event_type == "field_work_verified",
+        )) == 1
+    login(ticket_client, "staff_admin")
+    assert ticket_client.post(
+        "/api/v1/field-work/installers", headers=csrf(ticket_client),
+        json={"telegram_user_id": 889991, "name": "Not installer", "directions": ["SUKHUM"]},
+    ).status_code == 409
+    user = ticket_client.get(f"/api/v1/users/{engineer.id}").json()
+    without_field = [value for value in user["permissions"] if value != "tickets.field_work"]
+    assert ticket_client.put(
+        f"/api/v1/users/{engineer.id}/permissions", headers=csrf(ticket_client),
+        json={"permissions": without_field},
+    ).status_code == 200
+    assert ticket_client.get(f"{base}/staff/me", headers=signed).json()["can_verify"] is False
+    assert ticket_client.post(
+        f"{base}/staff/handoffs/{handoff_id}/verify", headers=signed
+    ).status_code == 403
+    current_access = ticket_client.get(
+        f"/api/v1/field-work/staff-access/{engineer.id}"
+    ).json()
+    disabled = ticket_client.put(
+        f"/api/v1/field-work/staff-access/{engineer.id}", headers=csrf(ticket_client),
+        json={"is_enabled": False, "directions": ["SUKHUM"],
+              "expected_updated_at": current_access["updated_at"]},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert ticket_client.get(f"{base}/staff/me", headers=signed).status_code == 403
+    assert ticket_client.put(
+        f"/api/v1/field-work/staff-access/{engineer.id}", headers=csrf(ticket_client),
+        json={"is_enabled": True, "directions": ["SUKHUM"],
+              "expected_updated_at": disabled.json()["updated_at"]},
+    ).status_code == 200
+    assert ticket_client.get(f"{base}/staff/me", headers=signed).status_code == 200
+    assert ticket_client.post(
+        f"/api/v1/users/{engineer.id}/deactivate", headers=csrf(ticket_client)
+    ).status_code == 200
+    assert ticket_client.get(f"{base}/staff/me", headers=signed).status_code == 403
+
+
 def _miniapp_headers(token: str, telegram_id: int) -> dict[str, str]:
     fields = {
         "auth_date": str(int(datetime.now(UTC).timestamp())),

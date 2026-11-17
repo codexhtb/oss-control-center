@@ -29,6 +29,7 @@ export function SettingsPage({ session }: { session: MeResponse }) {
         {canManageSettings && <Link to="/settings?section=reasons"><strong>Причины решений</strong><span>Названия, порядок и доступность для новых решений</span></Link>}
         {canManageSettings && <Link to="/settings?section=templates"><strong>Текстовые шаблоны</strong><span>Решения, комментарии и контрольные звонки</span></Link>}
         {canManage && <Link to="/users?section=employees"><strong>Сотрудники и разрешения</strong><span>Учётные записи и персональный доступ</span></Link>}
+        {canManage && <Link to="/users?section=installers"><strong>Монтажники OSS Field Work</strong><span>Telegram ID, направления и активность</span></Link>}
         {canManage && <Link to="/users?section=audit"><strong>История действий</strong><span>Административные изменения</span></Link>}
       </div>
     </section>}

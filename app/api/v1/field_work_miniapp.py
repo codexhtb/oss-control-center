@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.identity import SessionDep, require_permission, require_read_permission
@@ -20,6 +20,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
     FieldWorkReschedule,
+    FieldWorkStaffAccess,
 )
 from app.modules.field_dispatch.reporting import record_completed_work
 from app.modules.field_dispatch.reschedule_dialog import active_dialog
@@ -128,6 +129,16 @@ def list_installers(_: ReadManagerDep, db: SessionDep):
 
 @router.post("/installers", status_code=201)
 def create_installer(payload: InstallerWrite, identity: ManagerDep, db: SessionDep):
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:telegram_id)"),
+        {"telegram_id": payload.telegram_user_id},
+    )
+    if db.scalar(
+        select(FieldWorkStaffAccess.user_id).where(
+            FieldWorkStaffAccess.telegram_user_id == payload.telegram_user_id
+        )
+    ):
+        raise ApiError(409, "installer_conflict", "Telegram user already linked to OCC staff")
     installer = FieldInstaller(
         telegram_user_id=payload.telegram_user_id, name=payload.name, is_active=payload.is_active
     )
@@ -162,6 +173,16 @@ def update_installer(
         raise ApiError(404, "not_found", "Installer not found")
     if installer.updated_at != payload.expected_updated_at:
         raise ApiError(409, "stale_installer", "Installer changed; reload and retry")
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:telegram_id)"),
+        {"telegram_id": payload.telegram_user_id},
+    )
+    if db.scalar(
+        select(FieldWorkStaffAccess.user_id).where(
+            FieldWorkStaffAccess.telegram_user_id == payload.telegram_user_id
+        )
+    ):
+        raise ApiError(409, "installer_conflict", "Telegram user already linked to OCC staff")
     installer.telegram_user_id = payload.telegram_user_id
     installer.name = payload.name
     installer.is_active = payload.is_active
@@ -356,7 +377,8 @@ def handoff_detail(handoff_id: UUID, auth: InstallerDep, db: SessionDep):
 def _mutable_handoff(
     db: SessionDep, handoff_id: UUID, allowed: tuple[str, ...], *, lock: bool = True
 ) -> FieldWorkHandoff:
-    statement = (select(FieldWorkHandoff)
+    statement = (
+        select(FieldWorkHandoff)
         .join(Ticket, Ticket.id == FieldWorkHandoff.ticket_id)
         .where(
             FieldWorkHandoff.id == handoff_id,
@@ -364,7 +386,8 @@ def _mutable_handoff(
             Ticket.deleted_at.is_(None),
             Ticket.ticket_type != "INTERNAL",
         )
-        .execution_options(populate_existing=True))
+        .execution_options(populate_existing=True)
+    )
     if lock:
         statement = statement.with_for_update(of=FieldWorkHandoff)
     handoff = db.scalar(statement)

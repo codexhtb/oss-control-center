@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -182,6 +183,55 @@ class FieldInstallerDirection(Base):
     direction: Mapped[str] = mapped_column(String(16), primary_key=True)
 
 
+class FieldWorkStaffAccess(Base):
+    """OCC employee access, distinct from installer identity and reporting."""
+
+    __tablename__ = "field_work_staff_access"
+    __table_args__ = (
+        CheckConstraint(
+            "telegram_user_id IS NULL OR telegram_user_id > 0",
+            name="ck_field_staff_telegram_id",
+        ),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), primary_key=True
+    )
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldWorkStaffDirection(Base):
+    __tablename__ = "field_work_staff_directions"
+    __table_args__ = (
+        CheckConstraint("direction IN ('SUKHUM','OCHAMCHIRA')", name="ck_field_staff_direction"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_work_staff_access.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    direction: Mapped[str] = mapped_column(String(16), primary_key=True)
+
+
+class FieldWorkStaffLinkCode(Base):
+    __tablename__ = "field_work_staff_link_codes"
+    __table_args__ = (CheckConstraint("length(code_hash) = 64", name="ck_field_staff_link_hash"),)
+
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="CASCADE"), primary_key=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class FieldWorkDeliveryAttempt(Base):
     __tablename__ = "field_work_delivery_attempts"
     __table_args__ = (
@@ -337,11 +387,16 @@ class FieldExternalMessage(Base):
             postgresql_where=text("kind = 'COMPLETION_CALLBACK'"),
         ),
         Index(
-            "uq_field_miniapp_request", "primary_installer_id", "client_request_id",
-            unique=True, postgresql_where=text("client_request_id IS NOT NULL"),
+            "uq_field_miniapp_request",
+            "primary_installer_id",
+            "client_request_id",
+            unique=True,
+            postgresql_where=text("client_request_id IS NOT NULL"),
         ),
         Index(
-            "uq_field_miniapp_report", "handoff_id", unique=True,
+            "uq_field_miniapp_report",
+            "handoff_id",
+            unique=True,
             postgresql_where=text("kind = 'MINIAPP_REPORT'"),
         ),
         CheckConstraint(
@@ -391,9 +446,7 @@ class FieldWorkCompletionPrompt(Base):
             "status IN ('REQUESTING','WAITING','FAILED','UNCERTAIN','COMPLETED','CANCELED')",
             name="ck_field_prompts_status",
         ),
-        CheckConstraint(
-            "prompt_type IN ('COMPLETION','RESCHEDULE')", name="ck_field_prompts_type"
-        ),
+        CheckConstraint("prompt_type IN ('COMPLETION','RESCHEDULE')", name="ck_field_prompts_type"),
         CheckConstraint(
             "(status = 'REQUESTING' AND telegram_message_id IS NULL AND sent_at IS NULL "
             "AND completed_at IS NULL AND error_code IS NULL) OR "
@@ -476,7 +529,8 @@ class FieldWorkReschedule(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     handoff_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
+        PGUUID(as_uuid=True),
+        ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
         nullable=False,
     )
     schedule_version: Mapped[int] = mapped_column(Integer, nullable=False)

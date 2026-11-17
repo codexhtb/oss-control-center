@@ -546,7 +546,7 @@ def test_last_admin_and_database_guard(
             json={"role": "operator"},
             headers=csrf(identity_client),
         ).status_code
-        == 409
+        == 403
     )
     with Session(identity_engine) as db, pytest.raises(IntegrityError):
         db.execute(update(User).where(User.id == admin.id).values(is_active=False))

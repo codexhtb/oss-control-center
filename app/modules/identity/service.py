@@ -363,6 +363,8 @@ def set_user_permissions(db: Session, actor: User, user_id: UUID, grants: set[Pe
     _ensure_actor_can_manage(db, actor)
     target = _get_target_for_update(db, user_id)
     previous = effective_permissions(db, target)
+    if target.id == actor.id and not grants <= previous:
+        raise ApiError(403, "cannot_elevate_self", "Cannot grant permissions to yourself")
     if target.role == Role.ADMIN and target.is_active and Permission.IDENTITY_MANAGE not in grants:
         _ensure_admin_remains(db, target)
     if previous == grants:
@@ -503,6 +505,8 @@ def change_user_role(db: Session, actor: User, user_id: UUID, new_role: Role) ->
     _lock_admin_changes(db)
     _ensure_actor_can_manage(db, actor)
     target = _get_target_for_update(db, user_id)
+    if target.id == actor.id:
+        raise ApiError(403, "cannot_change_own_role", "Cannot change your own role")
     if not target.is_active:
         raise ApiError(409, "inactive_user", "Inactive user cannot change role")
     if target.role == new_role:

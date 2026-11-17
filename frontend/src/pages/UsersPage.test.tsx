@@ -109,6 +109,18 @@ it('hides deletion from a non-administrator', async () => {
   expect(screen.queryByRole('button', { name: 'Удалить сотрудника' })).not.toBeInTheDocument()
 })
 
+it('requires confirmation before deactivating an OCC employee', async () => {
+  renderPage()
+  fireEvent.click(await screen.findByRole('button', { name: 'Сотрудник' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Безопасность' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
+  expect(apiRequest).not.toHaveBeenCalledWith(`/api/v1/users/${worker.id}/deactivate`, expect.anything())
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить отключение' }))
+  await waitFor(() => expect(apiRequest).toHaveBeenCalledWith(
+    `/api/v1/users/${worker.id}/deactivate`, { method: 'POST' },
+  ))
+})
+
 it('offers a generated password without forcing first-login replacement', async () => {
   renderPage()
   fireEvent.click(await screen.findByRole('button', { name: 'Создать пользователя' }))

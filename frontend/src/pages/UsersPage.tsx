@@ -8,19 +8,14 @@ import { Notice } from '../shared/ui/Notice'
 import { roleLabel } from '../layout/AppShell'
 import { CategoryManager } from '../features/tickets/CategoryManager'
 import { PasswordInput } from '../shared/ui/PasswordInput'
+import { InstallerManager } from '../features/field-work/InstallerManager'
+import { StaffAccessEditor } from '../features/field-work/StaffAccessEditor'
 
 type ManagedUser = User & { permissions: Permission[] }
 type Page<T> = { items: T[]; page: number; size: number; total: number }
 type AuditRow = { id: string; actor_name: string | null; target_name: string | null; action: string; outcome: string; details: Record<string, unknown> | null; occurred_at: string }
 
 const permissionGroups: { title: string; values: { key: Permission; label: string }[] }[] = [
-  { title: 'Внутренние поручения', values: [{ key: 'tasks.create', label: 'Создание поручений' }, { key: 'tasks.execute', label: 'Выполнение поручений' }] },
-  { title: 'Отчёты', values: [{ key: 'reports.read', label: 'Просмотр отчётов Service Desk' }] },
-  { title: 'Настройки Service Desk', values: [{ key: 'settings.manage', label: 'Управление причинами решений и шаблонами (администратор)' }] },
-  { title: 'Чат', values: [{ key: 'chat.messages.delete', label: 'Удаление сообщений (администратор)' }] },
-  { title: 'Пользователи', values: [
-    { key: 'users.read', label: 'Просмотр сотрудников' }, { key: 'users.manage', label: 'Управление сотрудниками' },
-  ] },
   { title: 'Заявки', values: [
     { key: 'tickets.create', label: 'Создание' }, { key: 'tickets.read.all', label: 'Просмотр всех' },
     { key: 'tickets.read.own', label: 'Просмотр своих' }, { key: 'tickets.edit.all', label: 'Изменение всех' },
@@ -28,15 +23,28 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
     { key: 'tickets.delete.own', label: 'Удаление своих' }, { key: 'tickets.delete.all', label: 'Удаление всех' },
     { key: 'tickets.restore', label: 'Восстановление из корзины' }, { key: 'tickets.purge', label: 'Окончательное удаление' },
     { key: 'tickets.assign', label: 'Назначение' }, { key: 'tickets.start', label: 'Начало работы' },
-    { key: 'tickets.diagnose', label: 'Диагностика' }, { key: 'tickets.resolve', label: 'Решение' },
+    { key: 'tickets.resolve', label: 'Решение' },
     { key: 'tickets.callback', label: 'Контрольный обзвон' },
-    { key: 'tickets.close', label: 'Закрытие без обзвона' }, { key: 'tickets.field_work', label: 'Выездные работы' },
+    { key: 'tickets.close', label: 'Закрытие без обзвона' },
+    { key: 'tasks.create', label: 'Создание поручений' }, { key: 'tasks.execute', label: 'Выполнение поручений' },
   ] },
-  { title: 'Абоненты и мониторинг', values: [
+  { title: 'Абоненты', values: [
     { key: 'subscribers.read', label: 'Карточки абонентов' },
     { key: 'subscribers.finance.read', label: 'Финансовые сведения' },
+  ] },
+  { title: 'Диагностика', values: [
+    { key: 'tickets.diagnose', label: 'Диагностика заявки' },
     { key: 'diagnostics.read', label: 'Результаты диагностики' },
     { key: 'diagnostics.run', label: 'Запуск диагностики' },
+  ] },
+  { title: 'Выездные работы', values: [{ key: 'tickets.field_work', label: 'Подготовка и проверка выездов' }] },
+  { title: 'Отчёты', values: [{ key: 'reports.read', label: 'Просмотр отчётов Service Desk' }] },
+  { title: 'Управление пользователями', values: [
+    { key: 'users.read', label: 'Просмотр сотрудников' }, { key: 'users.manage', label: 'Управление сотрудниками' },
+  ] },
+  { title: 'Администрирование', values: [
+    { key: 'settings.manage', label: 'Причины решений и шаблоны' },
+    { key: 'chat.messages.delete', label: 'Удаление сообщений чата' },
     { key: 'audit.read', label: 'Журнал действий' },
   ] },
 ]
@@ -58,7 +66,7 @@ function initials(name: string): string {
 }
 
 function PermissionEditor({ selected, change }: { selected: Permission[]; change: (next: Permission[]) => void }) {
-  return <div className="permission-editor">{permissionGroups.map((group) => <fieldset key={group.title}>
+  return <div className="permission-editor">{selected.some((key) => ['users.manage', 'settings.manage', 'tickets.purge', 'chat.messages.delete'].includes(key)) && <Notice tone="error">Административные права дают доступ к управлению данными и сотрудниками. Проверьте выбор перед сохранением.</Notice>}{permissionGroups.map((group) => <fieldset key={group.title}>
     <legend>{group.title}</legend>
     <div className="permission-editor__grid">{group.values.map(({ key, label }) => <label key={key} className="permission-editor__item">
       <input type="checkbox" checked={selected.includes(key)} onChange={(event) => change(event.target.checked ? [...selected, key] : selected.filter((item) => item !== key))} />
@@ -82,14 +90,16 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
   const [mustChangePassword, setMustChangePassword] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false)
+  const [confirmRole, setConfirmRole] = useState(false)
   const [passwordWasGenerated, setPasswordWasGenerated] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [message, setMessage] = useState('')
   const [sectionParams, setSectionParams] = useSearchParams()
-  const section = ['employees', 'categories', 'audit'].includes(sectionParams.get('section') || '')
-    ? sectionParams.get('section') as 'employees' | 'categories' | 'audit' : 'employees'
-  const setSection = (next: 'employees' | 'categories' | 'audit') => setSectionParams({ section: next })
+  const section = ['employees', 'installers', 'categories', 'audit'].includes(sectionParams.get('section') || '')
+    ? sectionParams.get('section') as 'employees' | 'installers' | 'categories' | 'audit' : 'employees'
+  const setSection = (next: 'employees' | 'installers' | 'categories' | 'audit') => setSectionParams({ section: next })
   const [editorTab, setEditorTab] = useState<'main' | 'permissions' | 'security'>('main')
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all')
@@ -135,7 +145,8 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
     setSection('employees'); setEditorTab('main')
     setSelectedId(null); setCreating(true); setLogin(''); setName(''); setRole('operator'); setPermissions(presets.operator)
     setTemporaryPassword(null); setPassword(''); setPasswordRepeat(''); setMustChangePassword(false)
-    setChangingPassword(false); setPasswordWasGenerated(false); setConfirmDelete(false); setError(null)
+    setChangingPassword(false); setPasswordWasGenerated(false); setConfirmDelete(false); setConfirmDeactivate(false); setError(null)
+    setConfirmRole(false)
   }
 
   function beginEdit(user: ManagedUser) {
@@ -143,7 +154,8 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
     setCreating(false); setSelectedId(user.id); setLogin(user.login); setName(user.display_name)
     setRole(user.role); setPermissions(user.permissions); setTemporaryPassword(null); setPassword('')
     setPasswordRepeat(''); setMustChangePassword(false); setChangingPassword(false)
-    setPasswordWasGenerated(false); setConfirmDelete(false); setError(null)
+    setPasswordWasGenerated(false); setConfirmDelete(false); setConfirmDeactivate(false); setError(null)
+    setConfirmRole(false)
   }
 
   function fillGeneratedPassword() {
@@ -185,8 +197,9 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
     {message && <Notice>{message}</Notice>}
     {temporaryPassword && <div className="detail-panel" role="status"><h2>Сгенерированный пароль</h2><p>Скопируйте и передайте его сотруднику защищённым способом.</p><code className="temporary-password">{temporaryPassword}</code><div><Button onClick={() => setTemporaryPassword(null)}>Скрыть пароль</Button></div></div>}
     <nav className="ticket-tabs" aria-label="Разделы пользователей">
-      {([['employees', 'Сотрудники'], ['categories', 'Темы обращений'], ['audit', 'История действий']] as const).map(([key, label]) => <button key={key} type="button" className="ticket-tabs__tab" aria-current={section === key ? 'page' : undefined} onClick={() => { setSection(key); setCreating(false); setSelectedId(null); setError(null) }}>{label}</button>)}
+      {([['employees', 'Сотрудники'], ['installers', 'Монтажники'], ['categories', 'Темы обращений'], ['audit', 'История действий']] as const).map(([key, label]) => <button key={key} type="button" className="ticket-tabs__tab" aria-current={section === key ? 'page' : undefined} onClick={() => { setSection(key); setCreating(false); setSelectedId(null); setError(null) }}>{label}</button>)}
     </nav>
+    {section === 'installers' && <InstallerManager />}
     {section === 'employees' && (creating || selected ? <section className="detail-panel employee-editor">
       <div className="employee-editor__heading"><div><p className="eyebrow">СОТРУДНИКИ</p><h2>{creating ? 'Новый сотрудник' : selected?.display_name}</h2></div><Button variant="quiet" onClick={() => { setCreating(false); setSelectedId(null); setError(null) }}>К списку сотрудников</Button></div>
       <nav className="ticket-tabs" aria-label="Настройки сотрудника">
@@ -198,6 +211,8 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
         {creating && <p className="muted">Разрешения и пароль задаются в соседних вкладках до создания учётной записи.</p>}
         <Button type="submit" disabled={busy || !login.trim() || !name.trim() || (creating ? !password || password !== passwordRepeat : login.trim().toLowerCase() === selected?.login && name.trim() === selected?.display_name)}>{creating ? 'Создать' : 'Сохранить имя и логин'}</Button>
       </form>}
+      {editorTab === 'main' && selected && <div className="employee-editor__form"><label className="field"><span>Роль</span><select value={role} onChange={(event) => { setRole(event.target.value as Role); setConfirmRole(false) }}><option value="operator">Оператор</option><option value="engineer">Инженер OSS</option><option value="admin">Администратор</option></select></label><p className="muted">При смене роли действующие персональные разрешения сохраняются. Проверьте их отдельно.</p>{role !== selected.role && <><Notice tone="error">Смена роли завершит активные сессии сотрудника. Подтвердите действие.</Notice><Button disabled={busy || selected.id === currentUser.id} onClick={() => { if (!confirmRole) { setConfirmRole(true); return } void save(() => apiRequest(`/api/v1/users/${selected.id}/role`, { method: 'PATCH', json: { role } }), 'Роль изменена.').then(() => setConfirmRole(false)) }}>{confirmRole ? 'Подтвердить смену роли' : 'Изменить роль'}</Button></>}</div>}
+      {editorTab === 'main' && selected && selected.role !== 'operator' && <StaffAccessEditor userId={selected.id} readOnly={selected.id === currentUser.id} />}
       {editorTab === 'permissions' && <div className="employee-editor__form"><PermissionEditor selected={permissions} change={setPermissions} />
         {selected && <Button disabled={busy || JSON.stringify([...permissions].sort()) === JSON.stringify([...selected.permissions].sort())} onClick={() => void save(() => apiRequest(`/api/v1/users/${selected.id}/permissions`, { method: 'PUT', json: { permissions } }), 'Разрешения обновлены.')}>Сохранить разрешения</Button>}
         {creating && <p className="muted">Выбранные разрешения сохранятся при создании сотрудника.</p>}
@@ -207,7 +222,7 @@ export function UsersPage({ currentUser }: { currentUser: User }) {
         {selected && <>
           {!changingPassword && <Button variant="secondary" disabled={busy} onClick={() => { setChangingPassword(true); setPassword(''); setPasswordRepeat(''); setMustChangePassword(false); setPasswordWasGenerated(false) }}>Изменить пароль</Button>}
           {changingPassword && <form className="inline-form password-editor employee-editor__password" onSubmit={submitPassword}><h3>Новый пароль</h3><PasswordInput label="Пароль" name="new-password" value={password} onChange={(value) => { setPassword(value); setPasswordWasGenerated(false) }} /><PasswordInput label="Подтвердите пароль" name="repeat-password" value={passwordRepeat} onChange={setPasswordRepeat} />{password && passwordRepeat && password !== passwordRepeat && <Notice tone="error">Пароли не совпадают.</Notice>}<Button type="button" variant="quiet" onClick={fillGeneratedPassword}>Сгенерировать пароль</Button><label className="desk-check"><input type="checkbox" checked={mustChangePassword} onChange={(event) => setMustChangePassword(event.target.checked)} /> Потребовать смену при первом входе</label><div className="user-actions"><Button type="submit" disabled={busy || !password || password !== passwordRepeat}>Сохранить пароль</Button><Button type="button" variant="quiet" disabled={busy} onClick={() => { setChangingPassword(false); setPassword(''); setPasswordRepeat('') }}>Отмена</Button></div></form>}
-          <div className="employee-editor__access"><div><strong>Доступ к системе</strong><span>{selected.is_active ? 'Учётная запись активна' : 'Учётная запись отключена'}</span></div><Button variant="quiet" disabled={busy} onClick={() => void save(() => apiRequest(`/api/v1/users/${selected.id}/${selected.is_active ? 'deactivate' : 'reactivate'}`, { method: 'POST' }), selected.is_active ? 'Доступ отключён.' : 'Доступ восстановлен.')}>{selected.is_active ? 'Отключить' : 'Включить'}</Button></div>
+          <div className="employee-editor__access"><div><strong>Доступ к системе</strong><span>{selected.is_active ? 'Учётная запись активна' : 'Учётная запись отключена'}</span></div><Button variant="quiet" disabled={busy} onClick={() => { if (selected.is_active && !confirmDeactivate) { setConfirmDeactivate(true); return } void save(() => apiRequest(`/api/v1/users/${selected.id}/${selected.is_active ? 'deactivate' : 'reactivate'}`, { method: 'POST' }), selected.is_active ? 'Доступ отключён.' : 'Доступ восстановлен.').then(() => setConfirmDeactivate(false)) }}>{selected.is_active ? confirmDeactivate ? 'Подтвердить отключение' : 'Отключить' : 'Включить'}</Button>{confirmDeactivate && <Button variant="quiet" onClick={() => setConfirmDeactivate(false)}>Отмена</Button>}</div>
           {currentUser.role === 'admin' && currentUser.id !== selected.id && <div className="employee-editor__danger">
             <div><strong>Удалить сотрудника</strong><span>Доступ будет отозван, сотрудник исчезнет из списка. Заявки и история сохранятся.</span></div>
             {confirmDelete ? <div className="user-actions"><Button type="button" variant="quiet" disabled={busy} onClick={() => setConfirmDelete(false)}>Отмена</Button><Button type="button" className="button--danger" disabled={busy} onClick={() => void save(async () => { await apiRequest(`/api/v1/users/${selected.id}`, { method: 'DELETE' }); setSelectedId(null); setConfirmDelete(false) }, 'Сотрудник удалён. История сохранена.')}>Подтвердить удаление</Button></div> : <Button type="button" variant="quiet" disabled={busy} onClick={() => setConfirmDelete(true)}>Удалить сотрудника</Button>}

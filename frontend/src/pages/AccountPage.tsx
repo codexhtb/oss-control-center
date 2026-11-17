@@ -4,7 +4,7 @@ import type { MeResponse } from '../shared/api/types'
 import { Panel } from '../shared/ui/Panel'
 import { roleLabel } from '../layout/AppShell'
 import { authApi } from '../features/auth/auth-api'
-import { errorText } from '../shared/api/client'
+import { apiRequest, errorText } from '../shared/api/client'
 import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { PasswordInput } from '../shared/ui/PasswordInput'
@@ -16,6 +16,18 @@ export function AccountPage({ session, onPasswordChanged }: { session: MeRespons
   const [repeat, setRepeat] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const [fieldCode, setFieldCode] = useState('')
+  const [fieldError, setFieldError] = useState<unknown>(null)
+  const [fieldBusy, setFieldBusy] = useState(false)
+
+  async function requestFieldCode() {
+    setFieldBusy(true); setFieldError(null); setFieldCode('')
+    try {
+      const result = await apiRequest<{ code: string }>('/api/v1/field-work/staff-link-code', { method: 'POST' })
+      setFieldCode(result.code)
+    } catch (cause) { setFieldError(cause) }
+    finally { setFieldBusy(false) }
+  }
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -53,6 +65,7 @@ export function AccountPage({ session, onPasswordChanged }: { session: MeRespons
       </Panel>
       </div>
       <Panel className="account-effects"><h2>Отображение</h2><EffectsToggle /></Panel>
+      {session.user.role !== 'operator' && <Panel className="account-effects"><h2>OSS Field Work в Telegram</h2><p className="muted">Администратор сначала включает доступ и направления в карточке сотрудника. Затем получите код и введите его в Mini App. Код действует 10 минут и используется один раз.</p><Button disabled={fieldBusy} onClick={() => void requestFieldCode()}>{fieldBusy ? 'Создаём код…' : 'Получить код привязки'}</Button>{fieldError !== null && <Notice tone="error">{errorText(fieldError)}</Notice>}{fieldCode && <p role="status">Код для Mini App: <code>{fieldCode}</code></p>}</Panel>}
     </div>
   )
 }

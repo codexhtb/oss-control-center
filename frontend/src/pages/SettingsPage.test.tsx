@@ -16,6 +16,7 @@ it('opens the existing catalogs and persists only a personal queue choice', () =
   const view = render(<MemoryRouter><SettingsPage session={session} /></MemoryRouter>)
   expect(screen.getByRole('link', { name: /Темы обращений/ })).toHaveAttribute('href', '/users?section=categories')
   expect(screen.getByRole('link', { name: /Сотрудники и разрешения/ })).toHaveAttribute('href', '/users?section=employees')
+  expect(screen.getByRole('link', { name: /Монтажники OSS Field Work/ })).toHaveAttribute('href', '/users?section=installers')
   fireEvent.change(screen.getByLabelText('Очередь по умолчанию'), { target: { value: 'callback' } })
   expect(window.localStorage.getItem('oss.ticket.default-queue.user-1')).toBe('callback')
   view.unmount()
