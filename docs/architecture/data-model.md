@@ -424,3 +424,7 @@ truth для зафиксированного в заявке наблюдени
 ## NEW_CONNECTION (0045)
 
 Тип `NEW_CONNECTION` хранится в `tickets.ticket_type`. CHECK требует ФИО, телефон, город, адрес, категорию и фиксированную тему; `ck_tickets_type_snapshot` запрещает NetUP-поля, `ck_tickets_description` разрешает пустой комментарий. Существующие `MANUAL` не переписываются. Подробности — [NEW_CONNECTION](new-connection-ticket.md).
+
+# OSS Field Work Mini App
+
+Таблицы `field_installers` и `field_installer_directions`: [oss-field-work-phase1.md](oss-field-work-phase1.md).

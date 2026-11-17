@@ -11,6 +11,7 @@
 - [Системная архитектура](system-architecture.md)
 - [API contracts](api-contracts.md) и [RBAC matrix](rbac.md)
 - [Модуль field_dispatch](field-dispatch.md) — проект Phase 3
+- [OSS Field Work: этап 1, backend Telegram Mini App](oss-field-work-phase1.md)
 - [Phase 1 implementation plan](phase-1-plan.md)
 - [Phase 1.4: три типа заявок — архитектура и план](phase-1.4-ticket-types.md)
 - [Phase 1.4 Stage 3: Web UI — этапы и границы](phase-1.4-web-ui.md)

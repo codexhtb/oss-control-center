@@ -1,5 +1,8 @@
 """Real PostgreSQL Ticket Engine and API acceptance tests in disposable databases."""
 
+import hashlib
+import hmac
+import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -7,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from queue import Queue
 from time import monotonic, sleep
+from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import pytest
@@ -336,6 +340,164 @@ def make_manual_ticket(client: TestClient, *, subject: str = "Synthetic deletion
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_field_work_miniapp_registry_queue_and_rbac(
+    ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A signed, allowed installer sees each handoff; other directions stay private."""
+    from app.api.v1 import field_work_miniapp
+
+    token = "synthetic-miniapp-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    admin = seed_user(ticket_engine, "miniapp_admin", Role.ADMIN)
+    seed_user(ticket_engine, "miniapp_operator", Role.OPERATOR)
+    login(ticket_client, "miniapp_admin")
+    ticket = make_manual_ticket(ticket_client, subject="Synthetic field work")
+    hidden_response = ticket_client.post(
+        "/api/v1/tickets",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_type": "INTERNAL",
+            "description": "Synthetic internal work",
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert hidden_response.status_code == 201, hidden_response.text
+    deleted_ticket = make_manual_ticket(ticket_client, subject="Synthetic deleted work")
+    registration = ticket_client.post(
+        "/api/v1/field-work/installers",
+        headers=csrf(ticket_client),
+        json={
+            "telegram_user_id": 12345,
+            "name": "Synthetic Installer",
+            "is_active": True,
+            "directions": ["SUKHUM"],
+        },
+    )
+    assert registration.status_code == 201, registration.text
+    installer = registration.json()
+    assert (
+        ticket_client.post(
+            "/api/v1/field-work/installers",
+            headers=csrf(ticket_client),
+            json={"telegram_user_id": 12345, "name": "Duplicate", "directions": ["SUKHUM"]},
+        ).status_code
+        == 409
+    )
+    with Session(ticket_engine) as db:
+        removed = db.get(Ticket, UUID(deleted_ticket["id"]))
+        removed.deleted_at = datetime.now(UTC)
+        removed.deleted_by = admin.id
+        removed.delete_reason = "Synthetic test deletion"
+        handoffs = []
+        for version, direction, status, linked_ticket in (
+            (1, "SUKHUM", "AWAITING_REPORT", ticket),
+            (2, "SUKHUM", "AWAITING_REPORT", ticket),
+            (3, "SUKHUM", "REPORTED", ticket),
+            (4, "OCHAMCHIRA", "VERIFIED", ticket),
+            (1, "SUKHUM", "AWAITING_REPORT", hidden_response.json()),
+            (1, "SUKHUM", "AWAITING_REPORT", deleted_ticket),
+        ):
+            handoff = FieldWorkHandoff(
+                ticket_id=UUID(linked_ticket["id"]),
+                ticket_version=version,
+                reason="Synthetic field work",
+                delivery_status="SENT",
+                work_status=status,
+                chat_id="-100123456789" if direction == "SUKHUM" else "-100987654321",
+                direction=direction,
+                telegram_message_id=len(handoffs) + 1,
+                sent_at=datetime.now(UTC),
+                sent_by=admin.id,
+                created_by=admin.id,
+                reported_at=datetime.now(UTC) if status != "AWAITING_REPORT" else None,
+                verified_at=datetime.now(UTC) if status == "VERIFIED" else None,
+                verified_by=admin.id if status == "VERIFIED" else None,
+            )
+            db.add(handoff)
+            handoffs.append(handoff)
+        db.commit()
+        ids = [str(row.id) for row in handoffs]
+
+    auth_date = str(int(datetime.now(UTC).timestamp()))
+    fields = {"auth_date": auth_date, "user": json.dumps({"id": 12345})}
+    check = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    headers = {"X-Telegram-Init-Data": urlencode(fields)}
+    base = "/api/v1/field-work/miniapp"
+    assert ticket_client.get(f"{base}/me", headers=headers).json()["directions"] == ["SUKHUM"]
+    first = ticket_client.get(f"{base}/handoffs?queue=open&page_size=1", headers=headers)
+    assert first.status_code == 200
+    assert first.json()["total"] == 2
+    assert len(first.json()["items"]) == 1
+    second = ticket_client.get(f"{base}/handoffs?queue=open&page_size=1&page=2", headers=headers)
+    assert second.status_code == 200
+    assert first.json()["items"][0]["id"] != second.json()["items"][0]["id"]
+    assert (
+        ticket_client.get(f"{base}/handoffs?queue=completed", headers=headers).json()["total"] == 1
+    )
+    assert ticket_client.get(f"{base}/handoffs?queue=history", headers=headers).json()["total"] == 0
+    assert (
+        ticket_client.get(f"{base}/handoffs?direction=OCHAMCHIRA", headers=headers).status_code
+        == 403
+    )
+    assert ticket_client.get(f"{base}/handoffs/{ids[3]}", headers=headers).status_code == 404
+    assert ticket_client.get(f"{base}/handoffs/{ids[4]}", headers=headers).status_code == 404
+    assert ticket_client.get(f"{base}/handoffs/{ids[5]}", headers=headers).status_code == 404
+    detail = ticket_client.get(f"{base}/handoffs/{ids[0]}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["ticket_number"] == ticket["number"]
+    assert (
+        ticket_client.get(f"{base}/handoffs", headers={"X-Telegram-Init-Data": "bad"}).status_code
+        == 401
+    )
+
+    login(ticket_client, "miniapp_operator")
+    assert ticket_client.get("/api/v1/field-work/installers").status_code == 403
+    assert (
+        ticket_client.put(
+            f"/api/v1/field-work/installers/{installer['id']}",
+            headers=csrf(ticket_client),
+            json={
+                "telegram_user_id": 12345,
+                "name": "Synthetic Installer",
+                "is_active": False,
+                "directions": ["SUKHUM"],
+                "expected_updated_at": installer["updated_at"],
+            },
+        ).status_code
+        == 403
+    )
+    login(ticket_client, "miniapp_admin")
+    updated = ticket_client.put(
+        f"/api/v1/field-work/installers/{installer['id']}",
+        headers=csrf(ticket_client),
+        json={
+            "telegram_user_id": 12345,
+            "name": "Synthetic Installer",
+            "is_active": False,
+            "directions": ["SUKHUM"],
+            "expected_updated_at": installer["updated_at"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert (
+        ticket_client.put(
+            f"/api/v1/field-work/installers/{installer['id']}",
+            headers=csrf(ticket_client),
+            json={
+                "telegram_user_id": 12345,
+                "name": "Synthetic Installer",
+                "is_active": True,
+                "directions": ["SUKHUM"],
+                "expected_updated_at": installer["updated_at"],
+            },
+        ).status_code
+        == 409
+    )
+    assert ticket_client.get(f"{base}/handoffs", headers=headers).status_code == 403
 
 
 def test_soft_delete_own_scope_visibility_restore_and_security(

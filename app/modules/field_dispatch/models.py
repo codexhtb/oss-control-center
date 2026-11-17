@@ -137,6 +137,41 @@ class FieldWorkHandoff(Base):
     )
 
 
+class FieldInstaller(Base):
+    """Explicit Mini App allowlist; Telegram profile data never grants access."""
+
+    __tablename__ = "field_installers"
+    __table_args__ = (
+        CheckConstraint("telegram_user_id > 0", name="ck_field_installers_telegram_id"),
+        CheckConstraint("length(btrim(name)) > 0", name="ck_field_installers_name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldInstallerDirection(Base):
+    __tablename__ = "field_installer_directions"
+    __table_args__ = (
+        CheckConstraint("direction IN ('SUKHUM','OCHAMCHIRA')", name="ck_installer_direction"),
+    )
+
+    installer_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_installers.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    direction: Mapped[str] = mapped_column(String(16), primary_key=True)
+
+
 class FieldWorkDeliveryAttempt(Base):
     __tablename__ = "field_work_delivery_attempts"
     __table_args__ = (

@@ -361,3 +361,7 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 ## NEW_CONNECTION (миграция 0045)
 
 `POST /api/v1/tickets` принимает `ticket_type=NEW_CONNECTION`, `category_id` активной категории «Новое подключение» (включая существующую `is_other=true`), `caller_full_name`, `caller_phone`, `city`, `address_override`, `client_request_id`; `description` необязателен. Сервер устанавливает `subject=Новое подключение`, не требует уточнения категории, запрещает billing lookup и snapshots, сохраняет idempotency. `PATCH` разрешает контакт, адрес и комментарий с существующими правами/`If-Match`, но запрещает смену типа, темы и категории. `GET /api/v1/tickets?ticket_type=NEW_CONNECTION` возвращает отдельный фильтр и total; старые ручные заявки остаются ручными.
+
+# OSS Field Work Mini App
+
+Контракт авторизации, реестра и очередей этапа 1: [oss-field-work-phase1.md](oss-field-work-phase1.md).

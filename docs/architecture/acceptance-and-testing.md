@@ -466,3 +466,7 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 ## NEW_CONNECTION
 
 Проверять создание с обязательными ФИО, телефоном, городом и адресом без NetUP и описания; повтор с тем же request ID; отказ при потере контакта или попытке сменить тип, тему/категорию; отдельный фильтр и total; Telegram preview и mock-отправку в оба направления; отдельные показатели PDF/Excel без смешения с `MANUAL`; upgrade `0045` на восстановленной изолированной копии с неизменными количествами заявок, истории и выездов.
+
+# OSS Field Work Mini App
+
+Критерии доступа и очереди этапа 1: [oss-field-work-phase1.md](oss-field-work-phase1.md).
