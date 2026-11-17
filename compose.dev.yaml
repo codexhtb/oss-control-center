@@ -76,7 +76,7 @@ services:
       - ./.dev-secrets/certs/sd.oss-ab.net.fullchain.crt:/run/domain-tls/fullchain.crt:ro
       - ./.dev-secrets/certs/sd.oss-ab.net.key:/run/domain-tls/private.key:ro
     ports:
-      - "0.0.0.0:8443:8443"
+      - "172.17.7.2:8443:8443"
       - "0.0.0.0:443:443"
     networks:
       - backend
