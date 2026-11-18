@@ -1,5 +1,6 @@
 import { Fingerprint } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import type { MeResponse } from '../shared/api/types'
 import { Panel } from '../shared/ui/Panel'
 import { roleLabel } from '../layout/AppShell'
@@ -10,16 +11,12 @@ import { Notice } from '../shared/ui/Notice'
 import { PasswordInput } from '../shared/ui/PasswordInput'
 import { EffectsToggle } from '../shared/ui/EffectsToggle'
 
-export function AccountPage({ session, onPasswordChanged }: { session: MeResponse; onPasswordChanged: () => void }) {
-  const [current, setCurrent] = useState('')
-  const [next, setNext] = useState('')
-  const [repeat, setRepeat] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<unknown>(null)
+function FieldWorkAccountPanel() {
   const [fieldCode, setFieldCode] = useState('')
   const [fieldError, setFieldError] = useState<unknown>(null)
   const [fieldBusy, setFieldBusy] = useState(false)
-
+  const fieldAccess = useQuery({ queryKey: ['field-work-own-access'], queryFn: () =>
+    apiRequest<{ telegram_user_id: number | null; is_enabled: boolean; link_code_active: boolean }>('/api/v1/field-work/staff-access/me') })
   async function requestFieldCode() {
     setFieldBusy(true); setFieldError(null); setFieldCode('')
     try {
@@ -28,6 +25,15 @@ export function AccountPage({ session, onPasswordChanged }: { session: MeRespons
     } catch (cause) { setFieldError(cause) }
     finally { setFieldBusy(false) }
   }
+  return <Panel className="account-effects"><h2>OSS Field Work в Telegram</h2>{fieldAccess.data?.telegram_user_id ? <><p>Telegram подтверждён: {fieldAccess.data.telegram_user_id}</p><p className="muted">Отвязать аккаунт может другой администратор в карточке сотрудника.</p></> : <><p className="muted">Администратор сначала включает доступ и направления в карточке сотрудника. Затем получите код и введите его в Mini App. Код действует 10 минут и используется один раз.</p><Button disabled={fieldBusy || !fieldAccess.data?.is_enabled} onClick={() => void requestFieldCode()}>{fieldBusy ? 'Создаём код…' : fieldAccess.data?.link_code_active ? 'Выпустить новый код' : 'Получить код привязки'}</Button></>}{fieldError !== null && <Notice tone="error">{errorText(fieldError)}</Notice>}{fieldCode && <p role="status">Код для Mini App: <code>{fieldCode}</code></p>}</Panel>
+}
+
+export function AccountPage({ session, onPasswordChanged }: { session: MeResponse; onPasswordChanged: () => void }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [repeat, setRepeat] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -65,7 +71,7 @@ export function AccountPage({ session, onPasswordChanged }: { session: MeRespons
       </Panel>
       </div>
       <Panel className="account-effects"><h2>Отображение</h2><EffectsToggle /></Panel>
-      {session.user.role !== 'operator' && <Panel className="account-effects"><h2>OSS Field Work в Telegram</h2><p className="muted">Администратор сначала включает доступ и направления в карточке сотрудника. Затем получите код и введите его в Mini App. Код действует 10 минут и используется один раз.</p><Button disabled={fieldBusy} onClick={() => void requestFieldCode()}>{fieldBusy ? 'Создаём код…' : 'Получить код привязки'}</Button>{fieldError !== null && <Notice tone="error">{errorText(fieldError)}</Notice>}{fieldCode && <p role="status">Код для Mini App: <code>{fieldCode}</code></p>}</Panel>}
+      {session.user.role !== 'operator' && <FieldWorkAccountPanel />}
     </div>
   )
 }

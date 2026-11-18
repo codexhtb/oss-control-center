@@ -16,6 +16,7 @@ export type Permission =
   | 'tickets.start'
   | 'tickets.assign'
   | 'tickets.field_work'
+  | 'field_work.perform'
   | 'tickets.diagnose'
   | 'diagnostics.run'
   | 'diagnostics.read'

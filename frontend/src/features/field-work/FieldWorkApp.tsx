@@ -54,7 +54,11 @@ export function FieldWorkApp() {
   const [directions, setDirections] = useState<Direction[]>([])
   const [principalKind, setPrincipalKind] = useState<'installer' | 'staff'>('installer')
   const [canVerify, setCanVerify] = useState(false)
+  const [canPerform, setCanPerform] = useState(false)
+  const [staffRole, setStaffRole] = useState('')
   const [linkRequired, setLinkRequired] = useState(false)
+  const [showStaffLink, setShowStaffLink] = useState(false)
+  const [accessRequested, setAccessRequested] = useState(false)
   const [linkCode, setLinkCode] = useState('')
   const [direction, setDirection] = useState<Direction | 'all'>('all')
   const [tab, setTab] = useState<QueueTab>('open')
@@ -100,8 +104,8 @@ export function FieldWorkApp() {
           return
         }
         try {
-          const value = await fieldWorkRequest<{ name: string; directions: Direction[]; can_verify: boolean }>(initData, '/staff/me')
-          if (alive) { setName(value.name); setDirections(value.directions); setPrincipalKind('staff'); setCanVerify(value.can_verify) }
+          const value = await fieldWorkRequest<{ name: string; directions: Direction[]; can_verify: boolean; can_perform: boolean; role: string }>(initData, '/staff/me')
+          if (alive) { setName(value.name); setDirections(value.directions); setPrincipalKind('staff'); setCanVerify(value.can_verify); setCanPerform(value.can_perform); setStaffRole(value.role) }
         } catch (staffError) {
           if (alive) {
             if (staffError instanceof FieldWorkError && staffError.status === 403) setLinkRequired(true)
@@ -120,9 +124,19 @@ export function FieldWorkApp() {
     try {
       const value = await fieldWorkRequest<{ name: string; directions: Direction[]; can_verify?: boolean }>(initData, '/link-staff', { code: linkCode.trim() })
       setName(value.name); setDirections(value.directions); setPrincipalKind('staff')
-      const me = await fieldWorkRequest<{ can_verify: boolean }>(initData, '/staff/me')
-      setCanVerify(me.can_verify); setLinkRequired(false); setLinkCode('')
+      const me = await fieldWorkRequest<{ can_verify: boolean; can_perform: boolean; role: string }>(initData, '/staff/me')
+      setCanVerify(me.can_verify); setCanPerform(me.can_perform); setStaffRole(me.role); setLinkRequired(false); setLinkCode('')
     } catch (cause) { setAuthError(cause instanceof Error ? cause.message : 'Не удалось привязать Telegram') }
+    finally { setSaving(false) }
+  }
+
+  async function requestAccess() {
+    if (!initData || saving) return
+    setSaving(true); setAuthError('')
+    try {
+      await fieldWorkRequest(initData, '/access-request', {})
+      setAccessRequested(true)
+    } catch (cause) { setAuthError(cause instanceof Error ? cause.message : 'Не удалось отправить запрос') }
     finally { setSaving(false) }
   }
 
@@ -150,8 +164,8 @@ export function FieldWorkApp() {
         fieldWorkRequest<Page<Reschedule>>(initData, apiPath(`/handoffs/${id}/reschedules?page_size=20`)),
       ])
       setSelected(detail); setHistory(reschedules.items); setHistoryPage(reschedules)
-      if (principalKind === 'installer' && detail.work_status === 'AWAITING_REPORT') {
-        const value = await fieldWorkRequest<{ items: Partner[] }>(initData, `/partners?direction=${detail.direction}`)
+      if ((principalKind === 'installer' || canPerform) && detail.work_status === 'AWAITING_REPORT') {
+        const value = await fieldWorkRequest<{ items: Partner[] }>(initData, apiPath(`/partners?direction=${detail.direction}`))
         setPartners(value.items)
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Ошибка загрузки') }
@@ -162,8 +176,9 @@ export function FieldWorkApp() {
     const id = requestId || crypto.randomUUID()
     setRequestId(id); setSaving(true); setError('')
     try {
-      await fieldWorkRequest(initData, `/handoffs/${selected.id}/report`, {
-        client_request_id: id, partner_installer_id: partnerId || null, work_text: workText.trim(),
+      const partner = partners.find((item) => item.id === partnerId)
+      await fieldWorkRequest(initData, apiPath(`/handoffs/${selected.id}/report`), {
+        client_request_id: id, partner_id: partner?.id || null, partner_kind: partner?.kind || null, work_text: workText.trim(),
       })
       setSelected(null); setWorkText(''); setPartnerId(''); setRequestId(''); setMode('view')
       setTab('completed'); setItems([]); setPage(null)
@@ -175,7 +190,7 @@ export function FieldWorkApp() {
     if (!selected || !scheduleReason.trim() || saving) return
     setSaving(true); setError('')
     try {
-      await fieldWorkRequest(initData, `/handoffs/${selected.id}/reschedules`, {
+      await fieldWorkRequest(initData, apiPath(`/handoffs/${selected.id}/reschedules`), {
         reason: scheduleReason.trim(), expected_version: selected.schedule_version,
         scheduled_for: scheduleDate && scheduleTime ? `${scheduleDate}T${scheduleTime}:00+03:00` : null,
         scheduled_date: scheduleDate && !scheduleTime ? scheduleDate : null,
@@ -209,9 +224,9 @@ export function FieldWorkApp() {
       <header className="fw-header">
         <div className="fw-logo">OSS<span>●</span></div>
         <div><p className="fw-kicker">FIELD WORK</p><h1>Выездные работы</h1></div>
-        {name && <span className="fw-user">{name}</span>}
+        {name && <span className="fw-user">{name}{principalKind === 'staff' ? ` · ${staffRole === 'admin' ? 'администратор' : 'инженер'}` : ' · монтажник'}</span>}
       </header>
-      {linkRequired && !directions.length ? <div className="fw-form"><h2>Привязать сотрудника OCC</h2><p>Получите одноразовый код в разделе «Мой профиль» портала OCC и введите его здесь.</p><label>Код привязки<input value={linkCode} onChange={(event) => setLinkCode(event.target.value)} autoComplete="off" /></label><button className="fw-primary" disabled={saving || !linkCode.trim()} onClick={() => void linkStaff()}>Привязать Telegram</button>{authError && <div className="fw-message fw-error" role="alert">{authError}</div>}</div> : authError ? <div className="fw-state fw-error" role="alert">{authError}</div> : !directions.length ? <div className="fw-state" role="status"><LoaderCircle className="fw-spin" /> Проверяем доступ…</div> : <>
+      {linkRequired && !directions.length ? <div className="fw-form"><h2>{accessRequested ? 'Запрос отправлен' : 'Доступ не предоставлен'}</h2><p>{accessRequested ? 'Администратор проверит запрос и выберет направления.' : 'Отправьте запрос администратору OSS. Доступ не выдаётся автоматически.'}</p>{!accessRequested && <button className="fw-primary" disabled={saving} onClick={() => void requestAccess()}>Запросить доступ</button>}<button className="fw-secondary" onClick={() => setShowStaffLink((value) => !value)}>Я сотрудник OCC</button>{showStaffLink && <><p>Получите одноразовый код в разделе «Мой профиль» портала OCC.</p><label>Код привязки<input value={linkCode} onChange={(event) => setLinkCode(event.target.value)} autoComplete="off" /></label><button className="fw-primary" disabled={saving || !linkCode.trim()} onClick={() => void linkStaff()}>Привязать Telegram</button></>}{authError && <div className="fw-message fw-error" role="alert">{authError}</div>}</div> : authError ? <div className="fw-state fw-error" role="alert">{authError}</div> : !directions.length ? <div className="fw-state" role="status"><LoaderCircle className="fw-spin" /> Проверяем доступ…</div> : <>
         {!selected ? <>
           <div className="fw-filters">
             {directions.length > 1 && <select aria-label="Направление" value={direction} onChange={(event) => setDirection(event.target.value as Direction | 'all')}>
@@ -253,7 +268,7 @@ export function FieldWorkApp() {
               {selected.address && <button className="fw-action" onClick={() => void copyAddress()}><Clipboard size={18} /> Копировать адрес</button>}
             </div>
             {selected.report && <div className="fw-report"><h3>Отчёт о работе</h3><p>{selected.report.text}</p><small>{selected.report.installer}{selected.report.partner ? ` · вместе с ${selected.report.partner}` : ''} · {formatDate(selected.report.reported_at)}</small></div>}
-            {principalKind === 'installer' && selected.work_status === 'AWAITING_REPORT' && mode === 'view' && <div className="fw-primary-actions"><button className="fw-primary" onClick={() => setMode('report')}><Check size={18} /> Завершить работу</button><button className="fw-secondary" onClick={() => setMode('reschedule')}><CalendarDays size={18} /> Перенести</button></div>}
+            {(principalKind === 'installer' || canPerform) && selected.work_status === 'AWAITING_REPORT' && mode === 'view' && <div className="fw-primary-actions"><button className="fw-primary" onClick={() => setMode('report')}><Check size={18} /> Выполнить работу</button><button className="fw-secondary" onClick={() => setMode('reschedule')}><CalendarDays size={18} /> Перенести</button></div>}
             {principalKind === 'staff' && canVerify && selected.work_status === 'REPORTED' && <button className="fw-primary" disabled={saving} onClick={() => { setSaving(true); void fieldWorkRequest(initData, apiPath(`/handoffs/${selected.id}/verify`), {}).then(() => { setSelected(null); setTab('history'); setItems([]); setPage(null) }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Не удалось подтвердить работу')).finally(() => setSaving(false)) }}><Check size={18} /> Подтвердить работу</button>}
             {selected.work_status === 'AWAITING_REPORT' && mode === 'report' && <div className="fw-form"><h3>Завершение работы</h3><label>Работали вместе <span>необязательно</span><select value={partnerId} onChange={(event) => { setPartnerId(event.target.value); setRequestId('') }}><option value="">Без напарника</option>{partners.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}</select></label><label>Что было сделано<textarea value={workText} maxLength={4000} rows={5} onChange={(event) => { setWorkText(event.target.value); setRequestId('') }} placeholder="Опишите выполненные работы" /></label><div className="fw-form__buttons"><button className="fw-secondary" onClick={() => setMode('view')}>Отмена</button><button className="fw-primary" disabled={saving || !workText.trim()} onClick={() => void complete()}>{saving ? 'Сохраняем…' : 'Отправить отчёт'}</button></div></div>}
             {selected.work_status === 'AWAITING_REPORT' && mode === 'reschedule' && <div className="fw-form"><h3>Перенос выезда</h3><label>Причина переноса<textarea value={scheduleReason} maxLength={2000} rows={3} onChange={(event) => setScheduleReason(event.target.value)} placeholder="Почему переносится выезд?" /></label><label>Новая дата <span>оставьте пустой, если не согласована</span><input type="date" value={scheduleDate} onChange={(event) => { setScheduleDate(event.target.value); if (!event.target.value) setScheduleTime('') }} /></label>{scheduleDate && <label>Время <span>необязательно</span><input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} /></label>}<div className="fw-form__buttons"><button className="fw-secondary" onClick={() => setMode('view')}>Отмена</button><button className="fw-primary" disabled={saving || !scheduleReason.trim()} onClick={() => void reschedule()}>{saving ? 'Сохраняем…' : 'Сохранить перенос'}</button></div></div>}

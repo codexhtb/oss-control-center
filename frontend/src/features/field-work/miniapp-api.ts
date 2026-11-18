@@ -40,7 +40,7 @@ export type Reschedule = {
 }
 
 export type Page<T> = { items: T[]; total: number; page: number; page_size: number }
-export type Partner = { id: string; name: string }
+export type Partner = { id: string; name: string; kind: 'installer' | 'staff' }
 
 export class FieldWorkError extends Error {
   constructor(message: string, readonly status: number) { super(message) }
@@ -61,6 +61,9 @@ export async function fieldWorkRequest<T>(initData: string, path: string, body?:
     const payload = await response.json().catch(() => ({})) as { code?: string }
     const message = payload.code === 'invalid_link_code' ? 'Код неверный или срок его действия истёк.'
       : payload.code === 'telegram_identity_conflict' ? 'Этот Telegram уже зарегистрирован как монтажник или привязан к сотруднику.'
+      : payload.code === 'self_verification_forbidden' ? 'Собственный отчёт должен подтвердить другой инженер.'
+      : payload.code === 'access_request_rate_limited' ? 'Запрос уже недавно отправлялся. Попробуйте позднее.'
+      : payload.code === 'field_work_perform_forbidden' ? 'Нет разрешения на выполнение выездов.'
       : response.status === 401 ? 'Сессия Telegram истекла. Откройте приложение заново.'
       : response.status === 403 ? 'Доступ к этому направлению не предоставлен.'
       : response.status === 409 ? 'Задание уже изменилось. Обновите данные.'

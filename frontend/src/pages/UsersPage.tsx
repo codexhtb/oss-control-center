@@ -37,7 +37,10 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
     { key: 'diagnostics.read', label: 'Результаты диагностики' },
     { key: 'diagnostics.run', label: 'Запуск диагностики' },
   ] },
-  { title: 'Выездные работы', values: [{ key: 'tickets.field_work', label: 'Подготовка и проверка выездов' }] },
+  { title: 'Выездные работы', values: [
+    { key: 'tickets.field_work', label: 'Подготовка и проверка выездов' },
+    { key: 'field_work.perform', label: 'Выполнение выездов через Mini App' },
+  ] },
   { title: 'Отчёты', values: [{ key: 'reports.read', label: 'Просмотр отчётов Service Desk' }] },
   { title: 'Управление пользователями', values: [
     { key: 'users.read', label: 'Просмотр сотрудников' }, { key: 'users.manage', label: 'Управление сотрудниками' },
@@ -51,7 +54,7 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
 
 const presets: Record<Role, Permission[]> = {
   operator: ['subscribers.read', 'subscribers.finance.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.own', 'tickets.comment', 'diagnostics.read'],
-  engineer: ['subscribers.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.all', 'tickets.comment', 'tickets.start', 'tickets.assign', 'tickets.field_work', 'tickets.diagnose', 'diagnostics.read', 'diagnostics.run', 'tickets.resolve', 'tickets.close', 'audit.read', 'reports.read', 'tasks.create', 'tasks.execute'],
+  engineer: ['subscribers.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.all', 'tickets.comment', 'tickets.start', 'tickets.assign', 'tickets.field_work', 'field_work.perform', 'tickets.diagnose', 'diagnostics.read', 'diagnostics.run', 'tickets.resolve', 'tickets.close', 'audit.read', 'reports.read', 'tasks.create', 'tasks.execute'],
   admin: permissionGroups.flatMap((group) => group.values.map((entry) => entry.key)),
 }
 

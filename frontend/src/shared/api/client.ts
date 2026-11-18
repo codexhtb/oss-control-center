@@ -114,6 +114,8 @@ export function errorText(error: unknown): string {
           case 'builtin_reason': return 'Предустановленную причину нельзя удалить.'
           case 'reason_unavailable': return 'Причина отключена или удалена. Выберите другую.'
           case 'installer_has_history': return 'Монтажник связан с историей работ. Его можно отключить, но нельзя удалить.'
+          case 'telegram_identity_conflict': return 'Telegram уже используется другой активной учётной записью Field Work.'
+          case 'access_request_resolved': return 'Запрос уже обработан другим администратором.'
           case 'report_changed': return 'Данные отчёта изменились во время формирования. Повторите выгрузку.'
           default: return 'Данные изменились. Обновите страницу и повторите действие.'
         }

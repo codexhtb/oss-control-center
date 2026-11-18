@@ -5,7 +5,7 @@ import { Button } from '../../shared/ui/Button'
 import { Notice } from '../../shared/ui/Notice'
 import type { Direction } from './miniapp-api'
 
-type Access = { user_id: string; telegram_user_id: number | null; is_enabled: boolean; directions: Direction[]; updated_at: string | null }
+type Access = { user_id: string; telegram_user_id: number | null; is_enabled: boolean; directions: Direction[]; updated_at: string | null; linked_at: string | null; link_code_active: boolean; events: { action: string; occurred_at: string }[] }
 
 export function StaffAccessEditor({ userId, readOnly = false }: { userId: string; readOnly?: boolean }) {
   const queryClient = useQueryClient()
@@ -42,16 +42,29 @@ export function StaffAccessEditor({ userId, readOnly = false }: { userId: string
     } catch (cause) { setError(cause) }
     finally { setBusy(false) }
   }
+  async function revokeCodes() {
+    if (busy) return
+    setBusy(true); setError(null)
+    try {
+      await apiRequest(`/api/v1/field-work/staff-access/${userId}/revoke-codes`, { method: 'POST' })
+      await queryClient.invalidateQueries({ queryKey: ['field-work-staff-access', userId] })
+      setMessage('Действующие коды привязки отозваны.')
+    } catch (cause) { setError(cause) }
+    finally { setBusy(false) }
+  }
   return <section className="employee-editor__form" aria-label="Доступ сотрудника к Field Work">
     <h3>OSS Field Work</h3>
     {access.isPending ? <p role="status">Загружаем доступ…</p> : access.isError ? <Notice tone="error">{errorText(access.error)}</Notice> : <>
       <p>Telegram ID: {access.data?.telegram_user_id ?? 'не привязан'}</p>
+      <p>Статус привязки: {access.data?.telegram_user_id ? 'подтверждена' : access.data?.link_code_active ? 'ожидает подтверждения' : 'не привязана'}</p>
+      {access.data?.linked_at && <p className="muted">Последняя привязка: {new Date(access.data.linked_at).toLocaleString('ru-RU')}</p>}
       <p className="muted">Сотрудник подтверждает свой Telegram через одноразовый код в профиле OCC.</p>
       {readOnly && <p className="muted">Свой доступ изменяет другой администратор.</p>}
       <label><input type="checkbox" disabled={readOnly} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Доступ включён</label>
       <div className="user-actions"><label><input type="checkbox" disabled={readOnly} checked={directions.includes('SUKHUM')} onChange={() => toggle('SUKHUM')} /> Сухум</label><label><input type="checkbox" disabled={readOnly} checked={directions.includes('OCHAMCHIRA')} onChange={() => toggle('OCHAMCHIRA')} /> Очамчира</label></div>
-      {!readOnly && <div className="user-actions"><Button disabled={busy || (enabled && !directions.length)} onClick={() => void save()}>Сохранить доступ</Button>{access.data?.telegram_user_id && <Button variant="quiet" disabled={busy} onClick={() => confirmUnlink ? void unlink() : setConfirmUnlink(true)}>{confirmUnlink ? 'Подтвердить отвязку' : 'Отвязать Telegram'}</Button>}</div>}
+      {!readOnly && <div className="user-actions"><Button disabled={busy || (enabled && !directions.length)} onClick={() => void save()}>Сохранить доступ</Button>{access.data?.telegram_user_id && <Button variant="quiet" disabled={busy} onClick={() => confirmUnlink ? void unlink() : setConfirmUnlink(true)}>{confirmUnlink ? 'Подтвердить отвязку' : 'Отвязать Telegram'}</Button>}{access.data?.link_code_active && <Button variant="quiet" disabled={busy} onClick={() => void revokeCodes()}>Отозвать код</Button>}</div>}
       {confirmUnlink && <Button variant="quiet" onClick={() => setConfirmUnlink(false)}>Отмена</Button>}
+      {!!access.data?.events.length && <details><summary>Последние изменения Field Work</summary><ul>{access.data.events.map((event, index) => <li key={`${event.action}-${index}`}>{event.action} · {new Date(event.occurred_at).toLocaleString('ru-RU')}</li>)}</ul></details>}
     </>}
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}{message && <Notice>{message}</Notice>}
   </section>

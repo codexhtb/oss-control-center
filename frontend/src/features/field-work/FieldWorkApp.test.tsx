@@ -26,7 +26,7 @@ it('loads the shared queue, detail and submits one structured report', async () 
     requests.push({ path, options })
     let body: unknown
     if (path.endsWith('/me')) body = { name: 'Монтажник', directions: ['SUKHUM'] }
-    else if (path.includes('/partners')) body = { items: [{ id: partnerId, name: 'Напарник' }] }
+    else if (path.includes('/partners')) body = { items: [{ id: partnerId, name: 'Напарник', kind: 'installer' }] }
     else if (path.includes('/reschedules')) body = { items: [], total: 0, page: 1, page_size: 20 }
     else if (path.endsWith('/report')) { reported = true; body = { handoff_id: id, work_status: 'REPORTED', report_id: 'report' } }
     else if (path.endsWith(`/${id}`)) body = { ...handoff, reason: 'Проверить линию',
@@ -41,7 +41,7 @@ it('loads the shared queue, detail and submits one structured report', async () 
   fireEvent.click(screen.getByRole('button', { name: /Заявка №201/ }))
   expect(await screen.findByText('Проверить линию')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Позвонить/ })).toHaveAttribute('href', 'tel:+79001112233')
-  fireEvent.click(screen.getByRole('button', { name: /Завершить работу/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Выполнить работу/ }))
   fireEvent.change(screen.getByLabelText(/Работали вместе/), { target: { value: partnerId } })
   fireEvent.change(screen.getByLabelText('Что было сделано'), { target: { value: 'Линия восстановлена' } })
   fireEvent.click(screen.getByRole('button', { name: 'Отправить отчёт' }))
@@ -49,7 +49,7 @@ it('loads the shared queue, detail and submits one structured report', async () 
   const report = requests.find((item) => item.path.endsWith('/report'))
   expect(report?.options?.headers).toMatchObject({ 'X-Telegram-Init-Data': 'signed-test-init-data' })
   expect(JSON.parse(report?.options?.body as string)).toMatchObject({
-    partner_installer_id: partnerId, work_text: 'Линия восстановлена',
+    partner_id: partnerId, partner_kind: 'installer', work_text: 'Линия восстановлена',
   })
   expect(report?.options?.credentials).toBe('omit')
   await waitFor(() => expect(screen.getByRole('button', { name: 'Завершённые' })).toHaveClass('active'))
@@ -72,6 +72,22 @@ it('blocks access outside Telegram without calling the queue API', async () => {
   vi.restoreAllMocks()
 })
 
+it('lets an unknown Telegram user request installer access without automatic approval', async () => {
+  const requests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    requests.push(path)
+    if (path.endsWith('/me') || path.endsWith('/staff/me')) {
+      return { ok: false, status: 403, json: async () => ({ code: 'installer_forbidden' }) } as Response
+    }
+    return { ok: true, status: 201, json: async () => ({ id: 'request', status: 'PENDING' }) } as Response
+  }))
+  render(<FieldWorkApp />)
+  expect(await screen.findByText('Доступ не предоставлен')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Запросить доступ' }))
+  expect(await screen.findByText('Запрос отправлен')).toBeInTheDocument()
+  expect(requests.some((path) => path.endsWith('/access-request'))).toBe(true)
+})
+
 it('links verified OCC staff and allows verification without installer report actions', async () => {
   let linked = false
   const requests: string[] = []
@@ -81,7 +97,7 @@ it('links verified OCC staff and allows verification without installer report ac
     if (path.endsWith('/staff/me') && !linked) return { ok: false, status: 403, json: async () => ({ code: 'staff_forbidden' }) } as Response
     let body: unknown
     if (path.endsWith('/link-staff')) { linked = true; body = { name: 'Инженер', directions: ['SUKHUM'], kind: 'staff' } }
-    else if (path.endsWith('/staff/me')) body = { name: 'Инженер', directions: ['SUKHUM'], can_verify: true }
+    else if (path.endsWith('/staff/me')) body = { name: 'Инженер', directions: ['SUKHUM'], can_verify: true, can_perform: false, role: 'engineer' }
     else if (path.includes('/reschedules')) body = { items: [], total: 0, page: 1, page_size: 20 }
     else if (path.endsWith('/verify')) body = { handoff_id: id, work_status: 'VERIFIED' }
     else if (path.endsWith(`/${id}`)) body = { ...handoff, work_status: 'REPORTED', reason: 'Проверить линию', name: 'Абонент', phone: null, city: 'Сухум', address: null, account_no: null, schedule_version: 0, schedule_reason: null, schedule_author: null, report: { text: 'Линия восстановлена', installer: 'Монтажник', partner: null, reported_at: '2026-11-17T08:00:00Z' } }
@@ -89,7 +105,8 @@ it('links verified OCC staff and allows verification without installer report ac
     return { ok: true, status: 200, json: async () => body } as Response
   }))
   render(<FieldWorkApp />)
-  expect(await screen.findByText('Привязать сотрудника OCC')).toBeInTheDocument()
+  expect(await screen.findByText('Доступ не предоставлен')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Я сотрудник OCC' }))
   fireEvent.change(screen.getByLabelText('Код привязки'), { target: { value: 'synthetic-code-123456' } })
   fireEvent.click(screen.getByRole('button', { name: 'Привязать Telegram' }))
   expect(await screen.findByText('Заявка №201')).toBeInTheDocument()
