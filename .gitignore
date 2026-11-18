@@ -10,4 +10,37 @@ __pycache__/
 .venv/
 *.egg-info/
 *.dump
+*.pgdump
 *.sql.gz
+
+# Frontend dependencies and generated build output
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+.vite/
+
+# Local tooling, logs, test output, and operator-created backups
+.mypy_cache/
+.cache/
+*.log
+*.coverage
+.coverage
+.coverage.*
+*.bak
+*.backup
+backups/
+.backups/
+playwright-report/
+test-results/
+screenshots/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

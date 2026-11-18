@@ -1,42 +1,22 @@
 # Документация OSS Control Center
 
-**Актуальный навигационный индекс (17.10.2026).** Документы сгруппированы по назначению. Не все материалы имеют одинаковый статус: `CURRENT` означает сверку с кодом OSS на `main` (`8b7a1ea`), `HISTORICAL` — фиксацию старой фазы, `RUNBOOK` — процедуру для конкретного окружения, которую перед выполнением сверяют с настройками этого окружения.
+## Навигация
 
-## С чего читать
+1. [README проекта](../README.md) — назначение, функции, стек и быстрый вход.
+2. [Архитектура](architecture/README.md) — Compose, БД и границы интеграций.
+3. [Документы модулей](modules/README.md) — API, хранение, RBAC, workflow и ограничения.
+4. [Эксплуатация](operations/README.md) — безопасные проверки, backup, migrations и интеграции.
+5. [ADR](adr/README.md) — решения, подтверждённые текущим кодом.
+6. [Архив](archive/README.md) — исторические фазы, старые контракты и runbooks.
+7. [CONTRIBUTING](../CONTRIBUTING.md) и [AGENTS](../AGENTS.md) — процесс изменений.
 
-1. [Текущая архитектура](architecture/current-system.md) — что где работает и как проходит заявка.
-2. [NetUP Provider](integrations/netup.md) — чтение биллинга, snapshots, данные с конфликтами.
-3. [LibreNMS / BDCOM](integrations/librenms-bdcom.md) — сбор ONU, оптика, корреляция с NetUP и доступ из OSS.
-4. [Карта восстановления](operations/recovery-map.md) — граница GitHub/серверы/секреты/БД.
+## Статус источников
 
-## Эксплуатационные runbooks
+- Текущие страницы сверены с `main` на 2026-11-18; они описывают код, а не гарантируют доступность runtime.
+- `docs/archive/` содержит фазовые планы и снимки прошлого. Это не текущая эксплуатационная инструкция.
+- Остаточные NetUP discovery/research материалы вне нового индекса не являются подтверждением production конфигурации; проверяйте у владельца интеграции. Некоторые локальные исследовательские файлы не входят в tracked Git и намеренно не редактировались в рамках этого изменения.
+- Непроверенные факты в текущих страницах помечаются `UNVERIFIED` вместе с безопасным способом подтверждения.
 
-| Тема | Документ | Статус |
-| --- | --- | --- |
-| Изолированный Compose dev / HTTPS | [dev-lab](operations/dev-lab.md) | RUNBOOK, содержит исторические этапы |
-| BDCOM SQL read-only + SSH tunnel | [bdcom-onu-readonly](operations/bdcom-onu-readonly.md) | RUNBOOK |
-| Telegram field dispatch T1 | [telegram-field-dispatch](operations/telegram-field-dispatch.md) | RUNBOOK |
-| Хранение секретов | [secret-management](operations/secret-management.md) | RUNBOOK |
-| Backups / зависимости | [recovery-map](operations/recovery-map.md) | CURRENT: инвентаризация, не автоинсталлятор |
+## Как поддерживать
 
-## Глубокие контракты
-
-- [API](architecture/api-contracts.md); [модель данных](architecture/data-model.md).
-- [RBAC](architecture/rbac.md); [контрольный обзвон Phase 5.7](architecture/phase-5.7-callback.md).
-- [Упрощённая карточка и причины решения Phase 5.8](architecture/phase-5.8-simplified-ticket-ui.md).
-- [Диагностика и ограничения измерений](architecture/oss-diagnostics.md).
-- [NetUP relationships](netup/relationships.md), [provider-data-limitations](netup/provider-data-limitations.md), [provider deployment](netup/provider-deployment.md), [SQL discovery](netup/sql/).
-
-## Как отличать факты от планов
-
-- **Реализовано**: только то, что подтверждается текущим исходным кодом/тестами или предоставленным выводом реально работающего сервиса.
-- **Dev/LAB**: интеграция может работать, но не является production-интеграцией.
-- **Не подключено**: код или схема существует, но runtime-соединение не настроено (например, Icinga).
-- **План**: Telegram T2, редактирование шаблонов, production NetUP и дополнительные аналитические возможности.
-- **Исторический источник**: большой LibreNMS + BDCOM Full Documentation/Runbook от **14.09.2026** описывает старое проверенное состояние и SNMP-логику, но сам файл не импортирован в GitHub без проверки чувствительных данных и сверки с живыми скриптами.
-
-Файлы в `docs/architecture/` с именами `phase-*`, `review`, `roadmap`, `system-architecture.md` и прежний `architecture/README.md` сохраняются как архитектурная история. Их будущие обещания и ранние workflows не отменяют состояние, описанное в `current-system.md`.
-
-## Поддержание актуальности
-
-При изменении API, миграций, структуры данных, collector OID, mapping rules, таймеров или recovery-процедур обновлять соответствующие страницы вместе с кодом. Для внешних компонентов фиксировать дату проверки, origin (live service / code / historical report), номер/хеш исходника и ограничения. В Git не хранить секреты и subscriber PII.
+Изменили API, модель данных, permission, workflow или эксплуатацию — обновите соответствующие `docs/modules/`, `docs/architecture/` или `docs/operations/` страницы в том же pull request. Не обновляйте историю как будто старые документы были текущей системой: сохраняйте их в archive с `HISTORICAL`.
