@@ -1,6 +1,7 @@
 """Shared report transition for Telegram replies and installer Mini App."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ def record_completed_work(
     report: FieldExternalMessage,
     *,
     reported_at: datetime,
+    actor_id: UUID | None = None,
 ) -> None:
     """Append the report, notify engineers and update only the handoff state.
 
@@ -39,7 +41,7 @@ def record_completed_work(
         TicketEvent(
             ticket_id=handoff.ticket_id,
             event_type="field_work_reported",
-            actor_id=None,
+            actor_id=actor_id,
             event_data={"handoff_id": str(handoff.id), "message_kind": report.kind},
             ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
         )
@@ -47,7 +49,7 @@ def record_completed_work(
     db.add(
         TicketAudit(
             ticket_id=handoff.ticket_id,
-            actor_id=None,
+            actor_id=actor_id,
             action="field_work_reported",
             outcome="success",
             origin="SYSTEM",

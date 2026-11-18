@@ -7,12 +7,21 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.api.v1.field_work_miniapp import handoff_detail, queue_handoffs, reschedule_history
+from app.api.v1.field_work_miniapp import (
+    CompleteWork,
+    MiniappReschedule,
+    _mutable_handoff,
+    complete_handoff_as_staff,
+    handoff_detail,
+    queue_handoffs,
+    reschedule_history,
+)
 from app.api.v1.identity import (
     CsrfIdentityDep,
+    CurrentIdentityDep,
     SessionDep,
     require_permission,
     require_read_permission,
@@ -20,16 +29,20 @@ from app.api.v1.identity import (
 from app.core.errors import ApiError
 from app.modules.field_dispatch.miniapp_auth import configured_bot_token, verify_init_data
 from app.modules.field_dispatch.models import (
+    FieldExternalMessage,
     FieldInstaller,
+    FieldInstallerDirection,
     FieldWorkHandoff,
     FieldWorkStaffAccess,
     FieldWorkStaffDirection,
     FieldWorkStaffLinkCode,
 )
+from app.modules.field_dispatch.reschedule_dialog import active_dialog
+from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
 from app.modules.field_dispatch.service import verify_handoff
 from app.modules.identity.access import has_permission
 from app.modules.identity.crypto import hash_token
-from app.modules.identity.models import User
+from app.modules.identity.models import IdentityAuditEvent, User
 from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import Ticket
@@ -63,13 +76,42 @@ def _directions(db: SessionDep, user_id: UUID) -> list[str]:
 
 
 def _view(db: SessionDep, access: FieldWorkStaffAccess | None, user_id: UUID) -> dict:
+    events = db.scalars(
+        select(IdentityAuditEvent)
+        .where(
+            IdentityAuditEvent.target_user_id == user_id,
+            IdentityAuditEvent.action.in_(
+                ("field_staff_linked", "field_staff_unlinked", "field_staff_access_changed")
+            ),
+        )
+        .order_by(IdentityAuditEvent.occurred_at.desc())
+        .limit(10)
+    ).all()
     return {
         "user_id": user_id,
         "telegram_user_id": access.telegram_user_id if access else None,
         "is_enabled": access.is_enabled if access else False,
         "directions": _directions(db, user_id) if access else [],
         "updated_at": access.updated_at if access else None,
+        "linked_at": access.linked_at if access else None,
+        "link_code_active": bool(
+            db.scalar(
+                select(func.count()).select_from(FieldWorkStaffLinkCode).where(
+                    FieldWorkStaffLinkCode.user_id == user_id,
+                    FieldWorkStaffLinkCode.expires_at > datetime.now(UTC),
+                )
+            )
+        ),
+        "events": [
+            {"action": event.action, "occurred_at": event.occurred_at}
+            for event in events
+        ],
     }
+
+
+@router.get("/staff-access/me")
+def get_own_staff_access(identity: CurrentIdentityDep, db: SessionDep):
+    return _view(db, db.get(FieldWorkStaffAccess, identity.user.id), identity.user.id)
 
 
 @router.get("/staff-access/{user_id}")
@@ -102,6 +144,11 @@ def set_staff_access(user_id: UUID, payload: StaffAccessWrite, identity: ManageD
         db.flush()
     elif access.updated_at != payload.expected_updated_at:
         raise ApiError(409, "stale_access", "Field Work access changed")
+    if payload.is_enabled and access.telegram_user_id is not None:
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:telegram_id)"),
+            {"telegram_id": access.telegram_user_id},
+        )
     access.is_enabled = payload.is_enabled
     access.updated_at = datetime.now(UTC)
     for item in db.scalars(
@@ -120,7 +167,13 @@ def set_staff_access(user_id: UUID, payload: StaffAccessWrite, identity: ManageD
         target=user_id,
         details={"enabled": payload.is_enabled, "directions": sorted(payload.directions)},
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(
+            409, "telegram_identity_conflict", "Telegram identity is active as installer"
+        ) from exc
     db.refresh(access)
     return _view(db, access, user_id)
 
@@ -137,12 +190,32 @@ def unlink_staff(user_id: UUID, identity: ManageDep, db: SessionDep):
     if access is None:
         raise ApiError(404, "not_found", "Field Work access not found")
     access.telegram_user_id = None
+    access.linked_at = None
     access.updated_at = datetime.now(UTC)
     db.query(FieldWorkStaffLinkCode).filter(FieldWorkStaffLinkCode.user_id == user_id).delete()
     audit(db, "field_staff_unlinked", "success", actor=identity.user.id, target=user_id)
     db.commit()
     db.refresh(access)
     return _view(db, access, user_id)
+
+
+@router.post("/staff-access/{user_id}/revoke-codes")
+def revoke_staff_codes(user_id: UUID, identity: ManageDep, db: SessionDep):
+    if user_id == identity.user.id:
+        raise ApiError(403, "cannot_manage_self", "Cannot revoke own link codes")
+    deleted = db.query(FieldWorkStaffLinkCode).filter(
+        FieldWorkStaffLinkCode.user_id == user_id
+    ).delete()
+    audit(
+        db,
+        "field_staff_codes_revoked",
+        "success",
+        actor=identity.user.id,
+        target=user_id,
+        details={"count": deleted},
+    )
+    db.commit()
+    return {"revoked": deleted}
 
 
 @router.post("/staff-link-code")
@@ -182,7 +255,12 @@ def claim_staff_link(
 ):
     telegram_id = verify_init_data(init_data or "", configured_bot_token())
     db.execute(text("SELECT pg_advisory_xact_lock(:telegram_id)"), {"telegram_id": telegram_id})
-    if db.scalar(select(FieldInstaller.id).where(FieldInstaller.telegram_user_id == telegram_id)):
+    if db.scalar(
+        select(FieldInstaller.id).where(
+            FieldInstaller.telegram_user_id == telegram_id,
+            FieldInstaller.is_active.is_(True),
+        )
+    ):
         raise ApiError(409, "telegram_identity_conflict", "Telegram account is an installer")
     challenge = db.scalar(
         select(FieldWorkStaffLinkCode)
@@ -210,6 +288,7 @@ def claim_staff_link(
     ):
         raise ApiError(403, "field_work_not_enabled", "Field Work access is not available")
     access.telegram_user_id = telegram_id
+    access.linked_at = datetime.now(UTC)
     access.updated_at = datetime.now(UTC)
     db.delete(challenge)
     audit(db, "field_staff_linked", "success", actor=user.id, target=user.id)
@@ -260,6 +339,8 @@ def staff_me(auth: StaffDep, db: SessionDep):
         "directions": directions,
         "kind": "staff",
         "can_verify": has_permission(db, user, Permission.TICKET_FIELD_WORK),
+        "can_perform": has_permission(db, user, Permission.FIELD_WORK_PERFORM),
+        "role": user.role,
     }
 
 
@@ -291,6 +372,84 @@ def staff_reschedules(
     return reschedule_history(handoff_id, auth, db, page, page_size)
 
 
+@router.get("/miniapp/staff/partners")
+def staff_partners(auth: StaffDep, db: SessionDep, direction: Direction):
+    user, allowed = auth
+    if direction not in allowed:
+        raise ApiError(403, "direction_forbidden", "Direction access denied")
+    installers = db.scalars(
+        select(FieldInstaller)
+        .join(FieldInstallerDirection)
+        .where(
+            FieldInstallerDirection.direction == direction,
+            FieldInstaller.is_active.is_(True),
+        )
+        .order_by(FieldInstaller.name, FieldInstaller.id)
+    ).all()
+    staff = db.execute(
+        select(User, FieldWorkStaffAccess)
+        .join(FieldWorkStaffAccess, FieldWorkStaffAccess.user_id == User.id)
+        .join(FieldWorkStaffDirection, FieldWorkStaffDirection.user_id == User.id)
+        .where(
+            FieldWorkStaffDirection.direction == direction,
+            FieldWorkStaffAccess.is_enabled.is_(True),
+            FieldWorkStaffAccess.telegram_user_id.is_not(None),
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+            User.id != user.id,
+        )
+        .order_by(User.display_name, User.id)
+    ).all()
+    return {"items": [
+        *({"id": item.id, "name": item.name, "kind": "installer"} for item in installers),
+        *(
+            {"id": person.id, "name": person.display_name, "kind": "staff"}
+            for person, _ in staff
+            if has_permission(db, person, Permission.FIELD_WORK_PERFORM)
+        ),
+    ]}
+
+
+@router.post("/miniapp/staff/handoffs/{handoff_id}/report")
+def staff_report(
+    handoff_id: UUID, payload: CompleteWork, auth: StaffDep, db: SessionDep
+):
+    user, allowed = auth
+    return complete_handoff_as_staff(handoff_id, payload, user, allowed, db)
+
+
+@router.post("/miniapp/staff/handoffs/{handoff_id}/reschedules")
+def staff_reschedule(
+    handoff_id: UUID, payload: MiniappReschedule, auth: StaffDep, db: SessionDep
+):
+    user, allowed = auth
+    if not has_permission(db, user, Permission.FIELD_WORK_PERFORM):
+        raise ApiError(403, "field_work_perform_forbidden", "Permission denied")
+    handoff = _mutable_handoff(db, handoff_id, allowed)
+    if payload.scheduled_for is not None and payload.scheduled_date is not None:
+        raise ApiError(422, "field_schedule_date_invalid", "Choose a date or date and time")
+    if active_prompt(db, handoff.id) is not None or active_dialog(db, handoff.id, lock=True):
+        raise ApiError(409, "field_dialog_active", "A Telegram dialog is still active")
+    access = db.get(FieldWorkStaffAccess, user.id)
+    record = record_reschedule(
+        db,
+        handoff,
+        reason=payload.reason,
+        scheduled_for=payload.scheduled_for,
+        scheduled_date=payload.scheduled_date,
+        source="MINIAPP",
+        author_name=user.display_name,
+        telegram_user_id=access.telegram_user_id if access else None,
+        expected_version=payload.expected_version,
+    )
+    db.commit()
+    return {
+        "id": record.id,
+        "schedule_version": handoff.schedule_version,
+        "schedule_status": handoff.schedule_status,
+    }
+
+
 @router.post("/miniapp/staff/handoffs/{handoff_id}/verify")
 def staff_verify(handoff_id: UUID, auth: StaffDep, db: SessionDep):
     user, allowed = auth
@@ -312,5 +471,13 @@ def staff_verify(handoff_id: UUID, auth: StaffDep, db: SessionDep):
     if row is None:
         raise ApiError(404, "not_found", "Field work not found")
     handoff, ticket = row
+    report = db.scalar(
+        select(FieldExternalMessage).where(
+            FieldExternalMessage.handoff_id == handoff.id,
+            FieldExternalMessage.kind.in_(("COMPLETION_REPORT", "MINIAPP_REPORT")),
+        )
+    )
+    if report is not None and report.primary_staff_user_id == user.id:
+        raise ApiError(409, "self_verification_forbidden", "Another engineer must verify this work")
     result = verify_handoff(db, user.id, ticket.id, handoff.id)
     return {"handoff_id": result.id, "work_status": result.work_status}

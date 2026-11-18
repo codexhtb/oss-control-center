@@ -19,6 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -199,6 +200,7 @@ class FieldWorkStaffAccess(Base):
     )
     telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -227,6 +229,29 @@ class FieldWorkStaffLinkCode(Base):
     )
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldInstallerAccessRequest(Base):
+    __tablename__ = "field_installer_access_requests"
+    __table_args__ = (
+        CheckConstraint("telegram_user_id > 0", name="ck_field_access_request_telegram"),
+        CheckConstraint(
+            "status IN ('PENDING','APPROVED','REJECTED')", name="ck_field_access_request_status"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="PENDING")
+    directions: Mapped[list[str] | None] = mapped_column(ARRAY(String(16)))
+    reviewed_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -368,7 +393,9 @@ class FieldExternalMessage(Base):
             "(kind = 'COMPLETION_REPORT' AND body IS NOT NULL AND length(btrim(body)) > 0 "
             "AND telegram_message_id IS NOT NULL) OR "
             "(kind = 'MINIAPP_REPORT' AND body IS NOT NULL AND length(btrim(body)) > 0 "
-            "AND telegram_message_id IS NULL AND primary_installer_id IS NOT NULL "
+            "AND telegram_message_id IS NULL "
+            "AND ((primary_installer_id IS NOT NULL AND primary_staff_user_id IS NULL) "
+            "OR (primary_installer_id IS NULL AND primary_staff_user_id IS NOT NULL)) "
             "AND client_request_id IS NOT NULL)",
             name="ck_field_messages_content",
         ),
@@ -403,6 +430,14 @@ class FieldExternalMessage(Base):
             "partner_installer_id IS NULL OR partner_installer_id <> primary_installer_id",
             name="ck_field_report_distinct_installers",
         ),
+        CheckConstraint(
+            "partner_staff_user_id IS NULL OR partner_staff_user_id <> primary_staff_user_id",
+            name="ck_field_report_distinct_staff",
+        ),
+        CheckConstraint(
+            "partner_installer_id IS NULL OR partner_staff_user_id IS NULL",
+            name="ck_field_report_one_partner_kind",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -421,6 +456,12 @@ class FieldExternalMessage(Base):
     )
     partner_installer_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("field_installers.id", ondelete="RESTRICT")
+    )
+    primary_staff_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
+    )
+    partner_staff_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT")
     )
     partner_name: Mapped[str | None] = mapped_column(String(160))
     client_request_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))

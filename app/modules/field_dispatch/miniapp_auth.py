@@ -15,8 +15,8 @@ MAX_AGE_SECONDS = 3600
 MAX_FUTURE_SECONDS = 30
 
 
-def verify_init_data(raw: str, token: str, *, now: int | None = None) -> int:
-    """Return the signed Telegram user ID, or reject the entire payload."""
+def verify_init_data_user(raw: str, token: str, *, now: int | None = None) -> dict:
+    """Return the signed Telegram user profile, or reject the entire payload."""
     if not raw or len(raw) > 8192:
         raise ApiError(401, "invalid_telegram_auth", "Invalid Telegram authentication")
     try:
@@ -39,12 +39,30 @@ def verify_init_data(raw: str, token: str, *, now: int | None = None) -> int:
         if auth_date > current + MAX_FUTURE_SECONDS or current - auth_date > MAX_AGE_SECONDS:
             raise ValueError("expired")
         user = json.loads(fields["user"])
+        if not isinstance(user, dict):
+            raise ValueError("invalid user profile")
         user_id = user["id"]
         if type(user_id) is not int or not 0 < user_id < 2**52:
             raise ValueError("invalid user ID")
-        return user_id
+        first_name = user.get("first_name")
+        last_name = user.get("last_name")
+        username = user.get("username")
+        for value in (first_name, last_name, username):
+            if value is not None and (not isinstance(value, str) or len(value) > 128):
+                raise ValueError("invalid user profile")
+        return {
+            "id": user_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "username": username,
+        }
     except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ApiError(401, "invalid_telegram_auth", "Invalid Telegram authentication") from exc
+
+
+def verify_init_data(raw: str, token: str, *, now: int | None = None) -> int:
+    """Return only the signed Telegram user ID for existing callers."""
+    return int(verify_init_data_user(raw, token, now=now)["id"])
 
 
 def configured_bot_token() -> str:

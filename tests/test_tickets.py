@@ -613,7 +613,7 @@ def test_field_work_staff_link_and_verify_permissions(
     assert ticket_client.post(
         f"{base}/staff/handoffs/{handoff_id}/report", headers=signed,
         json={"work_text": "Not an installer"},
-    ).status_code == 404
+    ).status_code == 422
     verified = ticket_client.post(f"{base}/staff/handoffs/{handoff_id}/verify", headers=signed)
     assert verified.status_code == 200, verified.text
     assert verified.json()["work_status"] == "VERIFIED"
@@ -663,15 +663,138 @@ def test_field_work_staff_link_and_verify_permissions(
     assert ticket_client.get(f"{base}/staff/me", headers=signed).status_code == 403
 
 
-def _miniapp_headers(token: str, telegram_id: int) -> dict[str, str]:
+def _miniapp_headers(
+    token: str, telegram_id: int, *, first_name: str | None = None
+) -> dict[str, str]:
+    profile: dict[str, object] = {"id": telegram_id}
+    if first_name:
+        profile["first_name"] = first_name
     fields = {
         "auth_date": str(int(datetime.now(UTC).timestamp())),
-        "user": json.dumps({"id": telegram_id}),
+        "user": json.dumps(profile),
     }
     check = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return {"X-Telegram-Init-Data": urlencode(fields)}
+
+
+def test_field_work_identity_transition_staff_reporting_and_access_request(
+    ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.v1 import field_work_miniapp, field_work_staff
+
+    token = "synthetic-lifecycle-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    monkeypatch.setattr(field_work_staff, "configured_bot_token", lambda: token)
+    admin = seed_user(ticket_engine, "lifecycle_admin", Role.ADMIN)
+    engineer = seed_user(ticket_engine, "lifecycle_engineer", Role.ENGINEER)
+    verifier = seed_user(ticket_engine, "lifecycle_verifier", Role.ENGINEER)
+    login(ticket_client, admin.login)
+    installer = ticket_client.post(
+        "/api/v1/field-work/installers",
+        headers=csrf(ticket_client),
+        json={"telegram_user_id": 99101, "name": "Former Installer", "directions": ["SUKHUM"]},
+    ).json()
+    converted = ticket_client.post(
+        f"/api/v1/field-work/installers/{installer['id']}/convert-to-staff",
+        headers=csrf(ticket_client),
+        json={"target_user_id": str(engineer.id), "expected_updated_at": installer["updated_at"]},
+    )
+    assert converted.status_code == 200, converted.text
+    assert converted.json()["is_active"] is False
+    login(ticket_client, engineer.login)
+    code = ticket_client.post(
+        "/api/v1/field-work/staff-link-code", headers=csrf(ticket_client)
+    ).json()["code"]
+    signed = _miniapp_headers(token, 99101, first_name="Engineer")
+    assert ticket_client.post(
+        "/api/v1/field-work/miniapp/link-staff", headers=signed, json={"code": code}
+    ).status_code == 200
+    login(ticket_client, admin.login)
+    stale = ticket_client.get("/api/v1/field-work/installers").json()["items"][0]
+    assert ticket_client.put(
+        f"/api/v1/field-work/installers/{installer['id']}",
+        headers=csrf(ticket_client),
+        json={
+            "telegram_user_id": stale["telegram_user_id"],
+            "name": stale["name"],
+            "directions": stale["directions"],
+            "is_active": True,
+            "expected_updated_at": stale["updated_at"],
+        },
+    ).status_code == 409
+
+    ticket = make_manual_ticket(ticket_client, subject="Staff field report")
+    with Session(ticket_engine) as db:
+        handoff = FieldWorkHandoff(
+            ticket_id=UUID(ticket["id"]), ticket_version=1, reason="Inspect line",
+            delivery_status="PUBLISHED", work_status="AWAITING_REPORT", direction="SUKHUM",
+            chat_id="miniapp:SUKHUM", published_at=datetime.now(UTC), published_by=admin.id,
+            created_by=admin.id,
+        )
+        db.add(handoff)
+        db.commit()
+        handoff_id = handoff.id
+    report = ticket_client.post(
+        f"/api/v1/field-work/miniapp/staff/handoffs/{handoff_id}/report",
+        headers=signed,
+        json={"client_request_id": str(uuid4()), "work_text": "Completed by OCC engineer"},
+    )
+    assert report.status_code == 200, report.text
+    assert ticket_client.post(
+        f"/api/v1/field-work/miniapp/staff/handoffs/{handoff_id}/verify", headers=signed
+    ).status_code == 409
+    with Session(ticket_engine) as db:
+        message = db.get(FieldExternalMessage, UUID(report.json()["report_id"]))
+        assert message.primary_staff_user_id == engineer.id
+        assert message.primary_installer_id is None
+
+    login(ticket_client, admin.login)
+    assert ticket_client.put(
+        f"/api/v1/field-work/staff-access/{verifier.id}",
+        headers=csrf(ticket_client),
+        json={"is_enabled": True, "directions": ["SUKHUM"]},
+    ).status_code == 200
+    login(ticket_client, verifier.login)
+    verifier_code = ticket_client.post(
+        "/api/v1/field-work/staff-link-code", headers=csrf(ticket_client)
+    ).json()["code"]
+    verifier_signed = _miniapp_headers(token, 99103, first_name="Verifier")
+    assert ticket_client.post(
+        "/api/v1/field-work/miniapp/link-staff",
+        headers=verifier_signed,
+        json={"code": verifier_code},
+    ).status_code == 200
+    assert ticket_client.post(
+        f"/api/v1/field-work/miniapp/staff/handoffs/{handoff_id}/verify",
+        headers=verifier_signed,
+    ).status_code == 200
+
+    login(ticket_client, admin.login)
+    access_request = ticket_client.post(
+        "/api/v1/field-work/miniapp/access-request",
+        headers=_miniapp_headers(token, 99102, first_name="New Installer"),
+        json={},
+    )
+    assert access_request.status_code == 201, access_request.text
+    repeated = ticket_client.post(
+        "/api/v1/field-work/miniapp/access-request",
+        headers=_miniapp_headers(token, 99102, first_name="New Installer"),
+        json={},
+    )
+    assert repeated.status_code == 201
+    request_id = access_request.json()["id"]
+    approved = ticket_client.post(
+        f"/api/v1/field-work/access-requests/{request_id}/decision",
+        headers=csrf(ticket_client),
+        json={"approve": True, "directions": ["SUKHUM", "OCHAMCHIRA"]},
+    )
+    assert approved.status_code == 200, approved.text
+    assert ticket_client.get(
+        "/api/v1/field-work/miniapp/me",
+        headers=_miniapp_headers(token, 99102, first_name="New Installer"),
+    ).status_code == 200
 
 
 def test_field_work_publication_without_telegram_delivery(

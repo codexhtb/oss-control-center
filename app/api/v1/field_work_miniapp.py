@@ -11,21 +11,29 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.identity import SessionDep, require_permission, require_read_permission
 from app.core.errors import ApiError
-from app.modules.field_dispatch.miniapp_auth import configured_bot_token, verify_init_data
+from app.modules.field_dispatch.miniapp_auth import (
+    configured_bot_token,
+    verify_init_data,
+    verify_init_data_user,
+)
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
     FieldInstaller,
+    FieldInstallerAccessRequest,
     FieldInstallerDirection,
     FieldWorkCompletionPrompt,
     FieldWorkHandoff,
     FieldWorkReschedule,
     FieldWorkStaffAccess,
+    FieldWorkStaffDirection,
 )
 from app.modules.field_dispatch.reporting import record_completed_work
 from app.modules.field_dispatch.reschedule_dialog import active_dialog
 from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
-from app.modules.identity.roles import Permission
+from app.modules.identity.access import has_permission
+from app.modules.identity.models import User
+from app.modules.identity.roles import Permission, Role
 from app.modules.identity.service import AuthContext, audit
 from app.modules.tickets.models import SubscriberSnapshot, Ticket
 
@@ -64,6 +72,8 @@ class CompleteWork(BaseModel):
 
     client_request_id: UUID
     partner_installer_id: UUID | None = None
+    partner_id: UUID | None = None
+    partner_kind: Literal["installer", "staff"] | None = None
     work_text: str = Field(min_length=1, max_length=4000)
 
     @field_validator("work_text")
@@ -95,6 +105,18 @@ class MiniappReschedule(BaseModel):
         if value is not None and (value.tzinfo is None or value.utcoffset() != timedelta(hours=3)):
             raise ValueError("Use Abkhazia local time (UTC+3)")
         return value
+
+
+class InstallerConversion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_user_id: UUID
+    expected_updated_at: datetime
+
+
+class AccessRequestDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approve: bool
+    directions: set[Direction] = Field(default_factory=set, max_length=2)
 
 
 def _directions(db: SessionDep, installer_id: UUID) -> list[str]:
@@ -133,9 +155,10 @@ def create_installer(payload: InstallerWrite, identity: ManagerDep, db: SessionD
         text("SELECT pg_advisory_xact_lock(:telegram_id)"),
         {"telegram_id": payload.telegram_user_id},
     )
-    if db.scalar(
+    if payload.is_active and db.scalar(
         select(FieldWorkStaffAccess.user_id).where(
-            FieldWorkStaffAccess.telegram_user_id == payload.telegram_user_id
+            FieldWorkStaffAccess.telegram_user_id == payload.telegram_user_id,
+            FieldWorkStaffAccess.is_enabled.is_(True),
         )
     ):
         raise ApiError(409, "installer_conflict", "Telegram user already linked to OCC staff")
@@ -177,9 +200,10 @@ def update_installer(
         text("SELECT pg_advisory_xact_lock(:telegram_id)"),
         {"telegram_id": payload.telegram_user_id},
     )
-    if db.scalar(
+    if payload.is_active and db.scalar(
         select(FieldWorkStaffAccess.user_id).where(
-            FieldWorkStaffAccess.telegram_user_id == payload.telegram_user_id
+            FieldWorkStaffAccess.telegram_user_id == payload.telegram_user_id,
+            FieldWorkStaffAccess.is_enabled.is_(True),
         )
     ):
         raise ApiError(409, "installer_conflict", "Telegram user already linked to OCC staff")
@@ -206,6 +230,69 @@ def update_installer(
     except IntegrityError as exc:
         db.rollback()
         raise ApiError(409, "installer_conflict", "Telegram user already registered") from exc
+    db.refresh(installer)
+    return _installer_view(db, installer)
+
+
+@router.post("/installers/{installer_id}/convert-to-staff")
+def convert_installer_to_staff(
+    installer_id: UUID,
+    payload: InstallerConversion,
+    identity: ManagerDep,
+    db: SessionDep,
+):
+    installer = db.scalar(
+        select(FieldInstaller).where(FieldInstaller.id == installer_id).with_for_update()
+    )
+    user = db.scalar(select(User).where(User.id == payload.target_user_id).with_for_update())
+    if installer is None:
+        raise ApiError(404, "not_found", "Installer not found")
+    if installer.updated_at != payload.expected_updated_at:
+        raise ApiError(409, "stale_installer", "Installer changed; reload and retry")
+    if (
+        user is None
+        or user.deleted_at is not None
+        or user.role not in (Role.ENGINEER, Role.ADMIN)
+    ):
+        raise ApiError(404, "user_not_found", "Eligible OCC employee not found")
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:telegram_id)"),
+        {"telegram_id": installer.telegram_user_id},
+    )
+    access = db.scalar(
+        select(FieldWorkStaffAccess)
+        .where(FieldWorkStaffAccess.user_id == user.id)
+        .with_for_update()
+    )
+    if access is not None and access.telegram_user_id not in (None, installer.telegram_user_id):
+        raise ApiError(409, "telegram_identity_conflict", "Employee has another Telegram link")
+    installer.is_active = False
+    installer.updated_at = datetime.now(UTC)
+    if access is None:
+        access = FieldWorkStaffAccess(user_id=user.id, is_enabled=True)
+        db.add(access)
+        db.flush()
+    else:
+        access.is_enabled = True
+        access.updated_at = datetime.now(UTC)
+    current = set(
+        db.scalars(
+            select(FieldWorkStaffDirection.direction).where(
+                FieldWorkStaffDirection.user_id == user.id
+            )
+        ).all()
+    )
+    for direction in set(_directions(db, installer.id)) - current:
+        db.add(FieldWorkStaffDirection(user_id=user.id, direction=direction))
+    audit(
+        db,
+        "field_installer_converted",
+        "success",
+        actor=identity.user.id,
+        target=user.id,
+        details={"installer_id": str(installer.id)},
+    )
+    db.commit()
     db.refresh(installer)
     return _installer_view(db, installer)
 
@@ -269,6 +356,168 @@ def delete_installer(
             "Installer has related records and must be deactivated instead",
         ) from exc
     return Response(status_code=204)
+
+
+def _request_view(item: FieldInstallerAccessRequest) -> dict:
+    return {
+        "id": item.id,
+        "telegram_user_id": item.telegram_user_id,
+        "telegram_name": item.telegram_name,
+        "status": item.status,
+        "directions": item.directions or [],
+        "reviewed_by": item.reviewed_by,
+        "reviewed_at": item.reviewed_at,
+        "created_at": item.created_at,
+    }
+
+
+@router.get("/access-requests")
+def list_access_requests(
+    _: ReadManagerDep,
+    db: SessionDep,
+    status: Literal["PENDING", "APPROVED", "REJECTED"] | None = None,
+):
+    statement = select(FieldInstallerAccessRequest)
+    if status:
+        statement = statement.where(FieldInstallerAccessRequest.status == status)
+    rows = db.scalars(
+        statement.order_by(
+            FieldInstallerAccessRequest.created_at.desc(), FieldInstallerAccessRequest.id.desc()
+        ).limit(200)
+    ).all()
+    return {"items": [_request_view(item) for item in rows]}
+
+
+@router.post("/access-requests/{request_id}/decision")
+def decide_access_request(
+    request_id: UUID,
+    payload: AccessRequestDecision,
+    identity: ManagerDep,
+    db: SessionDep,
+):
+    if payload.approve and not payload.directions:
+        raise ApiError(422, "directions_required", "Choose a direction")
+    request = db.scalar(
+        select(FieldInstallerAccessRequest)
+        .where(FieldInstallerAccessRequest.id == request_id)
+        .with_for_update()
+    )
+    if request is None:
+        raise ApiError(404, "not_found", "Access request not found")
+    if request.status != "PENDING":
+        raise ApiError(409, "access_request_resolved", "Access request is already resolved")
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:telegram_id)"),
+        {"telegram_id": request.telegram_user_id},
+    )
+    now = datetime.now(UTC)
+    if payload.approve:
+        if db.scalar(
+            select(FieldWorkStaffAccess.user_id).where(
+                FieldWorkStaffAccess.telegram_user_id == request.telegram_user_id,
+                FieldWorkStaffAccess.is_enabled.is_(True),
+            )
+        ):
+            raise ApiError(409, "telegram_identity_conflict", "Telegram belongs to OCC staff")
+        installer = db.scalar(
+            select(FieldInstaller)
+            .where(FieldInstaller.telegram_user_id == request.telegram_user_id)
+            .with_for_update()
+        )
+        if installer is None:
+            installer = FieldInstaller(
+                telegram_user_id=request.telegram_user_id,
+                name=request.telegram_name,
+                is_active=True,
+            )
+            db.add(installer)
+            db.flush()
+        else:
+            installer.name = request.telegram_name
+            installer.is_active = True
+            installer.updated_at = now
+            for row in db.scalars(
+                select(FieldInstallerDirection).where(
+                    FieldInstallerDirection.installer_id == installer.id
+                )
+            ).all():
+                db.delete(row)
+            db.flush()
+        for direction in payload.directions:
+            db.add(FieldInstallerDirection(installer_id=installer.id, direction=direction))
+        request.status = "APPROVED"
+        request.directions = sorted(payload.directions)
+    else:
+        request.status = "REJECTED"
+        request.directions = []
+    request.reviewed_by = identity.user.id
+    request.reviewed_at = now
+    audit(
+        db,
+        "field_access_request_decided",
+        "success",
+        actor=identity.user.id,
+        details={"request_id": str(request.id), "decision": request.status},
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ApiError(
+            409, "telegram_identity_conflict", "Telegram identity is already active"
+        ) from exc
+    db.refresh(request)
+    return _request_view(request)
+
+
+@router.post("/miniapp/access-request", status_code=201)
+def request_installer_access(
+    db: SessionDep,
+    init_data: Annotated[str | None, Header(alias="X-Telegram-Init-Data")] = None,
+):
+    profile = verify_init_data_user(init_data or "", configured_bot_token())
+    telegram_id = int(profile["id"])
+    db.execute(text("SELECT pg_advisory_xact_lock(:telegram_id)"), {"telegram_id": telegram_id})
+    if db.scalar(
+        select(FieldInstaller.id).where(
+            FieldInstaller.telegram_user_id == telegram_id, FieldInstaller.is_active.is_(True)
+        )
+    ) or db.scalar(
+        select(FieldWorkStaffAccess.user_id).where(
+            FieldWorkStaffAccess.telegram_user_id == telegram_id,
+            FieldWorkStaffAccess.is_enabled.is_(True),
+        )
+    ):
+        raise ApiError(409, "telegram_identity_active", "Telegram already has Field Work access")
+    pending = db.scalar(
+        select(FieldInstallerAccessRequest).where(
+            FieldInstallerAccessRequest.telegram_user_id == telegram_id,
+            FieldInstallerAccessRequest.status == "PENDING",
+        )
+    )
+    if pending is not None:
+        return _request_view(pending)
+    latest = db.scalar(
+        select(FieldInstallerAccessRequest)
+        .where(FieldInstallerAccessRequest.telegram_user_id == telegram_id)
+        .order_by(FieldInstallerAccessRequest.created_at.desc())
+        .limit(1)
+    )
+    if latest is not None and latest.created_at > datetime.now(UTC) - timedelta(hours=1):
+        raise ApiError(429, "access_request_rate_limited", "Try again later")
+    parts = [profile.get("first_name"), profile.get("last_name")]
+    name = " ".join(value.strip() for value in parts if isinstance(value, str) and value.strip())
+    if not name:
+        username = profile.get("username")
+        name = f"@{username}" if isinstance(username, str) and username else "Пользователь Telegram"
+    request = FieldInstallerAccessRequest(
+        telegram_user_id=telegram_id,
+        telegram_name=name[:160],
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return _request_view(request)
 
 
 def _authorized_installer(
@@ -472,7 +721,26 @@ def available_partners(auth: InstallerDep, db: SessionDep, direction: Direction)
         )
         .order_by(FieldInstaller.name, FieldInstaller.id)
     ).all()
-    return {"items": [{"id": item.id, "name": item.name} for item in rows]}
+    items = [{"id": item.id, "name": item.name, "kind": "installer"} for item in rows]
+    staff_rows = db.execute(
+        select(User, FieldWorkStaffAccess)
+        .join(FieldWorkStaffAccess, FieldWorkStaffAccess.user_id == User.id)
+        .join(FieldWorkStaffDirection, FieldWorkStaffDirection.user_id == User.id)
+        .where(
+            FieldWorkStaffDirection.direction == direction,
+            FieldWorkStaffAccess.is_enabled.is_(True),
+            FieldWorkStaffAccess.telegram_user_id.is_not(None),
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
+        .order_by(User.display_name, User.id)
+    ).all()
+    items.extend(
+        {"id": user.id, "name": user.display_name, "kind": "staff"}
+        for user, _ in staff_rows
+        if has_permission(db, user, Permission.FIELD_WORK_PERFORM)
+    )
+    return {"items": items}
 
 
 @router.post("/miniapp/handoffs/{handoff_id}/report")
@@ -486,10 +754,17 @@ def complete_handoff(handoff_id: UUID, payload: CompleteWork, auth: InstallerDep
         )
     )
     if existing is not None:
+        requested_partner_installer = (
+            payload.partner_id
+            if payload.partner_kind == "installer"
+            else payload.partner_installer_id
+        )
+        requested_partner_staff = payload.partner_id if payload.partner_kind == "staff" else None
         if (
             existing.handoff_id != handoff_id
             or existing.body != payload.work_text
-            or existing.partner_installer_id != payload.partner_installer_id
+            or existing.partner_installer_id != requested_partner_installer
+            or existing.partner_staff_user_id != requested_partner_staff
         ):
             raise ApiError(409, "report_request_conflict", "Request ID already used")
         return {
@@ -504,21 +779,43 @@ def complete_handoff(handoff_id: UUID, payload: CompleteWork, auth: InstallerDep
         raise ApiError(409, "field_work_already_reported", "Field work already reported")
     if active_dialog(db, handoff.id, lock=True) is not None:
         raise ApiError(409, "field_dialog_active", "A Telegram dialog is still active")
+    partner_id = payload.partner_id or payload.partner_installer_id
+    partner_kind = payload.partner_kind or ("installer" if payload.partner_installer_id else None)
     partner = None
-    if payload.partner_installer_id is not None:
-        if payload.partner_installer_id == installer.id:
+    partner_staff = None
+    if partner_id is not None and partner_kind == "installer":
+        if partner_id == installer.id:
             raise ApiError(422, "partner_is_self", "Choose another installer")
         partner = db.scalar(
             select(FieldInstaller)
             .join(FieldInstallerDirection)
             .where(
-                FieldInstaller.id == payload.partner_installer_id,
+                FieldInstaller.id == partner_id,
                 FieldInstaller.is_active.is_(True),
                 FieldInstallerDirection.direction == handoff.direction,
             )
         )
         if partner is None:
             raise ApiError(422, "partner_unavailable", "Partner is not available")
+    elif partner_id is not None and partner_kind == "staff":
+        partner_staff = db.scalar(
+            select(User)
+            .join(FieldWorkStaffAccess, FieldWorkStaffAccess.user_id == User.id)
+            .join(FieldWorkStaffDirection, FieldWorkStaffDirection.user_id == User.id)
+            .where(
+                User.id == partner_id,
+                User.is_active.is_(True),
+                User.deleted_at.is_(None),
+                FieldWorkStaffAccess.is_enabled.is_(True),
+                FieldWorkStaffDirection.direction == handoff.direction,
+            )
+        )
+        if partner_staff is None or not has_permission(
+            db, partner_staff, Permission.FIELD_WORK_PERFORM
+        ):
+            raise ApiError(422, "partner_unavailable", "Partner is not available")
+    elif partner_id is not None:
+        raise ApiError(422, "partner_unavailable", "Partner type is required")
     now = datetime.now(UTC)
     for prompt in db.scalars(
         select(FieldWorkCompletionPrompt)
@@ -561,13 +858,153 @@ def complete_handoff(handoff_id: UUID, payload: CompleteWork, auth: InstallerDep
         sender_name=installer.name,
         primary_installer_id=installer.id,
         partner_installer_id=partner.id if partner else None,
-        partner_name=partner.name if partner else None,
+        partner_staff_user_id=partner_staff.id if partner_staff else None,
+        partner_name=(
+            partner.name
+            if partner
+            else partner_staff.display_name
+            if partner_staff
+            else None
+        ),
         client_request_id=payload.client_request_id,
         kind="MINIAPP_REPORT",
         body=payload.work_text,
         telegram_created_at=now,
     )
     record_completed_work(db, handoff, report, reported_at=now)
+    db.commit()
+    return {"handoff_id": handoff.id, "work_status": handoff.work_status, "report_id": report.id}
+
+
+def complete_handoff_as_staff(
+    handoff_id: UUID,
+    payload: CompleteWork,
+    user: User,
+    allowed: tuple[str, ...],
+    db: SessionDep,
+):
+    """Record a report by verified OCC staff without creating a fake installer."""
+    if not has_permission(db, user, Permission.FIELD_WORK_PERFORM):
+        raise ApiError(403, "field_work_perform_forbidden", "Permission denied")
+    handoff = _mutable_handoff(db, handoff_id, allowed)
+    existing = db.scalar(
+        select(FieldExternalMessage).where(
+            FieldExternalMessage.primary_staff_user_id == user.id,
+            FieldExternalMessage.client_request_id == payload.client_request_id,
+        )
+    )
+    requested_partner_installer = (
+        payload.partner_id if payload.partner_kind == "installer" else payload.partner_installer_id
+    )
+    requested_partner_staff = payload.partner_id if payload.partner_kind == "staff" else None
+    if existing is not None:
+        if (
+            existing.handoff_id != handoff_id
+            or existing.body != payload.work_text
+            or existing.partner_installer_id != requested_partner_installer
+            or existing.partner_staff_user_id != requested_partner_staff
+        ):
+            raise ApiError(409, "report_request_conflict", "Request ID already used")
+        return {
+            "handoff_id": handoff.id,
+            "work_status": handoff.work_status,
+            "report_id": existing.id,
+        }
+    if (
+        handoff.delivery_status not in {"SENT", "PUBLISHED"}
+        or handoff.work_status != "AWAITING_REPORT"
+    ):
+        raise ApiError(409, "field_work_already_reported", "Field work already reported")
+    if active_dialog(db, handoff.id, lock=True) is not None:
+        raise ApiError(409, "field_dialog_active", "A Telegram dialog is still active")
+    partner_installer = None
+    partner_staff = None
+    if requested_partner_installer is not None:
+        partner_installer = db.scalar(
+            select(FieldInstaller)
+            .join(FieldInstallerDirection)
+            .where(
+                FieldInstaller.id == requested_partner_installer,
+                FieldInstaller.is_active.is_(True),
+                FieldInstallerDirection.direction == handoff.direction,
+            )
+        )
+        if partner_installer is None:
+            raise ApiError(422, "partner_unavailable", "Partner is not available")
+    elif requested_partner_staff is not None:
+        if requested_partner_staff == user.id:
+            raise ApiError(422, "partner_is_self", "Choose another participant")
+        partner_staff = db.scalar(
+            select(User)
+            .join(FieldWorkStaffAccess, FieldWorkStaffAccess.user_id == User.id)
+            .join(FieldWorkStaffDirection, FieldWorkStaffDirection.user_id == User.id)
+            .where(
+                User.id == requested_partner_staff,
+                User.is_active.is_(True),
+                User.deleted_at.is_(None),
+                FieldWorkStaffAccess.is_enabled.is_(True),
+                FieldWorkStaffDirection.direction == handoff.direction,
+            )
+        )
+        if partner_staff is None or not has_permission(
+            db, partner_staff, Permission.FIELD_WORK_PERFORM
+        ):
+            raise ApiError(422, "partner_unavailable", "Partner is not available")
+    now = datetime.now(UTC)
+    for prompt in db.scalars(
+        select(FieldWorkCompletionPrompt)
+        .where(
+            FieldWorkCompletionPrompt.handoff_id == handoff.id,
+            FieldWorkCompletionPrompt.status.in_(("REQUESTING", "WAITING", "UNCERTAIN")),
+        )
+        .with_for_update()
+    ).all():
+        if prompt.status == "WAITING":
+            prompt.status = "CANCELED"
+            prompt.completed_at = now
+            prompt.deletion_status = "PENDING"
+        else:
+            prompt.status = "FAILED"
+            prompt.error_code = "superseded_by_report"
+    update = FieldDispatchUpdate(
+        bot_identity="oss_field_miniapp",
+        update_id=-db.scalar(select(func.nextval("field_miniapp_update_id_seq"))),
+        kind="MINIAPP_REPORT",
+        outcome="PROCESSED",
+        handoff_id=handoff.id,
+        card_edit_status="PENDING"
+        if handoff.telegram_message_id and handoff.message_text
+        else "NOT_REQUIRED",
+    )
+    db.add(update)
+    db.flush()
+    staff_access = db.get(FieldWorkStaffAccess, user.id)
+    if staff_access is None or staff_access.telegram_user_id is None:
+        raise ApiError(403, "staff_forbidden", "Telegram link is unavailable")
+    report = FieldExternalMessage(
+        id=uuid4(),
+        handoff_id=handoff.id,
+        update_record_id=update.id,
+        chat_id=handoff.chat_id,
+        telegram_message_id=None,
+        sender_telegram_id=staff_access.telegram_user_id,
+        sender_name=user.display_name,
+        primary_staff_user_id=user.id,
+        partner_installer_id=partner_installer.id if partner_installer else None,
+        partner_staff_user_id=partner_staff.id if partner_staff else None,
+        partner_name=(
+            partner_installer.name
+            if partner_installer
+            else partner_staff.display_name
+            if partner_staff
+            else None
+        ),
+        client_request_id=payload.client_request_id,
+        kind="MINIAPP_REPORT",
+        body=payload.work_text,
+        telegram_created_at=now,
+    )
+    record_completed_work(db, handoff, report, reported_at=now, actor_id=user.id)
     db.commit()
     return {"handoff_id": handoff.id, "work_status": handoff.work_status, "report_id": report.id}
 
