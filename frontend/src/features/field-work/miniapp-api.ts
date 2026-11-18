@@ -41,6 +41,15 @@ export type Reschedule = {
 
 export type Page<T> = { items: T[]; total: number; page: number; page_size: number }
 export type Partner = { id: string; name: string; kind: 'installer' | 'staff' }
+export type NotificationSettings = {
+  notify_new_work: boolean
+  notify_reschedules: boolean
+  notify_verification: boolean
+  can_verify: boolean
+  subscription_status: 'UNKNOWN' | 'ACTIVE' | 'UNAVAILABLE'
+  last_error_code: string | null
+  last_delivery_at: string | null
+}
 
 export class FieldWorkError extends Error {
   constructor(message: string, readonly status: number) { super(message) }

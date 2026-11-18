@@ -11,6 +11,7 @@ services:
       POSTGRES_PORT: "5432"
       TELEGRAM_BOT_TOKEN_FILE: /run/telegram/telegram-bot-token
       TELEGRAM_INITIAL_UPDATE_OFFSET: "${TELEGRAM_INITIAL_UPDATE_OFFSET:-}"
+      FIELD_WORK_MINIAPP_URL: "https://sd.oss-ab.net:8443/field-work"
     command: ["python", "-m", "app.modules.field_dispatch.poller", "--forever"]
     depends_on:
       postgres:

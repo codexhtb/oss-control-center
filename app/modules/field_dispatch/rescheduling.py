@@ -13,6 +13,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
     FieldWorkReschedule,
 )
+from app.modules.field_dispatch.personal_notifications import enqueue_notification
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 from app.modules.tickets.status import TicketStatus
 
@@ -115,6 +116,9 @@ def record_reschedule(
         action="field_work_rescheduled", outcome="success",
         origin="API" if source == "OSS" else "SYSTEM",
     ))
+    enqueue_notification(
+        db, handoff, "RESCHEDULED", dedupe_suffix=str(handoff.schedule_version)
+    )
     return item
 
 

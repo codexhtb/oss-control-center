@@ -50,6 +50,9 @@ from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
     FieldInstallerDirection,
+    FieldNotificationDelivery,
+    FieldNotificationEvent,
+    FieldNotificationPreference,
     FieldReportNotification,
     FieldReportNotificationRead,
     FieldRescheduleDialog,
@@ -57,7 +60,10 @@ from app.modules.field_dispatch.models import (
     FieldWorkDeliveryAttempt,
     FieldWorkHandoff,
     FieldWorkReschedule,
+    FieldWorkStaffAccess,
+    FieldWorkStaffDirection,
 )
+from app.modules.field_dispatch.personal_notifications import drain_notification_outbox
 from app.modules.field_dispatch.poller import (
     _delete_prompt,
     _send_prompt,
@@ -813,7 +819,7 @@ def test_field_work_publication_without_telegram_delivery(
     login(ticket_client, admin.login)
     installers = {}
     for telegram_id, directions in (
-        (8201, ["OCHAMCHIRA"]), (8202, ["SUKHUM"]),
+        (8201, ["OCHAMCHIRA"]), (8202, ["SUKHUM"]), (8203, ["OCHAMCHIRA"]),
     ):
         result = ticket_client.post(
             "/api/v1/field-work/installers", headers=csrf(ticket_client),
@@ -822,6 +828,25 @@ def test_field_work_publication_without_telegram_delivery(
         )
         assert result.status_code == 201, result.text
         installers[telegram_id] = result.json()["id"]
+    staff = seed_user(ticket_engine, "published_staff", Role.ENGINEER)
+    with Session(ticket_engine) as db:
+        db.add(FieldWorkStaffAccess(
+            user_id=staff.id, telegram_user_id=8204, is_enabled=True,
+            linked_at=datetime.now(UTC),
+        ))
+        db.add(FieldWorkStaffDirection(user_id=staff.id, direction="OCHAMCHIRA"))
+        db.commit()
+    preferences = ticket_client.post(
+        "/api/v1/field-work/miniapp/notification-settings",
+        headers=_miniapp_headers(token, 8201),
+        json={
+            "notify_new_work": False,
+            "notify_reschedules": True,
+            "notify_verification": True,
+        },
+    )
+    assert preferences.status_code == 200, preferences.text
+    assert preferences.json()["subscription_status"] == "UNKNOWN"
     login(ticket_client, engineer.login)
     ticket = make_manual_ticket(ticket_client, subject="Synthetic published work")
     path = f"/api/v1/tickets/{ticket['id']}"
@@ -879,6 +904,24 @@ def test_field_work_publication_without_telegram_delivery(
         handoff = db.get(FieldWorkHandoff, UUID(handoff_id))
         assert handoff.schedule_status == "DATE_PENDING"
         assert handoff.schedule_card_status == "NOT_REQUIRED"
+        events = db.scalars(
+            select(FieldNotificationEvent)
+            .where(FieldNotificationEvent.handoff_id == handoff.id)
+            .order_by(FieldNotificationEvent.created_at, FieldNotificationEvent.id)
+        ).all()
+        assert [item.kind for item in events] == ["NEW_WORK", "RESCHEDULED"]
+        deliveries = db.scalars(
+            select(FieldNotificationDelivery).where(
+                FieldNotificationDelivery.event_id == events[0].id
+            )
+        ).all()
+        assert {item.telegram_user_id for item in deliveries} == {8203, 8204}
+        moved_deliveries = db.scalars(
+            select(FieldNotificationDelivery).where(
+                FieldNotificationDelivery.event_id == events[1].id
+            )
+        ).all()
+        assert {item.telegram_user_id for item in moved_deliveries} == {8201, 8203, 8204}
     assert ticket_client.post(
         f"{miniapp}/handoffs/{handoff_id}/report", headers=allowed,
         json={"client_request_id": str(uuid4()), "work_text": "Invalid partner",
@@ -907,6 +950,101 @@ def test_field_work_publication_without_telegram_delivery(
             TicketAudit.ticket_id == UUID(ticket["id"]),
             TicketAudit.action == "field_work_published",
         )) == 1
+        report_event = db.scalar(select(FieldNotificationEvent).where(
+            FieldNotificationEvent.handoff_id == handoff.id,
+            FieldNotificationEvent.kind == "REPORT_PENDING",
+        ))
+        assert report_event is not None
+        assert db.scalars(select(FieldNotificationDelivery).where(
+            FieldNotificationDelivery.event_id == report_event.id,
+        )).all()[0].telegram_user_id == 8204
+
+    class PersonalGateway:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str]] = []
+
+        def send_personal_notification(
+            self, chat_id: str, message: str, *, miniapp_url: str
+        ) -> DispatchReceipt:
+            self.calls.append((chat_id, message, miniapp_url))
+            return DispatchReceipt(chat_id, str(9000 + len(self.calls)))
+
+    monkeypatch.setenv("FIELD_WORK_MINIAPP_URL", "https://sd.oss-ab.net:8443/field-work")
+    personal_gateway = PersonalGateway()
+    with Session(ticket_engine) as db:
+        delivered = drain_notification_outbox(db, personal_gateway, limit=20)  # type: ignore[arg-type]
+        assert delivered == 6
+        assert db.scalar(select(func.count()).select_from(FieldNotificationDelivery).where(
+            FieldNotificationDelivery.status == "SENT",
+        )) == 6
+    assert all("Абонент" not in message for _, message, _ in personal_gateway.calls)
+    assert all(f"handoff={handoff_id}" in url for _, _, url in personal_gateway.calls)
+    staff_settings = ticket_client.get(
+        "/api/v1/field-work/miniapp/notification-settings",
+        headers=_miniapp_headers(token, 8204),
+    )
+    assert staff_settings.status_code == 200
+    assert staff_settings.json()["subscription_status"] == "ACTIVE"
+
+    class RateLimitedGateway:
+        def send_personal_notification(self, *_args, **_kwargs):
+            raise DispatchRejected("telegram_http_429", retry_after=17)
+
+    with Session(ticket_engine) as db:
+        event = FieldNotificationEvent(
+            handoff_id=UUID(handoff_id), kind="NEW_WORK", direction="OCHAMCHIRA",
+            dedupe_key=f"synthetic-rate-limit:{handoff_id}",
+        )
+        db.add(event)
+        db.flush()
+        retry_delivery = FieldNotificationDelivery(event_id=event.id, telegram_user_id=8203)
+        db.add(retry_delivery)
+        db.commit()
+        retry_id = retry_delivery.id
+        assert drain_notification_outbox(db, RateLimitedGateway(), limit=1) == 1  # type: ignore[arg-type]
+        retried = db.get(FieldNotificationDelivery, retry_id)
+        assert retried.status == "RETRY"
+        assert retried.last_error_code == "telegram_http_429"
+        assert retried.available_at > datetime.now(UTC)
+
+    class UncertainGateway:
+        def send_personal_notification(self, *_args, **_kwargs):
+            raise DispatchUncertain
+
+    with Session(ticket_engine) as db:
+        event = FieldNotificationEvent(
+            handoff_id=UUID(handoff_id), kind="NEW_WORK", direction="OCHAMCHIRA",
+            dedupe_key=f"synthetic-uncertain:{handoff_id}",
+        )
+        db.add(event)
+        db.flush()
+        uncertain = FieldNotificationDelivery(event_id=event.id, telegram_user_id=8203)
+        db.add(uncertain)
+        db.commit()
+        uncertain_id = uncertain.id
+        assert drain_notification_outbox(db, UncertainGateway(), limit=1) == 1  # type: ignore[arg-type]
+        assert db.get(FieldNotificationDelivery, uncertain_id).status == "UNCERTAIN"
+
+    class BlockedGateway:
+        def send_personal_notification(self, *_args, **_kwargs):
+            raise DispatchRejected("telegram_http_403")
+
+    with Session(ticket_engine) as db:
+        event = FieldNotificationEvent(
+            handoff_id=UUID(handoff_id), kind="NEW_WORK", direction="OCHAMCHIRA",
+            dedupe_key=f"synthetic-blocked:{handoff_id}",
+        )
+        db.add(event)
+        db.flush()
+        blocked = FieldNotificationDelivery(event_id=event.id, telegram_user_id=8203)
+        db.add(blocked)
+        db.commit()
+        blocked_id = blocked.id
+        assert drain_notification_outbox(db, BlockedGateway(), limit=1) == 1  # type: ignore[arg-type]
+        assert db.get(FieldNotificationDelivery, blocked_id).status == "BLOCKED"
+        blocked_pref = db.get(FieldNotificationPreference, 8203)
+        assert blocked_pref.subscription_status == "UNAVAILABLE"
+        assert blocked_pref.last_error_code == "telegram_http_403"
     verified = ticket_client.post(path + f"/field-work-handoffs/{handoff_id}/verify",
                                   headers=csrf(ticket_client))
     assert verified.status_code == 200, verified.text

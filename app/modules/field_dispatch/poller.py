@@ -29,6 +29,10 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
     FieldWorkReschedule,
 )
+from app.modules.field_dispatch.personal_notifications import (
+    drain_notification_outbox,
+    mark_private_chat_seen,
+)
 from app.modules.field_dispatch.reschedule_dialog import (
     active_dialog,
     card_text,
@@ -753,8 +757,17 @@ def poll_once() -> int:
     factory = sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
     with factory() as db:
         _retry_sync(db, gateway)
+        try:
+            drain_notification_outbox(db, gateway)
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                "telegram_personal_notification_sync_failed error_type=%s",
+                type(exc).__name__,
+            )
         updates = gateway.get_updates(_offset(db), timeout_seconds=20)
         for update in updates:
+            mark_private_chat_seen(db, update)
             result = process_group_control(db, gateway, update)
             if result is None:
                 result = process_update(db, update)

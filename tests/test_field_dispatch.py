@@ -108,6 +108,60 @@ def test_gateway_accepts_dynamic_group_and_requires_confirmed_receipt(
         gateway.send_message("not-a-chat", "must not be sent")
 
 
+def test_gateway_sends_private_miniapp_notification_without_personal_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = token_file(tmp_path)
+    monkeypatch.setattr("http.client.HTTPSConnection", FakeConnection)
+    FakeConnection.response = FakeResponse(
+        200, {"ok": True, "result": {"message_id": 72, "chat": {"id": 8201}}}
+    )
+    gateway = TelegramBotGateway(TelegramGatewayConfig(path))
+
+    receipt = gateway.send_personal_notification(
+        "8201",
+        "Появилась новая выездная работа.",
+        miniapp_url=(
+            "https://sd.oss-ab.net:8443/field-work?"
+            "handoff=00000000-0000-4000-8000-000000000001"
+        ),
+    )
+
+    assert receipt == ("8201", "72")
+    args, kwargs = FakeConnection.request_args or ((), {})
+    assert args[1].endswith("/sendMessage")
+    body = json.loads(kwargs["body"])
+    assert body["chat_id"] == "8201"
+    assert body["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"].endswith(
+        "handoff=00000000-0000-4000-8000-000000000001"
+    )
+    assert "Абонент" not in body["text"]
+
+
+def test_gateway_preserves_telegram_retry_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = token_file(tmp_path)
+    monkeypatch.setattr("http.client.HTTPSConnection", FakeConnection)
+    FakeConnection.response = FakeResponse(
+        429,
+        {
+            "ok": False,
+            "error_code": 429,
+            "description": "Too Many Requests",
+            "parameters": {"retry_after": 17},
+        },
+    )
+    with pytest.raises(DispatchRejected) as caught:
+        TelegramBotGateway(TelegramGatewayConfig(path)).send_personal_notification(
+            "8201",
+            "Появилась новая выездная работа.",
+            miniapp_url="https://sd.oss-ab.net:8443/field-work",
+        )
+    assert caught.value.code == "telegram_http_429"
+    assert caught.value.retry_after == 17
+
+
 def test_gateway_treats_receipt_mismatch_as_uncertain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

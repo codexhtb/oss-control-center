@@ -11,6 +11,8 @@ from app.core.errors import ApiError
 from app.modules.field_dispatch.models import (
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldNotificationDelivery,
+    FieldNotificationEvent,
     FieldReportNotification,
     FieldReportNotificationRead,
     FieldRescheduleDialog,
@@ -426,6 +428,17 @@ def purge_ticket(
     )
     notification_ids = select(FieldReportNotification.id).where(
         FieldReportNotification.handoff_id.in_(handoff_ids)
+    )
+    field_event_ids = select(FieldNotificationEvent.id).where(
+        FieldNotificationEvent.handoff_id.in_(handoff_ids)
+    )
+    db.execute(
+        delete(FieldNotificationDelivery).where(
+            FieldNotificationDelivery.event_id.in_(field_event_ids)
+        )
+    )
+    db.execute(
+        delete(FieldNotificationEvent).where(FieldNotificationEvent.id.in_(field_event_ids))
     )
     db.execute(
         delete(FieldReportNotificationRead).where(

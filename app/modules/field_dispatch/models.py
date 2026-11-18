@@ -257,6 +257,109 @@ class FieldInstallerAccessRequest(Base):
     )
 
 
+class FieldNotificationPreference(Base):
+    """Per-Telegram-account opt-ins and last confirmed private-chat state."""
+
+    __tablename__ = "field_notification_preferences"
+    __table_args__ = (
+        CheckConstraint("telegram_user_id > 0", name="ck_field_notify_pref_telegram"),
+        CheckConstraint(
+            "subscription_status IN ('UNKNOWN','ACTIVE','UNAVAILABLE')",
+            name="ck_field_notify_pref_status",
+        ),
+    )
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    notify_new_work: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    notify_reschedules: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    notify_verification: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    subscription_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="UNKNOWN"
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldNotificationEvent(Base):
+    """One durable business event; payload contains no subscriber personal data."""
+
+    __tablename__ = "field_notification_events"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('NEW_WORK','RESCHEDULED','REPORT_PENDING')",
+            name="ck_field_notify_event_kind",
+        ),
+        CheckConstraint(
+            "direction IN ('SUKHUM','OCHAMCHIRA')", name="ck_field_notify_event_direction"
+        ),
+        Index("ix_field_notify_event_created", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    handoff_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_work_handoffs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FieldNotificationDelivery(Base):
+    """Transactional outbox delivery to one private Telegram chat."""
+
+    __tablename__ = "field_notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("event_id", "telegram_user_id", name="uq_field_notify_delivery"),
+        CheckConstraint("telegram_user_id > 0", name="ck_field_notify_delivery_telegram"),
+        CheckConstraint(
+            "status IN "
+            "('PENDING','SENDING','RETRY','SENT','BLOCKED','UNCERTAIN','FAILED','SKIPPED')",
+            name="ck_field_notify_delivery_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_field_notify_delivery_attempts"),
+        CheckConstraint(
+            "(status = 'SENT' AND telegram_message_id IS NOT NULL AND sent_at IS NOT NULL) OR "
+            "(status <> 'SENT' AND telegram_message_id IS NULL AND sent_at IS NULL)",
+            name="ck_field_notify_delivery_receipt",
+        ),
+        Index("ix_field_notify_delivery_due", "status", "available_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    event_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("field_notification_events.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class FieldWorkDeliveryAttempt(Base):
     __tablename__ = "field_work_delivery_attempts"
     __table_args__ = (

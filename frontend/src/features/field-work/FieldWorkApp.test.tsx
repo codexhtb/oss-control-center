@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { FieldWorkApp } from './FieldWorkApp'
+import { FieldWorkApp, openPhoneDialer, phoneForDialer } from './FieldWorkApp'
 
 const id = '00000000-0000-4000-8000-000000000101'
 const partnerId = '00000000-0000-4000-8000-000000000102'
@@ -12,12 +12,17 @@ const handoff = {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  })
   Object.defineProperty(window, 'Telegram', { configurable: true, value: { WebApp: {
     initData: 'signed-test-init-data', colorScheme: 'light',
     ready: vi.fn(), expand: vi.fn(), onEvent: vi.fn(), offEvent: vi.fn(),
   } } })
 })
-afterEach(() => { vi.unstubAllGlobals(); Reflect.deleteProperty(window, 'Telegram') })
+afterEach(() => { vi.unstubAllGlobals(); Reflect.deleteProperty(window, 'Telegram'); window.history.replaceState({}, '', '/') })
 
 it('loads the shared queue, detail and submits one structured report', async () => {
   let reported = false
@@ -40,7 +45,10 @@ it('loads the shared queue, detail and submits one structured report', async () 
   expect(document.querySelector('.fw-app')).toHaveAttribute('data-theme', 'light')
   fireEvent.click(screen.getByRole('button', { name: /Заявка №201/ }))
   expect(await screen.findByText('Проверить линию')).toBeInTheDocument()
-  expect(screen.getByRole('link', { name: /Позвонить/ })).toHaveAttribute('href', 'tel:+79001112233')
+  expect(screen.getByRole('button', { name: /Позвонить/ })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать номер' }))
+  await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('+7 900 111 22 33'))
+  expect(await screen.findByRole('status')).toHaveTextContent('Номер скопирован')
   fireEvent.click(screen.getByRole('button', { name: /Выполнить работу/ }))
   fireEvent.change(screen.getByLabelText(/Работали вместе/), { target: { value: partnerId } })
   fireEvent.change(screen.getByLabelText('Что было сделано'), { target: { value: 'Линия восстановлена' } })
@@ -53,6 +61,63 @@ it('loads the shared queue, detail and submits one structured report', async () 
   })
   expect(report?.options?.credentials).toBe('omit')
   await waitFor(() => expect(screen.getByRole('button', { name: 'Завершённые' })).toHaveClass('active'))
+})
+
+it('normalizes phone numbers and invokes the native tel navigation directly', () => {
+  const navigate = vi.fn()
+  expect(phoneForDialer('+7 (900) 111-22-33')).toBe('+79001112233')
+  expect(openPhoneDialer('+7 (900) 111-22-33', navigate)).toBe(true)
+  expect(navigate).toHaveBeenCalledWith('tel:+79001112233')
+  expect(openPhoneDialer('нет номера', navigate)).toBe(false)
+})
+
+it('shows subscription state and saves personal notification preferences', async () => {
+  const requests: { path: string; options?: RequestInit }[] = []
+  vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
+    requests.push({ path, options })
+    if (path.endsWith('/me')) return { ok: true, status: 200, json: async () => ({ name: 'Монтажник', directions: ['SUKHUM'] }) } as Response
+    if (path.endsWith('/notification-settings')) {
+      const submitted = options?.body ? JSON.parse(options.body as string) as Record<string, boolean> : null
+      return { ok: true, status: 200, json: async () => ({
+        notify_new_work: submitted?.notify_new_work ?? true,
+        notify_reschedules: submitted?.notify_reschedules ?? true,
+        notify_verification: false,
+        can_verify: false,
+        subscription_status: 'UNAVAILABLE',
+        last_error_code: 'telegram_http_403',
+        last_delivery_at: null,
+      }) } as Response
+    }
+    return { ok: true, status: 200, json: async () => ({ items: [], total: 0, page: 1, page_size: 20 }) } as Response
+  }))
+
+  render(<FieldWorkApp />)
+  await screen.findByText('Монтажник · монтажник')
+  fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }))
+  expect(await screen.findByText(/Личный чат недоступен/)).toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Новые выезды'))
+  await waitFor(() => expect(requests.some((item) =>
+    item.path.endsWith('/notification-settings') && item.options?.method === 'POST'
+  )).toBe(true))
+  const saved = requests.find((item) => item.path.endsWith('/notification-settings') && item.options?.method === 'POST')
+  expect(JSON.parse(saved?.options?.body as string)).toMatchObject({ notify_new_work: false })
+})
+
+it('opens the authorized handoff from a personal notification deep link', async () => {
+  window.history.replaceState({}, '', `/?handoff=${id}`)
+  const requests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    requests.push(path)
+    if (path.endsWith('/me')) return { ok: true, status: 200, json: async () => ({ name: 'Монтажник', directions: ['SUKHUM'] }) } as Response
+    if (path.endsWith('/notification-settings')) return { ok: true, status: 200, json: async () => ({ notify_new_work: true, notify_reschedules: true, notify_verification: false, can_verify: false, subscription_status: 'ACTIVE', last_error_code: null, last_delivery_at: null }) } as Response
+    if (path.includes('/reschedules')) return { ok: true, status: 200, json: async () => ({ items: [], total: 0, page: 1, page_size: 20 }) } as Response
+    if (path.endsWith(`/${id}`)) return { ok: true, status: 200, json: async () => ({ ...handoff, reason: 'Открыто из уведомления', name: null, phone: null, city: null, address: null, account_no: null, schedule_version: 0, schedule_reason: null, schedule_author: null, report: null }) } as Response
+    return { ok: true, status: 200, json: async () => ({ items: [handoff], total: 1, page: 1, page_size: 20 }) } as Response
+  }))
+
+  render(<FieldWorkApp />)
+  expect(await screen.findByText('Открыто из уведомления')).toBeInTheDocument()
+  expect(requests.some((path) => path.endsWith(`/handoffs/${id}`))).toBe(true)
 })
 
 it('blocks access outside Telegram without calling the queue API', async () => {

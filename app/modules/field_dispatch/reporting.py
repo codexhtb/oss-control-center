@@ -11,6 +11,7 @@ from app.modules.field_dispatch.models import (
     FieldReportNotification,
     FieldWorkHandoff,
 )
+from app.modules.field_dispatch.personal_notifications import enqueue_notification
 from app.modules.tickets.models import Ticket, TicketAudit, TicketEvent
 
 
@@ -46,6 +47,7 @@ def record_completed_work(
             ticket_version=ticket.version if ticket is not None else handoff.ticket_version,
         )
     )
+    enqueue_notification(db, handoff, "REPORT_PENDING", dedupe_suffix=str(report.id))
     db.add(
         TicketAudit(
             ticket_id=handoff.ticket_id,

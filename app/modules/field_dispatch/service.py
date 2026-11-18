@@ -29,6 +29,7 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
     FieldWorkReschedule,
 )
+from app.modules.field_dispatch.personal_notifications import enqueue_notification
 from app.modules.field_dispatch.reschedule_dialog import active_dialog
 from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
 from app.modules.field_dispatch.schemas import FieldWorkHandoffView
@@ -295,6 +296,7 @@ def publish_handoff(
         ticket_id=ticket_id, actor_id=actor_id, action="field_work_published",
         outcome="success", origin="API",
     ))
+    enqueue_notification(db, handoff, "NEW_WORK", dedupe_suffix="available")
     db.commit()
     db.refresh(handoff)
     return handoff
@@ -457,6 +459,8 @@ def finalize_send(
         event_type = "field_work_delivery_uncertain" if uncertain else "field_work_delivery_failed"
     attempt.completed_at = now
     handoff.updated_at = now
+    if receipt is not None:
+        enqueue_notification(db, handoff, "NEW_WORK", dedupe_suffix="available")
     ticket = db.get(Ticket, handoff.ticket_id)
     db.add(
         TicketEvent(

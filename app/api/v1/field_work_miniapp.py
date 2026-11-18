@@ -28,6 +28,10 @@ from app.modules.field_dispatch.models import (
     FieldWorkStaffAccess,
     FieldWorkStaffDirection,
 )
+from app.modules.field_dispatch.personal_notifications import (
+    preference_view,
+    update_preferences,
+)
 from app.modules.field_dispatch.reporting import record_completed_work
 from app.modules.field_dispatch.reschedule_dialog import active_dialog
 from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
@@ -117,6 +121,14 @@ class AccessRequestDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     approve: bool
     directions: set[Direction] = Field(default_factory=set, max_length=2)
+
+
+class NotificationPreferencesWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    notify_new_work: bool
+    notify_reschedules: bool
+    notify_verification: bool
 
 
 def _directions(db: SessionDep, installer_id: UUID) -> list[str]:
@@ -547,6 +559,65 @@ InstallerDep = Annotated[tuple[FieldInstaller, tuple[str, ...]], Depends(_author
 def installer_me(auth: InstallerDep):
     installer, directions = auth
     return {"name": installer.name, "directions": directions}
+
+
+def _notification_identity(
+    db: SessionDep,
+    init_data: str | None,
+) -> tuple[int, bool]:
+    telegram_id = verify_init_data(init_data or "", configured_bot_token())
+    installer = db.scalar(
+        select(FieldInstaller.id).where(
+            FieldInstaller.telegram_user_id == telegram_id,
+            FieldInstaller.is_active.is_(True),
+        )
+    )
+    if installer is not None:
+        return telegram_id, False
+    user = db.scalar(
+        select(User)
+        .join(FieldWorkStaffAccess, FieldWorkStaffAccess.user_id == User.id)
+        .where(
+            FieldWorkStaffAccess.telegram_user_id == telegram_id,
+            FieldWorkStaffAccess.is_enabled.is_(True),
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+            User.must_change_password.is_(False),
+            User.role.in_((Role.ENGINEER, Role.ADMIN)),
+        )
+    )
+    if user is None:
+        raise ApiError(403, "field_work_forbidden", "Field Work access denied")
+    can_verify = has_permission(db, user, Permission.TICKET_FIELD_WORK) and has_permission(
+        db, user, Permission.TICKET_READ
+    )
+    return telegram_id, can_verify
+
+
+@router.get("/miniapp/notification-settings")
+def notification_settings(
+    db: SessionDep,
+    init_data: Annotated[str | None, Header(alias="X-Telegram-Init-Data")] = None,
+):
+    telegram_id, can_verify = _notification_identity(db, init_data)
+    return preference_view(db, telegram_id, can_verify=can_verify)
+
+
+@router.post("/miniapp/notification-settings")
+def save_notification_settings(
+    payload: NotificationPreferencesWrite,
+    db: SessionDep,
+    init_data: Annotated[str | None, Header(alias="X-Telegram-Init-Data")] = None,
+):
+    telegram_id, can_verify = _notification_identity(db, init_data)
+    return update_preferences(
+        db,
+        telegram_id,
+        notify_new_work=payload.notify_new_work,
+        notify_reschedules=payload.notify_reschedules,
+        notify_verification=payload.notify_verification,
+        can_verify=can_verify,
+    )
 
 
 def _item(handoff: FieldWorkHandoff, ticket: Ticket) -> dict:

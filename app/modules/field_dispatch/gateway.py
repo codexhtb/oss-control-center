@@ -23,9 +23,10 @@ class FieldDispatchGateway(Protocol):
 class DispatchRejected(Exception):
     """Telegram returned a definite rejection; retry requires an explicit action."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, retry_after: int | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.retry_after = retry_after
 
 
 class DispatchUncertain(Exception):
@@ -112,6 +113,13 @@ class TelegramBotGateway:
         if response.status != 200 or decoded.get("ok") is not True:
             error_code = decoded.get("error_code")
             description = decoded.get("description")
+            response_parameters = decoded.get("parameters")
+            retry_after = (
+                response_parameters.get("retry_after")
+                if isinstance(response_parameters, dict)
+                and isinstance(response_parameters.get("retry_after"), int)
+                else None
+            )
             if error_code == 400 and isinstance(description, str):
                 if method == "editMessageText" and "message is not modified" in description.lower():
                     raise DispatchRejected("telegram_message_not_modified")
@@ -121,7 +129,8 @@ class TelegramBotGateway:
                 ):
                     raise DispatchRejected("telegram_message_not_found")
             raise DispatchRejected(
-                f"telegram_http_{error_code if isinstance(error_code, int) else response.status}"
+                f"telegram_http_{error_code if isinstance(error_code, int) else response.status}",
+                retry_after=retry_after,
             )
         return decoded.get("result")
 
@@ -147,6 +156,35 @@ class TelegramBotGateway:
                 ]
             }
         result = self._call("sendMessage", parameters)
+        if not isinstance(result, dict):
+            raise DispatchUncertain from None
+        result_chat = result.get("chat")
+        message_id = result.get("message_id")
+        confirmed_chat = result_chat.get("id") if isinstance(result_chat, dict) else None
+        if str(confirmed_chat) != chat_id or not isinstance(message_id, int):
+            raise DispatchUncertain from None
+        return DispatchReceipt(chat_id=chat_id, message_id=str(message_id))
+
+    def send_personal_notification(
+        self, chat_id: str, text: str, *, miniapp_url: str
+    ) -> DispatchReceipt:
+        """Send a privacy-safe notice with a Mini App button to one private chat."""
+        _validate_chat_id(chat_id)
+        if not text or len(text) > 4096 or not miniapp_url.startswith("https://"):
+            raise ValueError("telegram_notification_invalid")
+        result = self._call(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": True,
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {"text": "Открыть OSS Field Work", "web_app": {"url": miniapp_url}}
+                    ]]
+                },
+            },
+        )
         if not isinstance(result, dict):
             raise DispatchUncertain from None
         result_chat = result.get("chat")
