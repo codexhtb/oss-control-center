@@ -28,6 +28,7 @@ from app.modules.field_dispatch.schemas import (
     PublishFieldWork,
     RescheduleFieldWork,
     SendFieldWork,
+    UpdateFieldNote,
 )
 from app.modules.field_dispatch.service import (
     confirm_absent_delivery,
@@ -38,6 +39,7 @@ from app.modules.field_dispatch.service import (
     publish_handoff,
     reschedule_handoff,
     send_handoff,
+    update_handoff_note,
     verify_handoff,
 )
 from app.modules.identity.access import has_permission
@@ -822,6 +824,20 @@ def latest_field_work(ticket_id: UUID, identity: FieldReadDep, db: SessionDep):
     _mutation_scope(db, identity, ticket_id)
     item = latest_handoff(db, ticket_id)
     return {"handoff": handoff_view(db, item, identity.user) if item is not None else None}
+
+
+@router.patch(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/note", response_model=FieldWorkHandoffView,
+)
+def update_field_note(
+    ticket_id: UUID, handoff_id: UUID, payload: UpdateFieldNote,
+    identity: FieldDep, db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = update_handoff_note(
+        db, identity.user.id, ticket_id, handoff_id, payload.note, payload.expected_note,
+    )
+    return handoff_view(db, item, identity.user)
 
 
 @router.post(

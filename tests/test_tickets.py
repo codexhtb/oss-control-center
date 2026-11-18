@@ -7187,3 +7187,230 @@ def test_internal_task_records_follow_confirmed_ticket_purge(
         assert db.scalar(select(func.count()).select_from(InternalTask)) == 0
         assert db.scalar(select(func.count()).select_from(InternalTaskEvent)) == 0
         assert db.scalar(select(func.count()).select_from(InternalTaskNotification)) == 0
+
+def test_multiline_engineer_decision_validation_and_persistence(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+) -> None:
+    engineer = seed_user(ticket_engine, "multiline_engineer", Role.ENGINEER)
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client)
+    path = f"/api/v1/tickets/{ticket['id']}"
+    claimed = ticket_client.post(
+        path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'}
+    )
+    assert claimed.status_code == 200
+    text_value = (
+        "Проверена линия.\nIP: 192.0.2.1/24\r\n"
+        "MAC: AA:BB:CC:DD:EE:FF\tONU Rx: -21.5 dBm; <test> & OK"
+    )
+    for invalid in ("\x00invalid", "bad\x07text", "x" * 10001, "   "):
+        rejected = ticket_client.post(
+            path + "/resolve",
+            headers={
+                **csrf(ticket_client),
+                "If-Match": '"2"',
+            },
+            json={"decision_text": invalid},
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["code"] == "invalid_decision_text"
+        assert ticket_client.get(path).json()["version"] == 2
+    resolved = ticket_client.post(
+        path + "/resolve",
+        headers={
+            **csrf(ticket_client),
+            "If-Match": '"2"',
+        },
+        json={"decision_text": text_value},
+    )
+    assert resolved.status_code == 200, resolved.text
+    decision_id = resolved.json()["resolved_decision_id"]
+    with Session(ticket_engine) as db:
+        assert db.get(TicketResolution, UUID(decision_id)).decision_text == text_value
+    revised = ticket_client.post(
+        path + "/decisions",
+        headers=csrf(ticket_client),
+        json={
+            "decision_text": "x" * 10000,
+            "performed_actions": "PON\nPort 21\tVLAN 350",
+        },
+    )
+    assert revised.status_code == 201, revised.text
+
+
+@pytest.mark.parametrize("direction", ["SUKHUM", "OCHAMCHIRA"])
+@pytest.mark.parametrize("delivery", ["PUBLISHED", "SENT"])
+def test_field_work_note_preparation_publication_and_privacy(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: str,
+    delivery: str,
+) -> None:
+    from app.api.v1 import field_work_miniapp
+    from app.modules.field_dispatch.models import FieldNotificationEvent
+
+    monkeypatch.setenv("TELEGRAM_OCHAMCHIRA_CHAT_ID", "-1004473201977")
+    token = "synthetic-note-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    engineer = seed_user(ticket_engine, "note_engineer", Role.ENGINEER)
+    operator = seed_user(ticket_engine, "note_operator", Role.OPERATOR)
+    admin = seed_user(ticket_engine, "note_admin", Role.ADMIN)
+    login(ticket_client, engineer.login)
+    ticket = make_manual_ticket(ticket_client)
+    path = f"/api/v1/tickets/{ticket['id']}"
+    ticket_client.post(path + "/claim", headers={**csrf(ticket_client), "If-Match": '"1"'})
+    note = "MAC AA:BB:CC:DD:EE:FF\nSN: ONU/1234; Rx < -20 dBm\tОсобый подъезд"
+    requested = ticket_client.post(
+        path + "/field-work-request",
+        headers={
+            **csrf(ticket_client),
+            "If-Match": '"2"',
+        },
+        json={"reason": "Проверить линию", "note": note},
+    )
+    assert requested.status_code == 200, requested.text
+    handoff = ticket_client.get(path + "/field-work-handoffs/latest").json()["handoff"]
+    assert handoff["note"] == note and handoff["reason"] == "Проверить линию"
+    preview = handoff["message_preview"]
+    note_path = path + f"/field-work-handoffs/{handoff['id']}/note"
+    login(ticket_client, operator.login)
+    assert (
+        ticket_client.patch(
+            note_path, headers=csrf(ticket_client), json={"note": "other"}
+        ).status_code
+        == 403
+    )
+    login(ticket_client, engineer.login)
+    assert ticket_client.patch(note_path, json={"note": "other"}).status_code == 403
+    for invalid in ("bad\x00note", "x" * 4001):
+        assert (
+            ticket_client.patch(
+                note_path,
+                headers=csrf(ticket_client),
+                json={
+                    "note": invalid,
+                    "expected_note": note,
+                },
+            ).status_code
+            == 422
+        )
+    new_note = note + "\nУточнено инженером"
+    updated = ticket_client.patch(
+        note_path,
+        headers=csrf(ticket_client),
+        json={
+            "note": new_note,
+            "expected_note": note,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["message_preview"] == preview
+    assert (
+        ticket_client.patch(
+            note_path,
+            headers=csrf(ticket_client),
+            json={
+                "note": "stale",
+                "expected_note": note,
+            },
+        ).status_code
+        == 409
+    )
+    login(ticket_client, admin.login)
+    registered = ticket_client.post(
+        "/api/v1/field-work/installers",
+        headers=csrf(ticket_client),
+        json={
+            "telegram_user_id": 9876543,
+            "name": "Synthetic Note Installer",
+            "directions": [direction],
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    login(ticket_client, engineer.login)
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    operation = "publish" if delivery == "PUBLISHED" else "send"
+    payload = {"direction": direction}
+    if operation == "send":
+        payload.update(client_request_id=str(uuid4()), message_text=preview)
+    published = ticket_client.post(
+        path + f"/field-work-handoffs/{handoff['id']}/{operation}",
+        headers=csrf(ticket_client), json=payload,
+    )
+    assert published.status_code == 200, published.text
+    assert published.json()["note"] == new_note
+    assert (
+        ticket_client.patch(
+            note_path,
+            headers=csrf(ticket_client),
+            json={
+                "note": "too late",
+                "expected_note": new_note,
+            },
+        ).status_code
+        == 409
+    )
+    headers = _miniapp_headers(token, 9876543)
+    queue = ticket_client.get("/api/v1/field-work/miniapp/handoffs", headers=headers)
+    assert queue.status_code == 200
+    assert queue.json()["items"][0]["name"] == ticket["caller_full_name"]
+    detail = ticket_client.get(
+        f"/api/v1/field-work/miniapp/handoffs/{handoff['id']}", headers=headers
+    )
+    assert detail.json()["name"] == ticket["caller_full_name"]
+    assert detail.json()["note"] == new_note
+    with Session(ticket_engine) as db:
+        events = db.scalars(select(FieldNotificationEvent)).all()
+        assert events
+        # Outbox stores references only; message construction never includes the note.
+        # The public event schema itself contains no subscriber data or notes.
+        assert all("note" not in event.__table__.columns.keys() for event in events)
+
+
+def test_internal_task_orange_read_state_is_scoped_and_durable(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+) -> None:
+    creator = seed_user(ticket_engine, "orange_creator", Role.ENGINEER)
+    assignee = seed_user(ticket_engine, "orange_assignee", Role.ENGINEER)
+    outsider = seed_user(ticket_engine, "orange_outsider", Role.ENGINEER)
+    login(ticket_client, creator.login)
+    ticket = make_manual_ticket(ticket_client)
+    task = ticket_client.post(
+        "/api/v1/tasks",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_id": ticket["id"],
+            "assignee_id": str(assignee.id),
+            "description": "Уточнить параметры",
+            "client_request_id": str(uuid4()),
+        },
+    ).json()
+    task_path = f"/api/v1/tasks/{task['id']}"
+    assert ticket_client.get("/api/v1/tasks/notifications").json()["new_assignments_count"] == 0
+    login(ticket_client, outsider.login)
+    assert ticket_client.post(task_path + "/read", headers=csrf(ticket_client)).status_code == 404
+    login(ticket_client, assignee.login)
+    assert ticket_client.get("/api/v1/tasks").json()["items"][0]["is_unread"] is True
+    assert ticket_client.get(task_path).json()["is_unread"] is True  # GET does not mark read
+    assert ticket_client.get("/api/v1/tasks/notifications").json()["new_assignments_count"] == 1
+    assert ticket_client.post(task_path + "/read").status_code == 403
+    for _ in range(2):
+        assert (
+            ticket_client.post(task_path + "/read", headers=csrf(ticket_client)).status_code == 204
+        )
+    login(ticket_client, assignee.login)
+    assert ticket_client.get("/api/v1/tasks").json()["items"][0]["is_unread"] is False
+    assert ticket_client.get("/api/v1/tasks/notifications").json()["new_assignments_count"] == 0
+    with Session(ticket_engine) as db:
+        assert (
+            db.scalar(
+                select(InternalTaskNotification.read_at).where(
+                    InternalTaskNotification.task_id == UUID(task["id"]),
+                )
+            )
+            is not None
+        )

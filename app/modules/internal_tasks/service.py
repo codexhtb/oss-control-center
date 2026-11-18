@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -68,7 +68,23 @@ def _task(
     return row
 
 
-def _summary(db: Session, task: InternalTask, ticket: Ticket, *, contact: bool = False) -> dict:
+def _unread_assignment(db: Session, actor: User):
+    return exists(select(InternalTaskNotification.id).join(
+        InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id,
+    ).where(
+        InternalTaskNotification.task_id == InternalTask.id,
+        InternalTaskNotification.recipient_id == actor.id,
+        InternalTaskNotification.read_at.is_(None),
+        InternalTaskEvent.kind == "CREATED",
+        InternalTask.assignee_id == actor.id,
+        has_permission(db, actor, Permission.TASK_EXECUTE),
+    ))
+
+
+def _summary(
+    db: Session, task: InternalTask, ticket: Ticket, *, contact: bool = False,
+    is_unread: bool = False,
+) -> dict:
     names = dict(
         db.execute(
             select(User.id, User.display_name).where(
@@ -119,6 +135,7 @@ def _summary(db: Session, task: InternalTask, ticket: Ticket, *, contact: bool =
         "phone": phone,
         "account_no": ticket.account_no if contact else None,
         "latest_answer": latest_answer,
+        "is_unread": is_unread,
     }
 
 
@@ -311,7 +328,7 @@ def list_tasks(
     elif state == "overdue":
         conditions.extend((InternalTask.status == "OPEN", InternalTask.due_at < now))
     query = (
-        select(InternalTask, Ticket)
+        select(InternalTask, Ticket, _unread_assignment(db, actor).label("is_unread"))
         .join(Ticket, Ticket.id == InternalTask.ticket_id)
         .where(*conditions)
     )
@@ -322,7 +339,7 @@ def list_tasks(
         .limit(size)
     ).all()
     return {
-        "items": [_summary(db, task, ticket) for task, ticket in rows],
+        "items": [_summary(db, task, ticket, is_unread=unread) for task, ticket, unread in rows],
         "page": page,
         "size": size,
         "total": total,
@@ -331,7 +348,10 @@ def list_tasks(
 
 def get_task(db: Session, actor: User, task_id: UUID) -> dict:
     task, ticket = _task(db, actor, task_id)
-    return _summary(db, task, ticket, contact=True)
+    unread = bool(db.scalar(
+        select(_unread_assignment(db, actor)).where(InternalTask.id == task.id)
+    ))
+    return _summary(db, task, ticket, contact=True, is_unread=unread)
 
 
 def list_events(db: Session, actor: User, task_id: UUID, page: int, size: int) -> dict:
@@ -429,6 +449,7 @@ def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
             InternalTaskNotification.created_at,
             InternalTaskNotification.read_at,
             InternalTaskEvent.kind,
+            InternalTask.assignee_id,
             InternalTask.title,
             Ticket.id.label("ticket_id"),
             Ticket.number.label("ticket_number"),
@@ -471,7 +492,23 @@ def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
         "size": size,
         "total": total,
         "unread_count": unread,
+        "new_assignments_count": db.scalar(select(func.count()).select_from(visible).where(
+            visible.c.read_at.is_(None), visible.c.kind == "CREATED",
+            visible.c.assignee_id == actor.id,
+            has_permission(db, actor, Permission.TASK_EXECUTE),
+        )) or 0,
     }
+
+
+def mark_task_read(db: Session, actor: User, task_id: UUID) -> None:
+    # Called explicitly by the visible conversation, never as a side effect of GET.
+    _task(db, actor, task_id)
+    db.execute(update(InternalTaskNotification).where(
+        InternalTaskNotification.task_id == task_id,
+        InternalTaskNotification.recipient_id == actor.id,
+        InternalTaskNotification.read_at.is_(None),
+    ).values(read_at=datetime.now(UTC)))
+    db.commit()
 
 
 def mark_read(db: Session, actor: User, notification_id: UUID) -> None:

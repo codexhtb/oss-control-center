@@ -91,3 +91,27 @@ it('opens a different task while already viewing another ticket', async () => {
   fireEvent.click(screen.getByRole('button', { name: /Поручение завершено · Заявка #67/ }))
   await waitFor(() => expect(screen.getByTestId('task-destination')).toHaveTextContent('/tickets/ticket-2?task=task-2'))
 })
+
+it('updates orange attention through the existing inbox query and removes it on read', async () => {
+  let unread = false
+  vi.mocked(taskApi.notifications).mockImplementation(async () => ({
+    items: unread ? [{ id: 'new-notice', task_id: 'new-task', ticket_id: 'ticket-1', ticket_number: 1,
+      title: 'Уточнить', kind: 'CREATED', created_at: '2026-11-18T10:00:00Z', read_at: null }] : [],
+    page: 1, size: 20, total: unread ? 1 : 0, unread_count: unread ? 1 : 0,
+    new_assignments_count: unread ? 1 : 0,
+  }))
+  vi.mocked(notificationApi.list).mockResolvedValue({ items: [], page: 1, size: 20, total: 0, unread_count: 0 })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><MemoryRouter>
+    <NotificationBell session={{ ...engineer, permissions: [...engineer.permissions, 'tasks.execute'] }} />
+  </MemoryRouter></QueryClientProvider>)
+  const bell = await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 0' })
+  expect(bell).not.toHaveClass('notification-bell__trigger--new-task')
+  unread = true
+  await client.invalidateQueries({ queryKey: ['internal-task-notifications'] })
+  await waitFor(() => expect(bell).toHaveClass('notification-bell__trigger--new-task'))
+  expect(bell).toHaveAccessibleName('Уведомления, непрочитанных: 1')
+  unread = false
+  await client.invalidateQueries({ queryKey: ['internal-task-notifications'] })
+  await waitFor(() => expect(bell).not.toHaveClass('notification-bell__trigger--new-task'))
+})

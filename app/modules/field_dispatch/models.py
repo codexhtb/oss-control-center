@@ -39,6 +39,7 @@ class FieldWorkHandoff(Base):
             name="ck_field_handoffs_work",
         ),
         CheckConstraint("length(btrim(reason)) > 0", name="ck_field_handoffs_reason"),
+        CheckConstraint("note IS NULL OR length(note) <= 4000", name="ck_field_handoffs_note"),
         CheckConstraint(
             "direction IS NULL OR direction IN ('SUKHUM', 'OCHAMCHIRA')",
             name="ck_field_handoffs_direction",
@@ -101,6 +102,7 @@ class FieldWorkHandoff(Base):
     )
     ticket_version: Mapped[int] = mapped_column(nullable=False)
     reason: Mapped[str] = mapped_column(String(2000), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
     delivery_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="DRAFT")
     work_status: Mapped[str] = mapped_column(
         String(24), nullable=False, server_default="AWAITING_REPORT"

@@ -351,6 +351,7 @@ export function FieldWorkApp() {
             {items.map((item) => <button className="fw-card" key={item.id} onClick={() => void open(item.id)}>
               <span className="fw-card__top"><strong>Заявка №{item.ticket_number}</strong><span>{directionName[item.direction]}</span></span>
               <span className="fw-card__subject">{item.subject}</span>
+              <span className="fw-card__subscriber">{item.name || 'Не указано'}</span>
               <span className="fw-card__bottom"><span>{tab === 'open' ? item.sent_at ? 'Передано' : 'Опубликовано' : tab === 'completed' ? 'Отчёт' : 'Проверено'} · {formatDate(tab === 'open' ? item.sent_at || item.published_at : tab === 'completed' ? item.reported_at : item.verified_at)}</span><ChevronRight size={18} /></span>
             </button>)}
             {page && items.length < page.total && <button className="fw-more" disabled={loading} onClick={() => void load(page.page + 1)}>Показать ещё</button>}
@@ -363,6 +364,7 @@ export function FieldWorkApp() {
             <p className="fw-subject">{selected.subject}</p>
             <div className="fw-facts">
               <div><span>Причина выезда</span><strong>{selected.reason}</strong></div>
+              {selected.note && <div className="fw-note"><span>Примечание</span><strong>{selected.note}</strong></div>}
               <div><span>Абонент</span><strong>{selected.name || 'Не указано'}</strong></div>
               <div><span>Телефон</span><strong>{selected.phone || 'Не указан'}</strong></div>
               <div><span>Населённый пункт</span><strong>{selected.city || 'Не указан'}</strong></div>

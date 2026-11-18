@@ -163,7 +163,9 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     return MessageData(text, ())
 
 
-def create_handoff(db: Session, ticket: Ticket, actor_id: UUID, reason: str) -> FieldWorkHandoff:
+def create_handoff(
+    db: Session, ticket: Ticket, actor_id: UUID, reason: str, note: str | None = None
+) -> FieldWorkHandoff:
     try:
         initial_chat_id = destination_chat_id(db)
     except ApiError as exc:
@@ -174,11 +176,42 @@ def create_handoff(db: Session, ticket: Ticket, actor_id: UUID, reason: str) -> 
         ticket_id=ticket.id,
         ticket_version=ticket.version,
         reason=reason,
+        note=note,
         chat_id=initial_chat_id,
         created_by=actor_id,
     )
     db.add(handoff)
     db.flush()
+    return handoff
+
+
+def update_handoff_note(
+    db: Session, actor_id: UUID, ticket_id: UUID, handoff_id: UUID,
+    note: str | None, expected_note: str | None,
+) -> FieldWorkHandoff:
+    _actor(db, actor_id)
+    handoff = db.scalar(select(FieldWorkHandoff).where(
+        FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    ticket = db.get(Ticket, ticket_id)
+    if handoff is None or ticket is None or ticket.deleted_at is not None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    if (handoff.delivery_status not in {"DRAFT", "FAILED"}
+            or handoff.work_status != "AWAITING_REPORT"
+            or ticket.status != TicketStatus.IN_PROGRESS):
+        raise ApiError(409, "field_note_locked", "Field work preparation has finished")
+    if handoff.note != expected_note:
+        raise ApiError(409, "version_conflict", "Note changed; refresh it")
+    if handoff.note != note:
+        handoff.note = note
+        handoff.updated_at = datetime.now(UTC)
+        db.add(TicketEvent(ticket_id=ticket_id, actor_id=actor_id,
+            event_type="field_work_note_updated", ticket_version=ticket.version,
+            event_data={"handoff_id": str(handoff.id)}))
+        db.add(TicketAudit(ticket_id=ticket_id, actor_id=actor_id,
+            action="field_work_note_updated", outcome="success", origin="API"))
+        db.commit()
+        db.refresh(handoff)
     return handoff
 
 

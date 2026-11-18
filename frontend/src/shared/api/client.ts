@@ -83,6 +83,7 @@ export function errorText(error: unknown): string {
     if (error.code === 'telegram_group_not_bound') return 'Сначала привяжите Telegram-группу командой /oss_bind.'
     if (error.code === 'telegram_bot_not_in_bound_group') return 'Бот недоступен в привязанной группе. Добавьте его с правами администратора.'
     const ticketEditErrors: Record<string, string> = {
+      invalid_decision_text: 'Введите от 1 до 10 000 символов. Разрешены переносы строк и табуляция; недопустимые управляющие символы нужно удалить.',
       source_locked: 'Привязку нельзя изменить после решения, диагностики, обзвона или передачи монтажникам.',
       type_locked: 'Тип заявки можно изменить только до начала работы; тип ошибочного платежа фиксирован.',
       active_ticket_exists: 'По выбранному абоненту уже есть активная заявка.',

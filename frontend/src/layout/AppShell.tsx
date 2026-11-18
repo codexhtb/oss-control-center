@@ -8,6 +8,7 @@ import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { authApi } from '../features/auth/auth-api'
 import { NotificationBell } from '../features/notifications/NotificationBell'
+import { useTaskNotifications } from '../features/tasks/useTaskNotifications'
 import { useChatRealtime } from '../features/chat/ChatRealtime'
 
 export function roleLabel(role: Role): string {
@@ -19,6 +20,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const chat = useChatRealtime()
+  const taskInbox = useTaskNotifications(session)
   const canUseTasks = (session.permissions.includes('tasks.create') || session.permissions.includes('tasks.execute')) && (session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own'))
   const logout = useMutation({
     mutationFn: authApi.logout,
@@ -52,7 +54,7 @@ export function AppShell({ session, children, onLoggedOut }: { session: MeRespon
             <LayoutGrid size={18} /> <span>Обзор</span> <ArrowRight className="nav-link__arrow" size={15} />
           </NavLink>
           {(session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own')) && <NavLink to="/tickets" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Ticket size={18} /> <span>Заявки</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
-          {canUseTasks && <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><ClipboardList size={18} /> <span>Задачи</span></NavLink>}
+          {canUseTasks && <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><ClipboardList size={18} /> <span>Задачи</span>{!!taskInbox.data?.new_assignments_count && <span className="task-nav-indicator" aria-label="Есть новые поручения" />}</NavLink>}
           {session.permissions.includes('reports.read') && (session.permissions.includes('tickets.read.all') || session.permissions.includes('tickets.read.own')) && <NavLink to="/reports" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><BarChart3 size={18} /> <span>Отчёты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           {session.permissions.includes('subscribers.read') && <NavLink to="/subscribers" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><Search size={18} /> <span>Абоненты</span> <ArrowRight className="nav-link__arrow" size={15} /></NavLink>}
           <NavLink to="/chat" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`} onClick={() => setMobileOpen(false)}><MessageCircle size={18} /> <span>Чат</span>{!!chat.data?.unread_count && <span className="chat-nav-count" aria-label={`Непрочитанных: ${chat.data.unread_count}`}>{chat.data.unread_count > 99 ? '99+' : chat.data.unread_count}</span>}</NavLink>

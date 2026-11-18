@@ -108,9 +108,13 @@ export const ticketApi = {
     apiRequest<Ticket>(`${ticketPath(id)}/claim`, { method: 'POST', ifMatch: `"${version}"` }),
   release: (id: string, version: number) =>
     apiRequest<Ticket>(`${ticketPath(id)}/release`, { method: 'POST', ifMatch: `"${version}"` }),
-  requestFieldWork: (id: string, reason: string, version: number) =>
+  requestFieldWork: (id: string, reason: string, version: number, note?: string) =>
     apiRequest<Ticket>(`${ticketPath(id)}/field-work-request`, {
-      method: 'POST', json: { reason }, ifMatch: `"${version}"`,
+      method: 'POST', json: { reason, note: note || null }, ifMatch: `"${version}"`,
+    }),
+  updateFieldNote: (id: string, handoffId: string, note: string | null, expectedNote: string | null) =>
+    apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/note`, {
+      method: 'PATCH', json: { note, expected_note: expectedNote },
     }),
   latestFieldWork: (id: string, signal?: AbortSignal) =>
     apiRequest<{ handoff: FieldWorkHandoff | null }>(`${ticketPath(id)}/field-work-handoffs/latest`, { signal }),

@@ -1049,3 +1049,11 @@ body:has(.staff-chat) { min-height: 0; overflow: hidden; }
 .internal-task-toast { position: fixed; z-index: 80; top: 78px; right: 20px; max-width: min(340px, calc(100vw - 32px)); padding: 11px 14px; border: 1px solid #557c74; border-radius: 10px; background: #23352f; color: #e9f4ee; box-shadow: 0 12px 32px #0006; font-size: 12px; }
 @media (max-width: 900px) { .internal-task-layout { grid-template-columns: 1fr; } }
 @media (max-width: 650px) { .internal-task-toast { right: 12px; top: 66px; } .internal-task-conversation__heading { display: grid; } }
+
+/* New assignments use the existing durable notification read state. */
+.notification-bell__trigger--new-task { color: #ffad55; border-color: #cc7837; background: #422d21; }
+.notification-bell__trigger--new-task .notification-bell__count { background: #f59a43; color: #21170e; }
+.task-nav-indicator { width: 8px; height: 8px; border-radius: 50%; background: #f59a43; margin-left: auto; flex-shrink: 0; }
+.internal-task-list__item--new { border-color: #cc7837; background: #35291f; box-shadow: inset 3px 0 #f59a43; }
+.internal-task-list__item .internal-task-new-label { color: #ffad55; font-size: 12px; }
+.field-work-note p { white-space: pre-wrap; overflow-wrap: anywhere; }

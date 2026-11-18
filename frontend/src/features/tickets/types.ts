@@ -259,6 +259,7 @@ export interface TicketComment {
 }
 
 export interface FieldWorkHandoff {
+  note?: string | null
   id: string
   ticket_id: string
   reason: string

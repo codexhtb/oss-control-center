@@ -620,7 +620,17 @@ def save_notification_settings(
     )
 
 
-def _item(handoff: FieldWorkHandoff, ticket: Ticket) -> dict:
+def _subscriber_name(ticket: Ticket, snapshot: SubscriberSnapshot | None) -> str | None:
+    if ticket.ticket_type == "SUBSCRIBER_LINKED":
+        names = (snapshot.full_name, snapshot.organization_name) if snapshot else ()
+    else:
+        names = (ticket.caller_full_name,)
+    return next((name.strip() for name in names if name and name.strip()), None)
+
+
+def _item(
+    handoff: FieldWorkHandoff, ticket: Ticket, snapshot: SubscriberSnapshot | None = None,
+) -> dict:
     return {
         "id": handoff.id,
         "ticket_id": ticket.id,
@@ -628,6 +638,7 @@ def _item(handoff: FieldWorkHandoff, ticket: Ticket) -> dict:
         "direction": handoff.direction,
         "work_status": handoff.work_status,
         "subject": ticket.subject or ticket.category_name or "Обращение",
+        "name": _subscriber_name(ticket, snapshot),
         "sent_at": handoff.sent_at,
         "published_at": handoff.published_at,
         "reported_at": handoff.reported_at,
@@ -657,7 +668,9 @@ def queue_handoffs(
         Ticket.deleted_at.is_(None),
         Ticket.ticket_type != "INTERNAL",
     )
-    source = select(FieldWorkHandoff, Ticket).join(Ticket, Ticket.id == FieldWorkHandoff.ticket_id)
+    source = (select(FieldWorkHandoff, Ticket, SubscriberSnapshot)
+        .join(Ticket, Ticket.id == FieldWorkHandoff.ticket_id)
+        .outerjoin(SubscriberSnapshot, SubscriberSnapshot.id == Ticket.subscriber_snapshot_id))
     total = (
         db.scalar(
             select(func.count())
@@ -684,7 +697,7 @@ def queue_handoffs(
         .limit(page_size)
     ).all()
     return {
-        "items": [_item(handoff, ticket) for handoff, ticket in rows],
+        "items": [_item(handoff, ticket, snapshot) for handoff, ticket, snapshot in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -730,9 +743,9 @@ def handoff_detail(handoff_id: UUID, auth: InstallerDep, db: SessionDep):
         .limit(1)
     )
     return {
-        **_item(handoff, ticket),
+        **_item(handoff, ticket, snapshot),
         "reason": handoff.reason,
-        "name": ticket.caller_full_name or (snapshot.full_name if snapshot else None),
+        "note": handoff.note,
         "phone": ticket.caller_phone or (snapshot.phone if snapshot else None),
         "account_no": ticket.account_no,
         "city": ticket.city,

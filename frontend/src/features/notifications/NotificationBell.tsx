@@ -6,6 +6,7 @@ import { formatDate } from '../tickets/presentation'
 import { errorText } from '../../shared/api/client'
 import type { MeResponse } from '../../shared/api/types'
 import { taskApi, type TaskEventKind } from '../tasks/task-api'
+import { useTaskNotifications } from '../tasks/useTaskNotifications'
 import { notificationApi } from './notification-api'
 
 const taskEventNames: Record<TaskEventKind, string> = {
@@ -31,11 +32,7 @@ export function NotificationBell({ session }: { session: MeResponse }) {
     queryFn: ({ signal }) => notificationApi.list(signal),
     enabled: fieldEnabled, refetchInterval: 15_000, refetchOnWindowFocus: true,
   })
-  const taskInbox = useQuery({
-    queryKey: ['internal-task-notifications', session.user.id],
-    queryFn: ({ signal }) => taskApi.notifications(signal),
-    enabled: taskEnabled, refetchInterval: 15_000, refetchOnWindowFocus: true,
-  })
+  const taskInbox = useTaskNotifications(session)
 
   useEffect(() => {
     const items = taskInbox.data?.items
@@ -87,7 +84,10 @@ export function NotificationBell({ session }: { session: MeResponse }) {
       setOpeningId(notificationId)
       try {
         await taskApi.markRead(notificationId)
-        await queryClient.invalidateQueries({ queryKey: ['internal-task-notifications', session.user.id] })
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['internal-task-notifications', session.user.id] }),
+          queryClient.invalidateQueries({ queryKey: ['internal-tasks'] }),
+        ])
       } catch (error) { setActionError(error) }
       setOpeningId(null)
     }
@@ -97,7 +97,7 @@ export function NotificationBell({ session }: { session: MeResponse }) {
 
   const unread = (fieldInbox.data?.unread_count ?? 0) + (taskInbox.data?.unread_count ?? 0)
   return <div className="notification-bell" ref={root}>
-    <button className="notification-bell__trigger" type="button" aria-label={`Уведомления, непрочитанных: ${unread}`} aria-expanded={open} aria-controls="field-report-inbox" onClick={() => { setOpen((value) => !value); setActionError(null) }}>
+    <button className={`notification-bell__trigger${(taskInbox.data?.new_assignments_count ?? 0) > 0 ? ' notification-bell__trigger--new-task' : ''}`} type="button" aria-label={`Уведомления, непрочитанных: ${unread}`} aria-expanded={open} aria-controls="field-report-inbox" onClick={() => { setOpen((value) => !value); setActionError(null) }}>
       <Bell size={19} aria-hidden="true" />{unread > 0 && <span className="notification-bell__count">{unread > 99 ? '99+' : unread}</span>}
     </button>
     {open && <div id="field-report-inbox" className="notification-bell__popover" role="region" aria-label="Уведомления">

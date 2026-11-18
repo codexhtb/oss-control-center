@@ -56,3 +56,20 @@ it('opens the task from a deep link inside the ticket', async () => {
   mount('/?task=task-id')
   expect(await screen.findByText('Открыто поручение task-id')).toBeInTheDocument()
 })
+
+it('highlights only unread assignments and clears the accent after the shared list refresh', async () => {
+  let unread = true
+  vi.mocked(taskApi.list).mockImplementation(async () => ({
+    items: [{ ...task, is_unread: unread }, { ...task, id: 'old-task', title: 'Прочитанное', is_unread: false }],
+    total: 2, page: 1, size: 20,
+  }))
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><MemoryRouter><TicketTasks ticketId="ticket-id" session={session} /></MemoryRouter></QueryClientProvider>)
+  const fresh = await screen.findByRole('button', { name: /Уточнить время.*Новое поручение/ })
+  expect(fresh).toHaveClass('internal-task-list__item--new')
+  expect(screen.getByRole('button', { name: /Прочитанное/ })).not.toHaveClass('internal-task-list__item--new')
+  unread = false
+  await client.invalidateQueries({ queryKey: ['internal-tasks'] })
+  await waitFor(() => expect(fresh).not.toHaveClass('internal-task-list__item--new'))
+  expect(screen.queryByText('Новое поручение')).not.toBeInTheDocument()
+})

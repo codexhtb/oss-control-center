@@ -23,6 +23,7 @@ export interface InternalTask {
   phone?: string | null
   account_no?: string | null
   latest_answer?: string | null
+  is_unread?: boolean
 }
 export interface TaskEvent {
   id: string
@@ -43,7 +44,7 @@ export interface TaskNotification {
   read_at: string | null
 }
 interface Page<T> { items: T[]; page: number; size: number; total: number }
-export interface NotificationPage extends Page<TaskNotification> { unread_count: number }
+export interface NotificationPage extends Page<TaskNotification> { unread_count: number; new_assignments_count?: number }
 export const taskApi = {
   assignees: (ticketId: string, signal?: AbortSignal) => apiRequest<{ id: string; display_name: string }[]>(`/api/v1/tasks/assignees?ticket_id=${encodeURIComponent(ticketId)}`, { signal }),
   list: (scope: 'assigned' | 'created' | 'all', state: 'all' | 'active' | 'completed' | 'overdue', page: number, ticketId?: string, signal?: AbortSignal) => {
@@ -56,5 +57,6 @@ export const taskApi = {
   create: (payload: { ticket_id: string; assignee_id: string; description: string; client_request_id: string }) => apiRequest<InternalTask>('/api/v1/tasks', { method: 'POST', json: payload }),
   act: (id: string, version: number, body: string, requestId: string) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}/events`, { method: 'POST', ifMatch: `"${version}"`, json: { kind: 'COMPLETED', body, client_request_id: requestId } }),
   notifications: (signal?: AbortSignal) => apiRequest<NotificationPage>('/api/v1/tasks/notifications?size=20', { signal }),
+  readTask: (id: string) => apiRequest<void>(`/api/v1/tasks/${encodeURIComponent(id)}/read`, { method: 'POST' }),
   markRead: (id: string) => apiRequest<void>(`/api/v1/tasks/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }),
 }

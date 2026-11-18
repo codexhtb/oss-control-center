@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import type { MeResponse } from '../../shared/api/types'
 import { errorText } from '../../shared/api/client'
@@ -22,6 +22,19 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
   const [copied, setCopied] = useState(false)
   const task = useQuery({ queryKey: ['internal-task', taskId], queryFn: ({ signal }) => taskApi.get(taskId, signal), refetchInterval: 15_000 })
   const events = useQuery({ queryKey: ['internal-task-events', taskId, page], queryFn: ({ signal }) => taskApi.events(taskId, page, signal), refetchInterval: page === 1 ? 15_000 : false })
+  useEffect(() => {
+    if (!task.data || !task.data.is_unread || (ticketId && task.data.ticket_id !== ticketId)) return
+    let active = true
+    void taskApi.readTask(taskId).then(async () => {
+      if (!active) return
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['internal-task', taskId] }),
+        queryClient.invalidateQueries({ queryKey: ['internal-tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['internal-task-notifications'] }),
+      ])
+    }).catch((cause: unknown) => { if (active) setError(cause) })
+    return () => { active = false }
+  }, [taskId, task.data?.id, task.data?.is_unread, ticketId, queryClient])
   const canFinish = task.data?.status === 'OPEN' && task.data?.assignee_id === session.user.id && session.permissions.includes('tasks.execute')
 
   async function finish() {

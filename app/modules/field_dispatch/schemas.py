@@ -8,6 +8,25 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+def validate_field_note(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if any(category(ch) == "Cc" and ch not in "\n\r\t" for ch in value):
+        raise ValueError("Note contains unsupported control characters")
+    return value.strip() or None
+
+
+class UpdateFieldNote(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: str | None = Field(default=None, max_length=4000)
+    expected_note: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("note")
+    @classmethod
+    def valid_note(cls, value: str | None) -> str | None:
+        return validate_field_note(value)
+
+
 class SendFieldWork(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +69,7 @@ class FieldWorkHandoffView(BaseModel):
     id: UUID
     ticket_id: UUID
     reason: str
+    note: str | None = None
     delivery_status: Literal["DRAFT", "SENDING", "SENT", "FAILED", "UNCERTAIN", "PUBLISHED"]
     work_status: Literal["AWAITING_REPORT", "REPORTED", "VERIFIED"]
     chat_id: str

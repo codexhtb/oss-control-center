@@ -283,6 +283,14 @@ class AddComment(StrictModel):
 
 class FieldWorkRequest(StrictModel):
     reason: str = Field(min_length=1, max_length=2000)
+    note: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("note")
+    @classmethod
+    def valid_note(cls, value: str | None) -> str | None:
+        from app.modules.field_dispatch.schemas import validate_field_note
+
+        return validate_field_note(value)
 
 
 class ManualDiagnostic(StrictModel):
@@ -314,8 +322,8 @@ class AddDecision(StrictModel):
         if value is None:
             return None
         value = value.strip()
-        if not value or any(category(ch) == "Cc" for ch in value):
-            raise ValueError("decision text must contain text without control characters")
+        if not value or any(category(ch) == "Cc" and ch not in "\n\r\t" for ch in value):
+            raise ValueError("invalid_decision_text")
         return value
 
 

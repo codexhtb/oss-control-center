@@ -1037,7 +1037,7 @@ def request_field_work(
     if ticket.status != TicketStatus.IN_PROGRESS:
         raise ApiError(409, "invalid_transition", "Start ticket before requesting field work")
     _changed(ticket)
-    handoff = create_handoff(db, ticket, actor_id, payload.reason)
+    handoff = create_handoff(db, ticket, actor_id, payload.reason, payload.note)
     _fact(
         db,
         ticket,

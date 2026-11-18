@@ -6,7 +6,7 @@ const id = '00000000-0000-4000-8000-000000000101'
 const partnerId = '00000000-0000-4000-8000-000000000102'
 const handoff = {
   id, ticket_id: '00000000-0000-4000-8000-000000000103', ticket_number: 201,
-  direction: 'SUKHUM', work_status: 'AWAITING_REPORT', subject: 'Нет связи',
+  direction: 'SUKHUM', work_status: 'AWAITING_REPORT', subject: 'Нет связи', name: 'Имя из snapshot',
   sent_at: '2026-11-17T07:00:00Z', reported_at: null, verified_at: null,
   scheduled_for: null, scheduled_date: null, schedule_status: 'ORIGINAL',
 }
@@ -35,16 +35,19 @@ it('loads the shared queue, detail and submits one structured report', async () 
     else if (path.includes('/reschedules')) body = { items: [], total: 0, page: 1, page_size: 20 }
     else if (path.endsWith('/report')) { reported = true; body = { handoff_id: id, work_status: 'REPORTED', report_id: 'report' } }
     else if (path.endsWith(`/${id}`)) body = { ...handoff, reason: 'Проверить линию',
-      name: 'Абонент', phone: '+7 900 111 22 33', city: 'Сухум', address: 'Тестовая улица 1',
+      name: 'Имя из snapshot', note: 'MAC AA:BB:CC:DD:EE:FF\nОптика -21 dBm', phone: '+7 900 111 22 33', city: 'Сухум', address: 'Тестовая улица 1',
       account_no: null, schedule_version: 0, schedule_reason: null, schedule_author: null, report: null }
     else body = { items: reported ? [] : [handoff], total: reported ? 0 : 1, page: 1, page_size: 20 }
     return { ok: true, status: 200, json: async () => body } as Response
   }))
   render(<FieldWorkApp />)
   expect(await screen.findByText('Заявка №201')).toBeInTheDocument()
+  expect(screen.getByText('Имя из snapshot')).toBeInTheDocument()
   expect(document.querySelector('.fw-app')).toHaveAttribute('data-theme', 'light')
   fireEvent.click(screen.getByRole('button', { name: /Заявка №201/ }))
   expect(await screen.findByText('Проверить линию')).toBeInTheDocument()
+  expect(screen.getByText(/MAC AA:BB:CC:DD:EE:FF/)).toHaveTextContent('Оптика -21 dBm')
+  expect(screen.getByText('Имя из snapshot')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /Позвонить/ })).toBeEnabled()
   fireEvent.click(screen.getByRole('button', { name: 'Скопировать номер' }))
   await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('+7 900 111 22 33'))
@@ -165,7 +168,7 @@ it('links verified OCC staff and allows verification without installer report ac
     else if (path.endsWith('/staff/me')) body = { name: 'Инженер', directions: ['SUKHUM'], can_verify: true, can_perform: false, role: 'engineer' }
     else if (path.includes('/reschedules')) body = { items: [], total: 0, page: 1, page_size: 20 }
     else if (path.endsWith('/verify')) body = { handoff_id: id, work_status: 'VERIFIED' }
-    else if (path.endsWith(`/${id}`)) body = { ...handoff, work_status: 'REPORTED', reason: 'Проверить линию', name: 'Абонент', phone: null, city: 'Сухум', address: null, account_no: null, schedule_version: 0, schedule_reason: null, schedule_author: null, report: { text: 'Линия восстановлена', installer: 'Монтажник', partner: null, reported_at: '2026-11-17T08:00:00Z' } }
+    else if (path.endsWith(`/${id}`)) body = { ...handoff, work_status: 'REPORTED', reason: 'Проверить линию', name: 'Имя из snapshot', note: 'MAC AA:BB:CC:DD:EE:FF\nОптика -21 dBm', phone: null, city: 'Сухум', address: null, account_no: null, schedule_version: 0, schedule_reason: null, schedule_author: null, report: { text: 'Линия восстановлена', installer: 'Монтажник', partner: null, reported_at: '2026-11-17T08:00:00Z' } }
     else body = { items: [{ ...handoff, work_status: 'REPORTED' }], total: 1, page: 1, page_size: 20 }
     return { ok: true, status: 200, json: async () => body } as Response
   }))

@@ -35,6 +35,7 @@ class TaskView(BaseModel):
     phone: str | None = None
     account_no: str | None = None
     latest_answer: str | None = None
+    is_unread: bool = False
 
 
 class TaskPage(BaseModel):
@@ -77,6 +78,7 @@ class TaskNotificationPage(BaseModel):
     size: int
     total: int
     unread_count: int
+    new_assignments_count: int = 0
 
 
 class AssigneeView(BaseModel):
@@ -198,6 +200,11 @@ def create_task(payload: CreateTask, identity: CsrfIdentityDep, db: SessionDep):
 @router.get("/{task_id}", response_model=TaskView)
 def get_task(task_id: UUID, identity: CurrentIdentityDep, db: SessionDep):
     return service.get_task(db, identity.user, task_id)
+
+
+@router.post("/{task_id}/read", status_code=204)
+def read_task(task_id: UUID, identity: CsrfIdentityDep, db: SessionDep) -> None:
+    service.mark_task_read(db, identity.user, task_id)
 
 
 @router.get("/{task_id}/events", response_model=TaskEventPage)

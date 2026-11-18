@@ -14,7 +14,7 @@ vi.mock('../features/tickets/ticket-api', () => ({ ticketApi: {
   previousTickets: vi.fn(),
   decisions: vi.fn(), decision: vi.fn(), callbacks: vi.fn(), recordCallback: vi.fn(), engineers: vi.fn(), start: vi.fn(), claim: vi.fn(), release: vi.fn(), addComment: vi.fn(),
   lookup: vi.fn(), checkTicket: vi.fn(), confirmCheck: vi.fn(), ticketOnu: vi.fn(),
-  assign: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(), publishFieldWork: vi.fn(), confirmFieldWorkAbsent: vi.fn(),
+  assign: vi.fn(), updateFieldNote: vi.fn(), requestFieldWork: vi.fn(), latestFieldWork: vi.fn(), sendFieldWork: vi.fn(), publishFieldWork: vi.fn(), confirmFieldWorkAbsent: vi.fn(),
   fieldWorkMessages: vi.fn(), fieldWorkReschedules: vi.fn(), rescheduleFieldWork: vi.fn(), verifyFieldWork: vi.fn(),
   addDecision: vi.fn(), resolve: vi.fn(), close: vi.fn(), remove: vi.fn(),
 } }))
@@ -280,9 +280,10 @@ it('saves a field-work reason before an explicit Telegram send', async () => {
   fireEvent.change(screen.getByRole('textbox', { name: 'Причина передачи' }), {
     target: { value: 'Проверить кабель' },
   })
+  fireEvent.change(screen.getByLabelText('Примечание к новому выезду'), { target: { value: 'MAC AA:BB:CC:DD:EE:FF\nОсобенности подключения' } })
   fireEvent.click(screen.getByRole('button', { name: 'Зафиксировать запрос' }))
   await waitFor(() => expect(ticketApi.requestFieldWork).toHaveBeenCalledWith(
-    ticketId, 'Проверить кабель', 3,
+    ticketId, 'Проверить кабель', 3, 'MAC AA:BB:CC:DD:EE:FF\nОсобенности подключения',
   ))
   expect(ticketApi.sendFieldWork).not.toHaveBeenCalled()
   const send = await screen.findByRole('button', { name: 'Отправить боту' })
@@ -321,6 +322,10 @@ it('publishes a draft to Mini App without sending a Telegram card', async () => 
     ...handoff, direction: 'OCHAMCHIRA', delivery_status: 'PUBLISHED',
     published_at: base.updated_at, ready_to_send: false,
   })
+  vi.mocked(ticketApi.updateFieldNote).mockImplementation(async (_id, _handoffId, note) => {
+    Object.assign(handoff, { note })
+    return handoff
+  })
   renderDetail('engineer', privileged)
   const publish = await screen.findByRole('button', { name: 'Опубликовать в OSS Field Work' })
   expect(publish).toBeDisabled()
@@ -328,6 +333,11 @@ it('publishes a draft to Mini App without sending a Telegram card', async () => 
     target: { value: 'OCHAMCHIRA' },
   })
   expect(publish).toBeEnabled()
+  fireEvent.change(screen.getByLabelText('Примечание для монтажников'), { target: { value: 'SN ONU/1234\nОптика -21 dBm' } })
+  expect(publish).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить примечание' }))
+  await waitFor(() => expect(ticketApi.updateFieldNote).toHaveBeenCalledWith(ticketId, handoff.id, 'SN ONU/1234\nОптика -21 dBm', null))
+  await waitFor(() => expect(publish).toBeEnabled())
   fireEvent.click(publish)
   await waitFor(() => expect(ticketApi.publishFieldWork).toHaveBeenCalledWith(
     ticketId, handoff.id, 'OCHAMCHIRA', null,

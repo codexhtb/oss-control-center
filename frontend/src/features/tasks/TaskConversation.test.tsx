@@ -50,3 +50,17 @@ it('saves one answer and completes the task for the assignee', async () => {
   await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'Не дозвонилась', expect.any(String)))
   expect(screen.queryByRole('button', { name: 'Открыть повторно' })).not.toBeInTheDocument()
 })
+
+it('marks a newly opened assignment read through the protected API and refreshes the inbox', async () => {
+  const readTask = vi.fn().mockResolvedValue(undefined)
+  Object.assign(taskApi, { readTask })
+  vi.mocked(taskApi.get).mockResolvedValue({ ...task, is_unread: true })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const invalidate = vi.spyOn(client, 'invalidateQueries')
+  render(<QueryClientProvider client={client}><MemoryRouter>
+    <TaskConversation taskId="task-id" session={{ ...engineer, user: { ...engineer.user, id: 'sima-id' } }} />
+  </MemoryRouter></QueryClientProvider>)
+  await waitFor(() => expect(readTask).toHaveBeenCalledWith('task-id'))
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['internal-task-notifications'] })
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['internal-tasks'] })
+})

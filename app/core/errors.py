@@ -25,5 +25,9 @@ def handle_api_error(_: Request, exc: ApiError) -> JSONResponse:
     return error_response(exc.status_code, exc.code, exc.message)
 
 
-def handle_validation_error(_: Request, __: RequestValidationError) -> JSONResponse:
+def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # Never echo rejected text or Pydantic input/context into the public error.
+    if any("decision_text" in error["loc"] or "performed_actions" in error["loc"]
+           for error in exc.errors()):
+        return error_response(422, "invalid_decision_text", "Invalid decision text")
     return error_response(422, "invalid_request", "Invalid request")

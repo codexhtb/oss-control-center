@@ -8,6 +8,7 @@ export type Handoff = {
   direction: Direction
   work_status: 'AWAITING_REPORT' | 'REPORTED' | 'VERIFIED'
   subject: string
+  name?: string | null
   sent_at: string | null
   published_at: string | null
   reported_at: string | null
@@ -19,6 +20,7 @@ export type Handoff = {
 
 export type HandoffDetail = Handoff & {
   reason: string
+  note?: string | null
   name: string | null
   phone: string | null
   account_no: string | null

@@ -87,3 +87,6 @@
 @keyframes fw-spin { to { transform: rotate(360deg); } }
 @media (min-width: 600px) { .fw-app { padding: 26px; } .fw-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; } }
 @media (prefers-reduced-motion: reduce) { .fw-spin { animation: none; } }
+
+.fw-card__subscriber { color: var(--fw-muted); font-size: 14px; overflow-wrap: anywhere; }
+.fw-note strong { white-space: pre-wrap; overflow-wrap: anywhere; }
