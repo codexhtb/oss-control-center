@@ -25,6 +25,8 @@ export function InstallerManager() {
   const [error, setError] = useState<unknown>(null)
   const [message, setMessage] = useState('')
   const [confirmDisable, setConfirmDisable] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteBlocked, setDeleteBlocked] = useState(false)
   const selected = installers.data?.items.find((item) => item.id === selectedId)
   const filtered = installers.data?.items.filter((item) =>
     `${item.name} ${item.telegram_user_id}`.toLocaleLowerCase('ru').includes(search.trim().toLocaleLowerCase('ru'))) ?? []
@@ -36,7 +38,7 @@ export function InstallerManager() {
     setTelegramId(item ? String(item.telegram_user_id) : '')
     setDirections(item?.directions ?? [])
     setActive(item?.is_active ?? true)
-    setConfirmDisable(false); setError(null); setMessage('')
+    setConfirmDisable(false); setConfirmDelete(false); setDeleteBlocked(false); setError(null); setMessage('')
   }
 
   function toggle(direction: Direction) {
@@ -63,6 +65,19 @@ export function InstallerManager() {
     finally { setBusy(false) }
   }
 
+  async function remove() {
+    if (!selected || busy) return
+    setBusy(true); setError(null); setMessage(''); setDeleteBlocked(false)
+    try {
+      await apiRequest(`/api/v1/field-work/installers/${selected.id}`, { method: 'DELETE' })
+      await queryClient.invalidateQueries({ queryKey: ['field-work-installers'] })
+      edit(); setMessage('Монтажник удалён. Telegram User ID освобождён.')
+    } catch (cause) {
+      setError(cause)
+      if (typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'installer_has_history') setDeleteBlocked(true)
+    } finally { setBusy(false) }
+  }
+
   return <section className="detail-panel" aria-label="Монтажники OSS Field Work">
     <div className="detail-panel__heading"><div><h2>Монтажники OSS Field Work</h2><p className="muted">Доступ через Telegram, без отдельного логина OCC.</p></div><Button onClick={() => edit(undefined, true)}>Добавить монтажника</Button></div>
     {message && <Notice>{message}</Notice>}
@@ -78,6 +93,11 @@ export function InstallerManager() {
       <div className="user-actions"><label><input type="checkbox" checked={directions.includes('SUKHUM')} onChange={() => toggle('SUKHUM')} /> Сухум</label><label><input type="checkbox" checked={directions.includes('OCHAMCHIRA')} onChange={() => toggle('OCHAMCHIRA')} /> Очамчира</label><label><input type="checkbox" checked={active} onChange={(event) => { setActive(event.target.checked); setConfirmDisable(false) }} /> Активен</label></div>
       {confirmDisable && <Notice tone="error">Подтвердите отключение монтажника повторным нажатием «Сохранить».</Notice>}
       <div className="user-actions"><Button type="submit" disabled={busy || !directions.length || !name.trim() || !/^\d+$/.test(telegramId)}>{busy ? 'Сохраняем…' : 'Сохранить'}</Button><Button type="button" variant="quiet" onClick={() => edit()}>Отмена</Button></div>
+      {selected && <div className="employee-editor__access">
+        <div><strong>Удалить монтажника</strong><span>Удаление возможно только без отчётов и истории выполнения. Иначе отключите доступ.</span></div>
+        {confirmDelete ? <div className="user-actions"><Button type="button" variant="quiet" disabled={busy} onClick={() => setConfirmDelete(false)}>Отмена</Button><Button type="button" className="button--danger" disabled={busy} onClick={() => void remove()}>{busy ? 'Удаляем…' : 'Подтвердить удаление'}</Button></div> : <Button type="button" variant="quiet" disabled={busy} onClick={() => { setConfirmDelete(true); setDeleteBlocked(false) }}>Удалить монтажника</Button>}
+      </div>}
+      {deleteBlocked && <Notice tone="error">Исторические данные защищены. Снимите флажок «Активен» и сохраните монтажника, чтобы отключить ему доступ.</Notice>}
     </form>}
   </section>
 }

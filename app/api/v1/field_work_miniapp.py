@@ -4,9 +4,9 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.identity import SessionDep, require_permission, require_read_permission
@@ -208,6 +208,67 @@ def update_installer(
         raise ApiError(409, "installer_conflict", "Telegram user already registered") from exc
     db.refresh(installer)
     return _installer_view(db, installer)
+
+
+@router.delete("/installers/{installer_id}", status_code=204)
+def delete_installer(
+    installer_id: UUID, identity: ManagerDep, db: SessionDep
+) -> Response:
+    installer = db.scalar(
+        select(FieldInstaller).where(FieldInstaller.id == installer_id).with_for_update()
+    )
+    if installer is None:
+        raise ApiError(404, "not_found", "Installer not found")
+    linked_records = db.scalar(
+        select(func.count())
+        .select_from(FieldExternalMessage)
+        .where(
+            or_(
+                FieldExternalMessage.primary_installer_id == installer_id,
+                FieldExternalMessage.partner_installer_id == installer_id,
+            )
+        )
+    )
+    if linked_records:
+        audit(
+            db,
+            "field_installer_delete_blocked",
+            "denied",
+            actor=identity.user.id,
+            details={"installer_id": str(installer.id), "linked_records": linked_records},
+        )
+        db.commit()
+        raise ApiError(
+            409,
+            "installer_has_history",
+            "Installer has work history and must be deactivated instead",
+        )
+    audit(
+        db,
+        "field_installer_deleted",
+        "success",
+        actor=identity.user.id,
+        details={"installer_id": str(installer.id)},
+    )
+    db.delete(installer)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        audit(
+            db,
+            "field_installer_delete_blocked",
+            "denied",
+            actor=identity.user.id,
+            details={"installer_id": str(installer_id), "reason": "foreign_key"},
+        )
+        db.commit()
+        raise ApiError(
+            409,
+            "installer_has_history",
+            "Installer has related records and must be deactivated instead",
+        ) from exc
+    return Response(status_code=204)
 
 
 def _authorized_installer(

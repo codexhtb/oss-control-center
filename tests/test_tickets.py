@@ -49,6 +49,7 @@ from app.modules.field_dispatch.models import (
     FieldDispatchGroupBinding,
     FieldDispatchUpdate,
     FieldExternalMessage,
+    FieldInstallerDirection,
     FieldReportNotification,
     FieldReportNotificationRead,
     FieldRescheduleDialog,
@@ -71,7 +72,7 @@ from app.modules.field_dispatch.rescheduling import (
 )
 from app.modules.field_dispatch.service import finalize_send, prepare_send
 from app.modules.identity.crypto import hash_password
-from app.modules.identity.models import User, UserPermission
+from app.modules.identity.models import IdentityAuditEvent, User, UserPermission
 from app.modules.identity.roles import Permission, Role
 from app.modules.internal_tasks.models import (
     InternalTask,
@@ -457,6 +458,12 @@ def test_field_work_miniapp_registry_queue_and_rbac(
     login(ticket_client, "miniapp_operator")
     assert ticket_client.get("/api/v1/field-work/installers").status_code == 403
     assert (
+        ticket_client.delete(
+            f"/api/v1/field-work/installers/{installer['id']}", headers=csrf(ticket_client)
+        ).status_code
+        == 403
+    )
+    assert (
         ticket_client.put(
             f"/api/v1/field-work/installers/{installer['id']}",
             headers=csrf(ticket_client),
@@ -498,6 +505,34 @@ def test_field_work_miniapp_registry_queue_and_rbac(
         == 409
     )
     assert ticket_client.get(f"{base}/handoffs", headers=headers).status_code == 403
+    deleted = ticket_client.delete(
+        f"/api/v1/field-work/installers/{installer['id']}", headers=csrf(ticket_client)
+    )
+    assert deleted.status_code == 204, deleted.text
+    assert installer["id"] not in {
+        item["id"] for item in ticket_client.get("/api/v1/field-work/installers").json()["items"]
+    }
+    with Session(ticket_engine) as db:
+        assert db.scalar(
+            select(func.count())
+            .select_from(FieldInstallerDirection)
+            .where(FieldInstallerDirection.installer_id == UUID(installer["id"]))
+        ) == 0
+        assert db.scalar(
+            select(func.count()).select_from(IdentityAuditEvent).where(
+                IdentityAuditEvent.action == "field_installer_deleted"
+            )
+        ) == 1
+    reused = ticket_client.post(
+        "/api/v1/field-work/installers",
+        headers=csrf(ticket_client),
+        json={
+            "telegram_user_id": 12345,
+            "name": "Replacement Installer",
+            "directions": ["SUKHUM"],
+        },
+    )
+    assert reused.status_code == 201, reused.text
 
 
 def test_field_work_staff_link_and_verify_permissions(
@@ -835,6 +870,12 @@ def test_field_work_miniapp_report_reschedule_and_existing_workflow(
     messages = ticket_client.get(path + f"/field-work-handoffs/{first_id}/messages").json()
     assert messages["total"] == 1
     assert messages["items"][0]["partner_name"] == "Installer Two"
+    for installer in registered:
+        blocked = ticket_client.delete(
+            f"/api/v1/field-work/installers/{installer['id']}", headers=csrf(ticket_client)
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["code"] == "installer_has_history"
     with Session(ticket_engine) as db:
         report = db.get(FieldExternalMessage, UUID(sent.json()["report_id"]))
         assert report.primary_installer_id == UUID(registered[0]["id"])
@@ -844,6 +885,11 @@ def test_field_work_miniapp_report_reschedule_and_existing_workflow(
         assert db.scalar(select(func.count()).select_from(TicketEvent).where(
             TicketEvent.ticket_id == UUID(ticket["id"]),
             TicketEvent.event_type == "field_work_reported")) == 1
+        assert db.scalar(
+            select(func.count()).select_from(IdentityAuditEvent).where(
+                IdentityAuditEvent.action == "field_installer_delete_blocked"
+            )
+        ) == 2
         callback = {"update_id": 9876501, "callback_query": {
             "id": "synthetic-after-miniapp", "from": {"id": 8102, "first_name": "Installer Two"},
             "data": f"field_done:{first_id}", "message": {"message_id": 931,
