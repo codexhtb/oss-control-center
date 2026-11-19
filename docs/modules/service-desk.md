@@ -13,3 +13,9 @@
 **Workflow.** Заявка проходит `OPEN → IN_PROGRESS → RESOLVED → CLOSED` с допустимыми возвратами по callback workflow. Назначение и решение — отдельные действия. История версий и аудит сохраняются. Field Work/Telegram не закрывает заявку.
 
 **Ошибки и ограничения.** API различает отсутствие, конфликт состояния, недопустимые данные и отсутствие права. Проверяйте response contract в тестах. Не меняйте старые migration revisions; новый schema change — следующая migration.
+
+## Сущности и сопровождение
+
+`tickets` хранит текущее состояние, optimistic `version` и soft-delete. Snapshots фиксируют внешний контекст, decisions/callbacks — версии решений и звонки, events/audit — бизнес-историю и защищённый след. Мутации workflow проверяют status, assignment и permission; `If-Match` защищает от потери параллельного изменения, `client_request_id` — от дубля создания.
+
+INTERNAL visibility применяется до pagination/total. При добавлении поля или типа синхронно меняйте schema, model/check constraint, service, response, frontend types и тесты. См. [workflow](../architecture/service-desk-workflow.md) и [матрицу приёмки](../architecture/acceptance-and-testing.md).

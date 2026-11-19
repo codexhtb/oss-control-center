@@ -11,3 +11,11 @@
 **Состояния:** delivery `DRAFT/SENDING/SENT/FAILED/UNCERTAIN/PUBLISHED` отделён от work `AWAITING_REPORT/REPORTED/VERIFIED`. Переносы — отдельная история. `UNCERTAIN` требует явного безопасного reconciliation, не слепого повторного send.
 
 **Poller:** единственный `getUpdates` consumer; он также drains personal notification outbox и synchronizes Telegram card. Не запускайте второй consumer и не отправляйте реальные сообщения в тестах. Подробности [операции Telegram](../operations/telegram-operations.md).
+
+## Транзакции и восстановление
+
+Draft хранит причину, note и утверждённый `message_text`. Send создаёт delivery attempt, переводит запись через `SENDING` и сохраняет Telegram message ID только после подтверждения. Timeout после запроса даёт `UNCERTAIN`: безопасное восстановление требует доказать отсутствие/наличие карточки, а не повторить вслепую.
+
+Inbound связывает callback/reply с chat ID, message ID, handoff и автором. Completion prompt можно безопасно заменить; старый reply не должен завершить другой handoff. Report переводит только работу в `REPORTED`; verify — в `VERIFIED`. Group migration учитывается конфигурацией, не client payload.
+
+Tests используют mock Bot API для 429, timeout, lost response, duplicate update, concurrent users и обеих directions. Рабочая группа не является test target.

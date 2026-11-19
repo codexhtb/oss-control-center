@@ -11,3 +11,19 @@
 **Workflow:** сотрудник ищет абонента, сохраняется provider snapshot и audit outcome; карточка показывает источник, время получения и качество/ограничения. Создание заявки из карточки переносит подтверждённый snapshot в контекст заявки.
 
 **Ошибки и ограничения:** `BillingUnavailable`, ambiguity, incomplete/invalid data, unsupported account и not found не превращаются в нули или выдуманные значения. Данные snapshot имеют срок действия; текущая доступность и актуальность source всегда проверяются отдельно.
+
+## Lookup и представление
+
+Поиск возвращает ограниченных кандидатов по ФИО, логину и ЛС; числовой login не считается автоматически account ID. После выбора ЛС создаётся lookup/snapshot. UUID lookup другого сотрудника не даёт доступа.
+
+Карточка разделяет контакты, services/tariffs, finance, billing access и monitoring. `int_status`/`is_blocked` сохраняются с source quality; неизвестный код не доказывает отсутствие блокировки. Связанные заявки ищутся по subscriber ID/source или account snapshot, не по имени/телефону, и проходят ticket RBAC.
+
+| Endpoint | Назначение |
+| --- | --- |
+| `GET /search` | bounded candidates по введённому запросу |
+| `POST /subscriber-lookups` | provider lookup и snapshot |
+| `GET /{id}` | карточка сохранённого lookup |
+| `GET /{id}/services`, `/tariff-history`, `/finance` | тематические блоки |
+| `GET /{id}/tickets`, `/active-tickets` | обращения с ticket visibility |
+
+Тестируйте ownership lookup, несколько accounts, expired snapshot, finance permission, source unavailable и отсутствие лишнего запроса NetUP при рендере уже сохранённой карточки.

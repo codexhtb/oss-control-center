@@ -11,3 +11,18 @@
 **Хранение и права.** Нормализованные bounded observations фиксируются как PostgreSQL snapshots; permission — `subscribers.read`, finance read дополнительно `subscribers.finance.read`.
 
 **Ошибки и ограничения.** Уплотнение данных UTM5 может быть неоднозначным, набор услуг/валют и историческая глубина зависят от реальных source rows. Статус adapter в текущем runtime **UNVERIFIED**; безопасно подтвердить через конфигурационный инвентарь без вывода значений секретов, API readiness и контролируемый lookup без записи в NetUP.
+
+## Граница repository
+
+Связи `users` → `users_accounts` → `accounts` и service/finance rows читаются параметризованным SQL с bounded result, timeout и read-only transaction. Архивный discovery SQL нельзя переносить в production-код без сверки schema. Normalizer не смешивает billing ID, network device ID и LibreNMS ID.
+
+Amount/currency передаются без float-округления и без подстановки валюты. При сбое проверяют read-only probe/grants/lag у владельца replica; DSN не помещают в runbook. См. [NetUP operations](../operations/netup-replica.md) и [индекс NetUP](../netup/README.md).
+
+| Слой | Ответственность |
+| --- | --- |
+| `BillingProvider` | стабильная доменная граница и ошибки |
+| NetUP repository | parameterized SELECT, timeout, transaction |
+| normalizer | source fields → typed snapshot без догадок |
+| billing API | permission, ownership lookup, audit outcome |
+
+Регрессия обязана покрывать точный ЛС, неоднозначный numeric login, несколько accounts, whitespace/case ФИО, недоступную replica и запрет любого write SQL.

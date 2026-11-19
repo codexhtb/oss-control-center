@@ -15,3 +15,5 @@
 | [Отчёты и экспорт](reports.md) | Аналитические SQL-агрегации, PDF/XLSX |
 | [Пользователи, RBAC и аудит](identity-rbac-audit.md) | Учётные записи и персональные grants |
 | [Уведомления](notifications.md) | Колокольчик, прочтение и Telegram outbox |
+
+Каждая страница фиксирует границу модуля, источники/хранение, API, permissions, workflow и отказ. Полный перечень полей находится в Pydantic/SQLAlchemy, а текущие межмодульные инварианты — в [API-контрактах](../architecture/api-contracts.md) и [модели данных](../architecture/data-model.md). Документ не заменяет backend policy или migration constraint.

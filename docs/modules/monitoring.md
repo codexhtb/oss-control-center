@@ -13,3 +13,9 @@
 **Ошибки:** mapping missing/unconfirmed, stale, source unavailable, multiple candidate, unknown. Не трактуйте `UNKNOWN` как `DOWN` и не связывайте по совпадению account, имени абонента или телефону.
 
 **Runtime status:** наличие provider-кода не подтверждает доступность ключей, API, collectors или актуальность наблюдения. Проверяйте по [LibreNMS runbook](../operations/librenms-integration.md) и health endpoint без печати секретов/данных абонента.
+
+## Корреляция и результат
+
+Подтверждённый device mapping использует стабильные NetUP switch ID и LibreNMS device ID; hostname — только кандидат. Management IP/inventory проверяются read-only. NetUP port нельзя считать LibreNMS `ifIndex` без правила, а ONU требует отдельного однозначного PON/VLAN/OLT ключа.
+
+Ответ сохраняет observation time и quality/reason. LibreNMS device может быть виден при отсутствии ONU; Icinga/BDCOM сообщают собственную причину. Защищённый mapping registry и credentials не коммитятся.
