@@ -3,7 +3,7 @@
 **Engineering case study | Network Engineering × Platform Engineering × Workflow Automation**  
 **2026 · FastAPI · React/TypeScript · PostgreSQL · NetUP · LibreNMS · Telegram**
 
-[← Repository](../README.md) · [Architecture notes](architecture/current-system.md) · [Staff chat](architecture/staff-chat.md)
+[← Repository](../README.md) · [Architecture notes](archive/architecture/current-system.md) · [Staff chat](archive/architecture/staff-chat.md)
 
 > **Public case study.** This explains the workflow, design decisions, and capabilities represented in the code and internal demonstrations. It is not a production deployment runbook or a formal availability/security audit. Older technical documents in this repository may reflect an October 2026 dev/LAB snapshot rather than the latest configuration.
 

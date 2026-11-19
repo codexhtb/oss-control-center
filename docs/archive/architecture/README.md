@@ -1,0 +1,40 @@
+> HISTORICAL — архивный документ, сохранён для происхождения решений. Не является актуальной инструкцией; перед использованием сверяйте утверждения с кодом и проверенным runtime. Перенесён в архив 2026-11-18.
+
+# OSS Control Center — утверждённая архитектура Phase 0
+
+Архитектурное ревью проведено. Phase 1 можно разрабатывать на mock BillingProvider без production API NetUP. Настоящие интеграции вводятся по [утверждённому roadmap](roadmap.md).
+
+- [Процесс AS-IS / TO-BE](process.md)
+- [Доменная модель](domain-model.md) и [модель данных / ERD](data-model.md)
+- [Service Desk workflow](service-desk-workflow.md)
+- [Admin Control Center: аудит настраиваемости и первый безопасный этап](admin-control-center.md)
+- [Общий чат сотрудников (Phase 1)](staff-chat.md)
+- [Внутренние поручения по заявкам](internal-tasks.md)
+- [Системная архитектура](system-architecture.md)
+- [API contracts](api-contracts.md) и [RBAC matrix](rbac.md)
+- [Модуль field_dispatch](field-dispatch.md) — проект Phase 3
+- [OSS Field Work: этап 1, backend Telegram Mini App](oss-field-work-phase1.md)
+- [OSS Field Work: этап 2, Mini App и отчёты](oss-field-work-phase2.md)
+- [OSS Field Work: этап 3, публикация и запуск в Telegram](oss-field-work-phase3.md)
+- [OSS Field Work: персонал и Telegram-привязка](oss-field-work-personnel.md)
+- [Phase 1 implementation plan](phase-1-plan.md)
+- [Phase 1.4: три типа заявок — архитектура и план](phase-1.4-ticket-types.md)
+- [Phase 1.4 Stage 3: Web UI — этапы и границы](phase-1.4-web-ui.md)
+- [Acceptance criteria и тестирование](acceptance-and-testing.md)
+- [OSS Diagnostics — read-only мониторинг](oss-diagnostics.md)
+- [Текущий Identity, Permissions & Ticket Editing](phase3-identity-ticket-editing.md)
+- [Удаление и корзина заявок](ticket-deletion.md)
+- [Reports Phase 1: общая статистика Service Desk](reports-phase-1.md)
+- [Reports Phase 2A: сотрудники и контрольные звонки](reports-phase-2a.md)
+- [Reports Phase 2B: монтажные работы и причины обращений](reports-phase-2b.md)
+- [Reports Phase 3: Excel и PDF управленческие выгрузки](reports-phase-3.md)
+- [Phase 5.1: предупреждение о повторных обращениях](phase-5.1-duplicate-tickets.md)
+- [Категории обращений и телефон звонящего](ticket-categories-caller-phone.md)
+- [NEW_CONNECTION: отдельный тип заявки](new-connection-ticket.md)
+- [Phase 5.7: контрольный обзвон и закрытие](phase-5.7-callback.md)
+- [Phase 5.8: упрощённая карточка и причины решения](phase-5.8-simplified-ticket-ui.md)
+- [Решения ревью и остающиеся вопросы](review.md)
+
+**Source of truth:** PostgreSQL хранит заявки, комментарии, решения, историю, аудит и диагностические snapshots. ServiceDesk Plus остаётся только в AS-IS и временном миграционном процессе; синхронизация с ним не разрабатывается. Нет необходимости знать production API NetUP, чтобы начать Phase 1.
+
+**Историческое дополнение Phase 1.4:** Stage 1 ввёл RBAC и схему для `SUBSCRIBER_LINKED`, `MANUAL`, `INTERNAL`; Stage 2 добавил HTTP создание всех трёх типов в едином Ticket Engine. Ограничение `admin` только управлением учётными записями отменено текущим этапом: admin получает полный набор персональных разрешений. Описания обязательного snapshot в документах прежних этапов относятся к контракту до `0008`.

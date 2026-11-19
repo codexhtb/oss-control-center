@@ -1,110 +1,100 @@
 # OSS Control Center
 
-### ISP Service Desk · Subscriber 360 · Network Diagnostics · Field Dispatch
+OSS Control Center (OCC) — рабочая система Service Desk и инструментов OSS-подразделения интернет-провайдера. Она объединяет регистрацию и обработку обращений, контекст абонента, наблюдения сетевого мониторинга, выездные работы и историю действий. Цель — уменьшить повторный ручной поиск и сделать решения, передачу работ и контроль результата прослеживаемыми.
 
-**An ISP operations platform designed to replace repeated lookups, disconnected monitoring screens, and manual messenger handoffs with one support workflow.**
+> **Статус реализации:** перечисленные ниже функции подтверждаются исходным кодом текущего `main`. Это не обещание доступности внешних источников. В read-only проверке 18.11.2026 стек Compose `oss-control-dev` был запущен; PostgreSQL отвечал, API и WEB имели health `healthy`, Telegram poller работал, а Alembic сообщал ревизию `0052_field_work_note`. Эта проверка не подтверждает DNS, доступность из внешних сетей, состояние Telegram Bot API, NetUP, LibreNMS или BDCOM. Для конкретного окружения используйте [проверки здоровья](docs/operations/health-checks.md).
 
-**[📖 Read the engineering case study →](docs/portfolio-case-study.md)** — *the problem, architecture, before/after workflow, design decisions, and documented outcomes.*
+## Возможности в коде
 
-> **Status (07 November 2026):** This repository contains the evolving implementation and an internally demonstrated workflow. Features listed below are present in the code or project demonstrations, but this README does **not** certify production deployment, availability, complete operational security, or the activation of every external integration. Some existing detailed docs and runbooks reflect the **17 October 2026 dev/LAB snapshot** and must be revalidated before use.
+| Область | Реализованное поведение | Внешняя зависимость |
+| --- | --- | --- |
+| Service Desk | Заявки `SUBSCRIBER_LINKED`, `MANUAL`, `NEW_CONNECTION`, `INTERNAL`, `ERRONEOUS_PAYMENT`; назначения, комментарии, решения, обзвон, аудит, корзина | PostgreSQL OCC |
+| Subscriber 360 | Поиск и карточка по данным BillingProvider; сохраняемые snapshots и история заявок/финансов | MOCK или настраиваемый read-only NetUP provider |
+| Диагностика | Снимок результатов устройств/интерфейсов и ONU-кандидатов с качеством данных | LibreNMS API, BDCOM read-only reader; Icinga provider опционален |
+| Выездные работы | Черновик, Telegram-доставка или публикация Mini App; отчёт, переносы и подтверждение инженером | Один Telegram bot/poller для старого группового workflow и personal outbox |
+| OSS Field Work | Telegram Mini App, общая очередь, отчёты и переносы монтажников, персональные уведомления | HTTPS, Telegram `initData`, реестр доступа |
+| Внутренние поручения и чат | Переписка, уведомления, прочтение; общий чат с ответами на сообщения | PostgreSQL, SSE для обновлений |
+| Отчёты | Общая статистика, сотрудники, звонки, выезды, причины, PDF и XLSX | PostgreSQL, права `reports.read` |
+| Управление | Пользователи и персональные permissions, настройки справочников, монтажники и доступ Field Work | PostgreSQL |
 
-## The operational problem
+**Реализация в коде ≠ включённая интеграция.** Активные провайдеры задаются конфигурацией окружения и защищёнными файлами. Не считайте Icinga или внешний источник доступным только потому, что его adapter присутствует в репозитории.
 
-The old process involved NetUP UTM5 → ServiceDesk Plus → equipment CLI / PRTG → messenger → ServiceDesk Plus. Operators copied subscriber details, engineers repeated the same lookup, and field responses had to be transcribed manually.
+## Архитектура и поток данных
 
-**OSS Control Center integrates these stages without treating monitoring observations as engineer decisions.**
-
-## Main capabilities
-
-| Capability | What the implementation provides |
-| --- | --- |
-| **Subscriber 360** | Lookup **by account number**, contacts, address, service links, connection context, previous tickets |
-| **Billing read-only** | NetUP-backed subscriber data, balance, payment and charge history, services and tariff information (source depends on environment) |
-| **Service Desk** | Subscriber-linked, manual and internal tickets; wrong-payment ticket type; assignment, comments, audit and histories |
-| **Network diagnostics** | Read-only LibreNMS/BDCOM EPON-GPON observations, ONU state and optical measurements with conservative correlation |
-| **Field work** | Explicit Telegram outbound handoff and incoming field report handling; separate engineer confirmation |
-| **Customer callback** | Follow-up queue and customer-confirmed closure or return to investigation |
-| **Internal chat** | Authenticated shared room for operators and engineers, message history/read state and SSE updates |
-| **Administration** | Users, roles, permissions and configurable service-desk settings |
-
-These are **software capabilities**, not claims that all external services are currently configured or reachable in production. In particular, older repository documentation describes an isolated NetUP LAB source and Telegram LAB integration; verify the current runtime environment independently. An Icinga integration mentioned in design documents should not be assumed active.
-
-## Workflow
-
-~~~mermaid
+```mermaid
 flowchart LR
-    CALL["Subscriber calls"] --> ACCOUNT["Account-number lookup"]
-    ACCOUNT --> TICKET["Create ticket"]
-    TICKET --> DIAG["Engineer + read-only diagnosis"]
-    DIAG --> FIELD{"Visit needed?"}
-    FIELD -->|Yes| TG["Telegram field request / report"]
-    TG --> RESOLVE["Engineer resolution"]
-    FIELD -->|No| RESOLVE
-    RESOLVE --> CALLBACK["Customer callback"]
-    CALLBACK -->|Restored| CLOSED["Closed"]
-    CALLBACK -->|Still broken| DIAG
-~~~
+  U[Оператор / инженер] --> W[React + TypeScript]
+  W --> C[Caddy: TLS и маршруты]
+  C --> A[FastAPI]
+  A --> P[(PostgreSQL OCC)]
+  A -->|read-only BillingProvider| N[(MariaDB NetUP replica)]
+  A -->|read-only API| L[LibreNMS]
+  A -->|read-only ONU reader| B[BDCOM observations]
+  T[Telegram Bot API] <--> Q[единственный Field Dispatch poller]
+  Q --> P
+  A --> P
+  F[Telegram Mini App] --> C
+  F --> A
+```
 
-For the fuller before/after comparison and architectural tradeoffs, see the **[engineering case study](docs/portfolio-case-study.md)**.
+OCC PostgreSQL — источник истины для заявок, решений, истории, аудита, сообщений, поручений и состояний Field Dispatch. Данные внешних систем сохраняются как ограниченные snapshots/наблюдения и не превращают мониторинг в решение инженера. Подробные границы и проверенные факты находятся в [архитектуре](docs/architecture/README.md).
 
-## Architecture
+### Жизненный цикл заявки
 
-~~~mermaid
-flowchart LR
-    STAFF["Contact center · OSS engineers"] --> WEB["React / TypeScript"]
-    WEB --> API["FastAPI"]
-    API <--> PG[("PostgreSQL: tickets · chat · audit")]
-    API -->|Read-only| BILL["NetUP UTM5 billing provider"]
-    API -->|Read-only| LN["LibreNMS API"]
-    API -->|Read-only| ONU["BDCOM ONU observations"]
-    API -->|Field workflow| TG["Telegram bot"]
-~~~
+1. Сотрудник создаёт заявку подходящего типа. Для абонентской заявки выполняется lookup; его результат сохраняется в OCC snapshot.
+2. Заявка назначается/принимается инженером и переводится в работу.
+3. Инженер при необходимости запускает read-only диагностику или готовит выезд.
+4. Отчёт монтажника меняет состояние выездной работы, но не закрывает Service Desk заявку.
+5. Инженер фиксирует решение. Для процесса контрольного звонка результат звонка определяет закрытие или возврат в работу согласно текущему workflow.
+6. События, решения и административные действия сохраняются в PostgreSQL и доступны в истории при наличии права.
 
-### Data boundaries
+Статус заявки, статус Telegram-доставки и статус выездной работы независимы.
 
-- **PostgreSQL OSS** holds tickets, workflow transitions, audit, chat and subscriber snapshots.
-- **NetUP UTM5** supplies billing and subscriber context through read-only provider access.
-- **LibreNMS/BDCOM** supplies observed network state, without turning a diagnosis screen into live device control.
-- **Telegram** transports field-work messages; external reports do not close a ticket automatically.
-- **Missing or ambiguous data** remains explicitly unknown/unconfirmed rather than a presumed subscriber-to-ONU match.
+## Безопасность и доступ
 
-## Technology and code
+- Backend проверяет каждое действие по сохранённым персональным permissions; проверки интерфейса — только UX.
+- Доступ к заявкам ограничен `tickets.read.all` / `tickets.read.own`; INTERNAL дополнительно ограничен сервером для ролей/пользователей без доступа.
+- `reports.read`, `users.manage`, `settings.manage`, права задач, диагностики и Field Work проверяются отдельно.
+- NetUP и monitoring credentials читаются с защищённого runtime-хранилища, не из запросов пользователя. SQL внешних readers параметризован, ограничен по времени; NetUP lookup открывает read-only snapshot.
+- Секреты, конфигурации внешнего оборудования и клиентские данные не коммитятся. Политика доступа и ограничения описаны в [границах безопасности](docs/operations/security-boundaries.md).
 
-| Layer | Source |
-| --- | --- |
-| React / TypeScript UI | [frontend/src](frontend/src/) |
-| FastAPI routes | [app/api/v1](app/api/v1/) |
-| Billing and NetUP | [app/modules/billing](app/modules/billing/) |
-| Network/ONU diagnostics | [app/modules/diagnostics](app/modules/diagnostics/) |
-| Tickets and lifecycle | [app/modules/tickets](app/modules/tickets/) |
-| Field dispatch | [app/modules/field_dispatch](app/modules/field_dispatch/) |
-| Internal chat | [app/modules/chat](app/modules/chat/) |
-| Identity and permissions | [app/modules/identity](app/modules/identity/) |
-| PostgreSQL migrations | [app/db/migrations/versions](app/db/migrations/versions/) |
-| Backend tests | [tests](tests/) |
+## Стек и репозиторий
 
-**Stack:** Python · FastAPI · React · TypeScript · PostgreSQL · MariaDB · Docker Compose · LibreNMS · NetUP UTM5 · Telegram Bot API.
+- Backend: Python 3.12–3.14, FastAPI, Pydantic, SQLAlchemy, Alembic, PostgreSQL.
+- Frontend: React, TypeScript, Vite, TanStack Query, Vitest.
+- Эксплуатация: Docker Compose, Caddy, Telegram Bot API; внешние read-only интеграции с MariaDB NetUP, LibreNMS и BDCOM.
+- `app/api/v1/` — HTTP API; `app/modules/` — доменные модули; `app/db/migrations/versions/` — последовательные Alembic revisions; `frontend/src/` — интерфейс; `tests/` и `frontend/src/**/*.test.*` — проверки.
 
-## Documentation and development
+## Разработка
 
-- **[Engineering portfolio case study](docs/portfolio-case-study.md)** — recommended first read.
-- [Documentation index](docs/README.md) — technical references, including older snapshots.
-- [Architecture snapshot (17 Oct 2026)](docs/architecture/current-system.md) — useful historical technical baseline, not automatically the present runtime.
-- [Shared staff chat](docs/architecture/staff-chat.md) — implementation and event stream.
-- [Subscriber finances](docs/architecture/subscriber-360-finance-phase-2.md) — access-controlled read-only financial operations.
-- [LibreNMS / BDCOM](docs/integrations/librenms-bdcom.md) — observation collection and correlation.
-- [NetUP provider](docs/integrations/netup.md) — billing integration design and limitations.
-- [Telegram field dispatch](docs/operations/telegram-field-dispatch.md) — dev/LAB procedures; must not be followed blindly on a different environment.
-- [Secret management](docs/operations/secret-management.md) and [recovery map](docs/operations/recovery-map.md).
+Локальная работа требует Python в диапазоне, указанном в `pyproject.toml`, Node/npm согласно `frontend/package.json` и изолированную тестовую PostgreSQL для integration tests. Не указывайте рабочий `.env` в командах и не запускайте тесты против рабочего DSN.
 
-The Docker Compose files are environment-specific. **Do not assume that \`docker compose up\` in the repository root is a safe production installation procedure.** Keep test databases isolated from persistent operational data and verify backups before migrations.
+```bash
+python -m pytest
+ruff check app tests
+cd frontend
+npm ci
+npm test
+npm run typecheck
+npm run build
+```
 
-## Security and publication
+Точные правила внесения изменений, миграций и deployment — [CONTRIBUTING.md](CONTRIBUTING.md). Эти команды проверок не разворачивают приложение.
 
-This public repository must never include billing exports, actual subscriber records, active production passwords or tokens, certificate private keys, sensitive device mappings, unredacted configuration backups, or full internal network topology. **Publishing source does not prove that every historical commit or document has been independently security-audited.**
+## Документация
 
-For portfolio use, prefer sanitized screenshots and synthetic subscriber examples. No performance or financial impact figures are asserted without an actual before/after measurement.
+- [Индекс документации](docs/README.md)
+- [Архитектура и инфраструктурные границы](docs/architecture/README.md)
+- [Документы по модулям](docs/modules/README.md)
+- [Эксплуатация](docs/operations/README.md)
+- [ADR](docs/adr/README.md)
+- [Архив исторических материалов](docs/archive/README.md)
 
----
+## Ограничения и известные риски
 
-*Built to make routine ISP support work less repetitive and more traceable.*
+- Git clone не восстанавливает PostgreSQL volume, секреты, кастомные LibreNMS collectors, systemd units и настройки инфраструктуры.
+- Фактическая upstream-настройка репликации NetUP в MariaDB не хранится в этом репозитории.
+- Сборка LibreNMS/BDCOM collectors, SNMP credentials и состояние сети принадлежат внешней инфраструктуре.
+- Полное аварийное восстановление **UNVERIFIED**: наличие runbook или успешный `pg_dump` не является доказательством восстановления. Подтверждение — провести восстановление на изолированном узле и зафиксировать результат/дату.
+- Внешняя доступность, сертификаты, allowlist firewall и Telegram-диалог требуют проверки на целевом окружении.
+- Исторические планы и лабораторные материалы сохранены в `docs/archive/` и не являются источником текущего runtime-контракта.
