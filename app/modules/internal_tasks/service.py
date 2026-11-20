@@ -1,7 +1,7 @@
 """Transactional ticket assignments, scoped conversation and durable notifications."""
 
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -68,16 +68,14 @@ def _task(
     return row
 
 
-def _unread_assignment(db: Session, actor: User):
+def _unread_task(db: Session, actor: User):
     return exists(select(InternalTaskNotification.id).join(
         InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id,
     ).where(
         InternalTaskNotification.task_id == InternalTask.id,
         InternalTaskNotification.recipient_id == actor.id,
         InternalTaskNotification.read_at.is_(None),
-        InternalTaskEvent.kind == "CREATED",
-        InternalTask.assignee_id == actor.id,
-        has_permission(db, actor, Permission.TASK_EXECUTE),
+        InternalTaskNotification.available_at <= datetime.now(UTC),
     ))
 
 
@@ -126,6 +124,7 @@ def _summary(
         "title": task.title,
         "description": task.description,
         "due_at": task.due_at,
+        "reminder_at": task.reminder_at,
         "status": task.status,
         "version": task.version,
         "created_at": task.created_at,
@@ -158,7 +157,14 @@ def _ticket_fact(db: Session, ticket: Ticket, actor: User, task: InternalTask, k
 
 
 def _event(
-    db: Session, task: InternalTask, actor: User, request_id: UUID, kind: str, body: str | None
+    db: Session,
+    task: InternalTask,
+    actor: User,
+    request_id: UUID,
+    kind: str,
+    body: str | None,
+    *,
+    notify_at: datetime | None = None,
 ) -> InternalTaskEvent:
     event = InternalTaskEvent(
         task_id=task.id, actor_id=actor.id, client_request_id=request_id, kind=kind, body=body
@@ -168,7 +174,12 @@ def _event(
     recipient_id = task.assignee_id if actor.id == task.creator_id else task.creator_id
     if recipient_id != actor.id:
         db.add(
-            InternalTaskNotification(task_id=task.id, event_id=event.id, recipient_id=recipient_id)
+            InternalTaskNotification(
+                task_id=task.id,
+                event_id=event.id,
+                recipient_id=recipient_id,
+                available_at=notify_at or datetime.now(UTC),
+            )
         )
     return event
 
@@ -198,6 +209,7 @@ def create_task(
     title: str,
     description: str,
     due_at: datetime | None,
+    reminder_at: datetime | None,
     request_id: UUID,
 ) -> dict:
     _require_actor(db, actor, Permission.TASK_CREATE)
@@ -213,7 +225,8 @@ def create_task(
             existing.title,
             existing.description,
             existing.due_at,
-        ) != (ticket_id, assignee_id, title, description, due_at):
+            existing.reminder_at,
+        ) != (ticket_id, assignee_id, title, description, due_at, reminder_at):
             raise ApiError(409, "request_conflict", "Request ID already used")
         visible, ticket = _task(db, actor, existing.id)
         return _summary(db, visible, ticket)
@@ -233,6 +246,8 @@ def create_task(
         raise ApiError(422, "invalid_assignee", "Choose an eligible active employee")
     if due_at is not None and due_at <= datetime.now(UTC):
         raise ApiError(422, "invalid_due_at", "Due date must be in the future")
+    if reminder_at is not None and reminder_at <= datetime.now(UTC):
+        raise ApiError(422, "invalid_reminder_at", "Reminder must be in the future")
     task = InternalTask(
         ticket_id=ticket_id,
         creator_id=actor.id,
@@ -241,11 +256,22 @@ def create_task(
         title=title,
         description=description,
         due_at=due_at,
+        reminder_at=reminder_at,
     )
     db.add(task)
     try:
         db.flush()
         _event(db, task, actor, request_id, "CREATED", None)
+        if reminder_at is not None:
+            _event(
+                db,
+                task,
+                actor,
+                uuid4(),
+                "REMINDER",
+                None,
+                notify_at=reminder_at,
+            )
         _ticket_fact(db, ticket, actor, task, "created")
         db.commit()
     except IntegrityError:
@@ -263,7 +289,8 @@ def create_task(
             existing.title,
             existing.description,
             existing.due_at,
-        ) != (ticket_id, assignee_id, title, description, due_at):
+            existing.reminder_at,
+        ) != (ticket_id, assignee_id, title, description, due_at, reminder_at):
             raise ApiError(409, "request_conflict", "Request ID already used") from None
         visible, ticket = _task(db, actor, existing.id)
         return _summary(db, visible, ticket)
@@ -328,7 +355,7 @@ def list_tasks(
     elif state == "overdue":
         conditions.extend((InternalTask.status == "OPEN", InternalTask.due_at < now))
     query = (
-        select(InternalTask, Ticket, _unread_assignment(db, actor).label("is_unread"))
+        select(InternalTask, Ticket, _unread_task(db, actor).label("is_unread"))
         .join(Ticket, Ticket.id == InternalTask.ticket_id)
         .where(*conditions)
     )
@@ -349,7 +376,7 @@ def list_tasks(
 def get_task(db: Session, actor: User, task_id: UUID) -> dict:
     task, ticket = _task(db, actor, task_id)
     unread = bool(db.scalar(
-        select(_unread_assignment(db, actor)).where(InternalTask.id == task.id)
+        select(_unread_task(db, actor)).where(InternalTask.id == task.id)
     ))
     return _summary(db, task, ticket, contact=True, is_unread=unread)
 
@@ -399,10 +426,15 @@ def add_event(
     body: str | None,
     version: int,
 ) -> dict:
-    if kind != "COMPLETED":
+    if kind not in {"MESSAGE", "COMPLETED"}:
         raise ApiError(422, "invalid_event", "Unsupported task event")
-    _require_actor(db, actor, Permission.TASK_EXECUTE)
     task, ticket = _task(db, actor, task_id, lock=True)
+    if actor.id == task.creator_id:
+        _require_actor(db, actor, Permission.TASK_CREATE)
+    elif actor.id == task.assignee_id:
+        _require_actor(db, actor, Permission.TASK_EXECUTE)
+    else:
+        raise ApiError(403, "forbidden", "Permission denied")
     existing = db.scalar(
         select(InternalTaskEvent).where(
             InternalTaskEvent.task_id == task_id,
@@ -416,12 +448,15 @@ def add_event(
         return _summary(db, task, ticket)
     if task.version != version:
         raise ApiError(409, "version_conflict", "Task changed; refresh it")
-    if actor.id != task.assignee_id or task.status != "OPEN":
-        raise ApiError(409, "invalid_task_transition", "Task cannot be completed")
+    if task.status != "OPEN":
+        raise ApiError(409, "invalid_task_transition", "Task is already completed")
+    if kind == "COMPLETED" and actor.id != task.assignee_id:
+        raise ApiError(403, "forbidden", "Only the assignee can complete the task")
     if not body or not body.strip():
         raise ApiError(422, "invalid_answer", "Answer is required")
-    task.status = "COMPLETED"
-    task.completed_at = datetime.now(UTC)
+    if kind == "COMPLETED":
+        task.status = "COMPLETED"
+        task.completed_at = datetime.now(UTC)
     task.version += 1
     task.updated_at = datetime.now(UTC)
     try:
@@ -446,7 +481,7 @@ def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
         select(
             InternalTaskNotification.id,
             InternalTaskNotification.task_id,
-            InternalTaskNotification.created_at,
+            InternalTaskNotification.available_at.label("created_at"),
             InternalTaskNotification.read_at,
             InternalTaskEvent.kind,
             InternalTask.assignee_id,
@@ -459,6 +494,7 @@ def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
         .join(InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id)
         .where(
             InternalTaskNotification.recipient_id == actor.id,
+            InternalTaskNotification.available_at <= datetime.now(UTC),
             scope,
             or_(
                 and_(
@@ -507,13 +543,18 @@ def mark_task_read(db: Session, actor: User, task_id: UUID) -> None:
         InternalTaskNotification.task_id == task_id,
         InternalTaskNotification.recipient_id == actor.id,
         InternalTaskNotification.read_at.is_(None),
+        InternalTaskNotification.available_at <= datetime.now(UTC),
     ).values(read_at=datetime.now(UTC)))
     db.commit()
 
 
 def mark_read(db: Session, actor: User, notification_id: UUID) -> None:
     notification = db.get(InternalTaskNotification, notification_id)
-    if notification is None or notification.recipient_id != actor.id:
+    if (
+        notification is None
+        or notification.recipient_id != actor.id
+        or notification.available_at > datetime.now(UTC)
+    ):
         raise ApiError(404, "notification_not_found", "Notification not found")
     _task(db, actor, notification.task_id)
     if notification.read_at is None:

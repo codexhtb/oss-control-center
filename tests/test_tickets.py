@@ -6946,11 +6946,25 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
     task_id = task["id"]
     assert task["title"] == payload["description"]
     assert task["due_at"] is None
+    assert task["reminder_at"] is None
     assert (
         ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json=payload).json()["id"]
         == task_id
     )
     assert ticket_client.get("/api/v1/tasks", params={"scope": "created"}).json()["total"] == 1
+
+    author_message = {
+        "client_request_id": str(uuid4()),
+        "kind": "MESSAGE",
+        "body": "Уточните также удобный интервал",
+    }
+    replied = ticket_client.post(
+        f"/api/v1/tasks/{task_id}/events",
+        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        json=author_message,
+    )
+    assert replied.status_code == 200, replied.text
+    assert replied.json()["status"] == "OPEN" and replied.json()["version"] == 2
 
     login(ticket_client, outsider.login)
     assert ticket_client.get(f"/api/v1/tasks/{task_id}").status_code == 404
@@ -6960,7 +6974,7 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
     assert detail["phone"] == ticket_before["caller_phone"]
     assert detail["account_no"] is None
     inbox = ticket_client.get("/api/v1/tasks/notifications").json()
-    assert inbox["unread_count"] == 1 and inbox["items"][0]["kind"] == "CREATED"
+    assert inbox["unread_count"] == 2 and inbox["items"][0]["kind"] == "MESSAGE"
     assert (
         ticket_client.post(
             f"/api/v1/tasks/notifications/{inbox['items'][0]['id']}/read",
@@ -6968,11 +6982,22 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
         ).status_code
         == 204
     )
+    intermediate = ticket_client.post(
+        f"/api/v1/tasks/{task_id}/events",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={
+            "client_request_id": str(uuid4()),
+            "kind": "MESSAGE",
+            "body": "Абонент пока не ответил",
+        },
+    )
+    assert intermediate.status_code == 200, intermediate.text
+    assert intermediate.json()["status"] == "OPEN" and intermediate.json()["version"] == 3
     answer = "Абонент попросил перезвонить завтра"
     action = {"client_request_id": str(uuid4()), "kind": "COMPLETED", "body": answer}
     completed = ticket_client.post(
         f"/api/v1/tasks/{task_id}/events",
-        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        headers={**csrf(ticket_client), "If-Match": '"3"'},
         json=action,
     )
     assert completed.status_code == 200, completed.text
@@ -6980,27 +7005,27 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
     assert completed.json()["latest_answer"] == answer
     duplicate = ticket_client.post(
         f"/api/v1/tasks/{task_id}/events",
-        headers={**csrf(ticket_client), "If-Match": '"1"'},
+        headers={**csrf(ticket_client), "If-Match": '"3"'},
         json=action,
     )
-    assert duplicate.status_code == 200 and duplicate.json()["version"] == 2
-    for kind in ("MESSAGE", "NO_ANSWER", "REOPENED"):
+    assert duplicate.status_code == 200 and duplicate.json()["version"] == 4
+    for kind in ("NO_ANSWER", "REOPENED"):
         response = ticket_client.post(
             f"/api/v1/tasks/{task_id}/events",
-            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            headers={**csrf(ticket_client), "If-Match": '"4"'},
             json={"client_request_id": str(uuid4()), "kind": kind, "body": "Не нужно"},
         )
         assert response.status_code == 422
     assert (
         ticket_client.post(
             f"/api/v1/tasks/{task_id}/events",
-            headers={**csrf(ticket_client), "If-Match": '"2"'},
+            headers={**csrf(ticket_client), "If-Match": '"4"'},
             json={"client_request_id": str(uuid4()), "kind": "COMPLETED", "body": "Ещё раз"},
         ).status_code
         == 409
     )
     login(ticket_client, engineer.login)
-    assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 1
+    assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 2
     ticket_tasks = ticket_client.get(
         "/api/v1/tasks", params={"ticket_id": ticket_id, "scope": "created", "state": "completed"}
     ).json()
@@ -7013,8 +7038,8 @@ def test_internal_task_conversation_notifications_and_isolated_ticket_state(
     ) == (ticket_before["status"], ticket_before["version"], ticket_before["assigned_engineer_id"])
     with Session(ticket_engine) as db:
         assert db.scalar(select(func.count()).select_from(InternalTask)) == 1
-        assert db.scalar(select(func.count()).select_from(InternalTaskEvent)) == 2
-        assert db.scalar(select(func.count()).select_from(InternalTaskNotification)) == 2
+        assert db.scalar(select(func.count()).select_from(InternalTaskEvent)) == 4
+        assert db.scalar(select(func.count()).select_from(InternalTaskNotification)) == 4
         assert (
             db.scalar(
                 select(func.count())
@@ -7147,7 +7172,7 @@ def test_internal_task_revoked_permission_and_csrf_are_enforced(
             headers={**csrf(ticket_client), "If-Match": '"1"'},
             json={"client_request_id": str(uuid4()), "kind": "COMPLETED", "body": "Ответ"},
         ).status_code
-        == 403
+        == 404
     )
 
 
@@ -7414,3 +7439,60 @@ def test_internal_task_orange_read_state_is_scoped_and_durable(
             )
             is not None
         )
+
+
+def test_internal_task_reminder_is_durable_and_only_visible_when_due(
+    ticket_engine: Engine,
+    ticket_client: TestClient,
+) -> None:
+    creator = seed_user(ticket_engine, "reminder_creator", Role.ENGINEER)
+    assignee = seed_user(ticket_engine, "reminder_assignee", Role.ENGINEER)
+    login(ticket_client, creator.login)
+    ticket = make_manual_ticket(ticket_client)
+    reminder_at = datetime.now(UTC) + timedelta(hours=1)
+    created = ticket_client.post(
+        "/api/v1/tasks",
+        headers=csrf(ticket_client),
+        json={
+            "ticket_id": ticket["id"],
+            "assignee_id": str(assignee.id),
+            "description": "Проверить параметры через час",
+            "reminder_at": reminder_at.isoformat(),
+            "client_request_id": str(uuid4()),
+        },
+    )
+    assert created.status_code == 201, created.text
+    task_id = created.json()["id"]
+    assert datetime.fromisoformat(
+        created.json()["reminder_at"].replace("Z", "+00:00")
+    ) == reminder_at
+
+    login(ticket_client, assignee.login)
+    inbox = ticket_client.get("/api/v1/tasks/notifications").json()
+    assert inbox["total"] == 1 and inbox["items"][0]["kind"] == "CREATED"
+    assert ticket_client.post(
+        f"/api/v1/tasks/{task_id}/read", headers=csrf(ticket_client)
+    ).status_code == 204
+    assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 0
+
+    with Session(ticket_engine) as db:
+        reminder = db.scalar(
+            select(InternalTaskNotification)
+            .join(InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id)
+            .where(
+                InternalTaskNotification.task_id == UUID(task_id),
+                InternalTaskEvent.kind == "REMINDER",
+            )
+        )
+        assert reminder is not None and reminder.read_at is None
+        reminder.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+
+    due = ticket_client.get("/api/v1/tasks/notifications").json()
+    reminder_item = next(item for item in due["items"] if item["kind"] == "REMINDER")
+    assert due["unread_count"] == 1 and reminder_item["read_at"] is None
+    assert ticket_client.get("/api/v1/tasks").json()["items"][0]["is_unread"] is True
+    assert ticket_client.post(
+        f"/api/v1/tasks/{task_id}/read", headers=csrf(ticket_client)
+    ).status_code == 204
+    assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 0

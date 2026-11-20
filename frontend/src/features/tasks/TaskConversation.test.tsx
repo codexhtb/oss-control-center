@@ -16,7 +16,7 @@ const engineer: MeResponse = {
 const task: InternalTask = {
   id: 'task-id', ticket_id: 'ticket-id', ticket_number: 10, ticket_subject: 'Тема',
   creator_id: 'engineer-id', creator_name: 'Инженер', assignee_id: 'sima-id', assignee_name: 'Сима',
-  title: 'Позвонить', description: 'Уточнить время', due_at: null, status: 'OPEN', version: 1,
+  title: 'Позвонить', description: 'Уточнить время', due_at: null, reminder_at: null, status: 'OPEN', version: 1,
   created_at: '2026-11-01T10:00:00Z', updated_at: '2026-11-01T10:00:00Z', completed_at: null,
   subscriber_name: 'Тестовый абонент', phone: '+7 900 111 22 33', account_no: '5113',
 }
@@ -34,20 +34,23 @@ beforeEach(() => {
   vi.mocked(taskApi.act).mockReset().mockResolvedValue({ ...task, version: 2 })
 })
 
-it('shows the request and contact, without an author reply action', async () => {
+it('lets the author reply without completing the task', async () => {
   mount(engineer)
   expect(await screen.findByText('Уточнить время')).toBeInTheDocument()
   expect(screen.getByText('Тестовый абонент')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: '+7 900 111 22 33' })).toHaveAttribute('href', 'tel:+79001112233')
   expect(screen.getByText('5113')).toBeInTheDocument()
-  expect(screen.queryByRole('textbox', { name: 'Ответ' })).not.toBeInTheDocument()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Ответ' }), { target: { value: 'Уточните ещё адрес' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Ответить' }))
+  await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'MESSAGE', 'Уточните ещё адрес', expect.any(String)))
+  expect(screen.queryByRole('button', { name: 'Завершить поручение' })).not.toBeInTheDocument()
 })
 
 it('saves one answer and completes the task for the assignee', async () => {
   mount({ ...engineer, user: { ...engineer.user, id: 'sima-id', role: 'operator' }, permissions: ['tickets.read.all', 'tasks.execute'] })
   fireEvent.change(await screen.findByRole('textbox', { name: 'Ответ' }), { target: { value: 'Не дозвонилась' } })
   fireEvent.click(screen.getByRole('button', { name: 'Завершить поручение' }))
-  await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'Не дозвонилась', expect.any(String)))
+  await waitFor(() => expect(taskApi.act).toHaveBeenCalledWith('task-id', 1, 'COMPLETED', 'Не дозвонилась', expect.any(String)))
   expect(screen.queryByRole('button', { name: 'Открыть повторно' })).not.toBeInTheDocument()
 })
 

@@ -95,6 +95,7 @@ export function errorText(error: unknown): string {
       missing_contact: 'Для ручной заявки нужны имя, телефон и город.',
       invalid_description: 'Для этого типа заявки необходимо описание проблемы.',
       invalid_payment: 'Проверьте поля ошибочного платежа.',
+      invalid_reminder_at: 'Выберите будущее время напоминания.',
     }
     const ticketEditMessage = ticketEditErrors[error.code]
     if (ticketEditMessage) return ticketEditMessage

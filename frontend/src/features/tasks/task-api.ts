@@ -1,7 +1,7 @@
 import { apiRequest } from '../../shared/api/client'
 
 export type TaskStatus = 'OPEN' | 'COMPLETED' | 'NO_ANSWER'
-export type TaskEventKind = 'CREATED' | 'MESSAGE' | 'COMPLETED' | 'NO_ANSWER' | 'REOPENED'
+export type TaskEventKind = 'CREATED' | 'MESSAGE' | 'COMPLETED' | 'NO_ANSWER' | 'REOPENED' | 'REMINDER'
 export interface InternalTask {
   id: string
   ticket_id: string
@@ -14,6 +14,7 @@ export interface InternalTask {
   title: string
   description: string
   due_at: string | null
+  reminder_at: string | null
   status: TaskStatus
   version: number
   created_at: string
@@ -54,8 +55,8 @@ export const taskApi = {
   },
   get: (id: string, signal?: AbortSignal) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}`, { signal }),
   events: (id: string, page: number, signal?: AbortSignal) => apiRequest<Page<TaskEvent>>(`/api/v1/tasks/${encodeURIComponent(id)}/events?page=${page}&size=50`, { signal }),
-  create: (payload: { ticket_id: string; assignee_id: string; description: string; client_request_id: string }) => apiRequest<InternalTask>('/api/v1/tasks', { method: 'POST', json: payload }),
-  act: (id: string, version: number, body: string, requestId: string) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}/events`, { method: 'POST', ifMatch: `"${version}"`, json: { kind: 'COMPLETED', body, client_request_id: requestId } }),
+  create: (payload: { ticket_id: string; assignee_id: string; description: string; reminder_at?: string; client_request_id: string }) => apiRequest<InternalTask>('/api/v1/tasks', { method: 'POST', json: payload }),
+  act: (id: string, version: number, kind: 'MESSAGE' | 'COMPLETED', body: string, requestId: string) => apiRequest<InternalTask>(`/api/v1/tasks/${encodeURIComponent(id)}/events`, { method: 'POST', ifMatch: `"${version}"`, json: { kind, body, client_request_id: requestId } }),
   notifications: (signal?: AbortSignal) => apiRequest<NotificationPage>('/api/v1/tasks/notifications?size=20', { signal }),
   readTask: (id: string) => apiRequest<void>(`/api/v1/tasks/${encodeURIComponent(id)}/read`, { method: 'POST' }),
   markRead: (id: string) => apiRequest<void>(`/api/v1/tasks/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }),

@@ -14,6 +14,9 @@ export function TicketTasks({ ticketId, session }: { ticketId: string; session: 
   const [page, setPage] = useState(1)
   const [assigneeId, setAssigneeId] = useState('')
   const [description, setDescription] = useState('')
+  const [reminder, setReminder] = useState('')
+  const [customReminder, setCustomReminder] = useState('')
+  const [validationError, setValidationError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const selected = search.get('task')
@@ -34,10 +37,24 @@ export function TicketTasks({ ticketId, session }: { ticketId: string; session: 
     if (!assigneeId || !description.trim() || busy) return
     setBusy(true)
     setError(null)
+    setValidationError(null)
     try {
-      const task = await taskApi.create({ ticket_id: ticketId, assignee_id: assigneeId, description: description.trim(), client_request_id: crypto.randomUUID() })
+      let reminderAt: string | undefined
+      if (reminder === 'custom') {
+        const value = new Date(customReminder)
+        if (!customReminder || Number.isNaN(value.getTime()) || value.getTime() <= Date.now()) {
+          setValidationError('Выберите будущее время напоминания.')
+          return
+        }
+        reminderAt = value.toISOString()
+      } else if (reminder) {
+        reminderAt = new Date(Date.now() + Number(reminder) * 60_000).toISOString()
+      }
+      const task = await taskApi.create({ ticket_id: ticketId, assignee_id: assigneeId, description: description.trim(), ...(reminderAt ? { reminder_at: reminderAt } : {}), client_request_id: crypto.randomUUID() })
       setDescription('')
       setAssigneeId('')
+      setReminder('')
+      setCustomReminder('')
       choose(task.id)
       await queryClient.invalidateQueries({ queryKey: ['internal-tasks'] })
     } catch (cause) { setError(cause) }
@@ -46,11 +63,12 @@ export function TicketTasks({ ticketId, session }: { ticketId: string; session: 
 
   return <section id="ticket-tasks" className="detail-panel internal-tasks-panel"><div className="detail-panel__heading"><h2>Поручения</h2></div>
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
-    {canCreate && <form className="internal-task-create" onSubmit={(event) => void create(event)}><label className="field"><span>Сотрудник</span><select required value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}><option value="">Выберите сотрудника</option>{assignees.data?.map((user) => <option key={user.id} value={user.id}>{user.display_name}</option>)}</select></label>{assignees.isError && <Notice tone="error">{errorText(assignees.error)}</Notice>}<label className="field internal-task-create__text"><span>Что нужно узнать или сделать?</span><textarea required maxLength={4000} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><Button type="submit" disabled={busy || !assigneeId || !description.trim()}>Создать поручение</Button></form>}
+    {validationError && <Notice tone="error">{validationError}</Notice>}
+    {canCreate && <form className="internal-task-create" onSubmit={(event) => void create(event)}><label className="field"><span>Сотрудник</span><select required value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}><option value="">Выберите сотрудника</option>{assignees.data?.map((user) => <option key={user.id} value={user.id}>{user.display_name}</option>)}</select></label>{assignees.isError && <Notice tone="error">{errorText(assignees.error)}</Notice>}<label className="field internal-task-create__text"><span>Что нужно узнать или сделать?</span><textarea required maxLength={4000} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="field"><span>Напомнить</span><select value={reminder} onChange={(event) => setReminder(event.target.value)}><option value="">Без напоминания</option><option value="15">Через 15 минут</option><option value="30">Через 30 минут</option><option value="60">Через 1 час</option><option value="120">Через 2 часа</option><option value="custom">Выбрать время</option></select></label>{reminder === 'custom' && <label className="field"><span>Дата и время напоминания</span><input type="datetime-local" value={customReminder} onChange={(event) => setCustomReminder(event.target.value)} /></label>}<Button type="submit" disabled={busy || !assigneeId || !description.trim()}>Создать поручение</Button></form>}
     {list.isPending && <p role="status">Загружаем поручения…</p>}
     {list.isError && <Notice tone="error">{errorText(list.error)}</Notice>}
     {list.data?.items.length === 0 && <p className="muted">Поручений по заявке нет.</p>}
-    {list.data && list.data.items.length > 0 && <div className="internal-task-list">{list.data.items.map((item) => <button type="button" key={item.id} className={`internal-task-list__item${selected === item.id ? ' internal-task-list__item--selected' : ''}${item.is_unread ? ' internal-task-list__item--new' : ''}`} onClick={() => choose(item.id)}><b>{item.title}</b>{item.is_unread && <span className="internal-task-new-label">Новое поручение</span>}<span>{item.assignee_name} · {item.status === 'OPEN' ? 'Активно' : 'Завершено'}</span>{item.latest_answer && <span className="internal-task-list__answer">Ответ: {item.latest_answer}</span>}</button>)}</div>}
+    {list.data && list.data.items.length > 0 && <div className="internal-task-list">{list.data.items.map((item) => <button type="button" key={item.id} className={`internal-task-list__item${selected === item.id ? ' internal-task-list__item--selected' : ''}${item.is_unread ? ' internal-task-list__item--new' : ''}`} onClick={() => choose(item.id)}><b>{item.title}</b>{item.is_unread && <span className="internal-task-new-label">Новое</span>}<span>{item.assignee_name} · {item.status === 'OPEN' ? 'Активно' : 'Завершено'}</span>{item.latest_answer && <span className="internal-task-list__answer">Ответ: {item.latest_answer}</span>}</button>)}</div>}
     {list.data && list.data.total > 20 && <div className="fact-pager"><Button variant="quiet" disabled={page === 1} onClick={() => setPage(page - 1)}>Назад</Button><span>{page} / {Math.ceil(list.data.total / 20)}</span><Button variant="quiet" disabled={page * 20 >= list.data.total} onClick={() => setPage(page + 1)}>Далее</Button></div>}
     {selected && <TaskConversation key={selected} taskId={selected} ticketId={ticketId} session={session} onUpdated={() => void queryClient.invalidateQueries({ queryKey: ['internal-tasks'] })} />}
   </section>

@@ -11,7 +11,7 @@ import { notificationApi } from './notification-api'
 
 const taskEventNames: Record<TaskEventKind, string> = {
   CREATED: 'Новое поручение', MESSAGE: 'Ответ по поручению', COMPLETED: 'Поручение завершено',
-  NO_ANSWER: 'Не дозвонилась', REOPENED: 'Поручение открыто повторно',
+  NO_ANSWER: 'Не дозвонилась', REOPENED: 'Поручение открыто повторно', REMINDER: 'Напоминание по поручению',
 }
 
 export function NotificationBell({ session }: { session: MeResponse }) {
@@ -97,7 +97,7 @@ export function NotificationBell({ session }: { session: MeResponse }) {
 
   const unread = (fieldInbox.data?.unread_count ?? 0) + (taskInbox.data?.unread_count ?? 0)
   return <div className="notification-bell" ref={root}>
-    <button className={`notification-bell__trigger${(taskInbox.data?.new_assignments_count ?? 0) > 0 ? ' notification-bell__trigger--new-task' : ''}`} type="button" aria-label={`Уведомления, непрочитанных: ${unread}`} aria-expanded={open} aria-controls="field-report-inbox" onClick={() => { setOpen((value) => !value); setActionError(null) }}>
+    <button className={`notification-bell__trigger${(taskInbox.data?.unread_count ?? 0) > 0 ? ' notification-bell__trigger--new-task' : ''}`} type="button" aria-label={`Уведомления, непрочитанных: ${unread}`} aria-expanded={open} aria-controls="field-report-inbox" onClick={() => { setOpen((value) => !value); setActionError(null) }}>
       <Bell size={19} aria-hidden="true" />{unread > 0 && <span className="notification-bell__count">{unread > 99 ? '99+' : unread}</span>}
     </button>
     {open && <div id="field-report-inbox" className="notification-bell__popover" role="region" aria-label="Уведомления">

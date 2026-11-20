@@ -26,6 +26,7 @@ class TaskView(BaseModel):
     title: str
     description: str
     due_at: datetime | None
+    reminder_at: datetime | None
     status: Literal["OPEN", "COMPLETED", "NO_ANSWER"]
     version: int
     created_at: datetime
@@ -49,7 +50,7 @@ class TaskEventView(BaseModel):
     id: UUID
     actor_id: UUID
     actor_name: str
-    kind: Literal["CREATED", "MESSAGE", "COMPLETED", "NO_ANSWER", "REOPENED"]
+    kind: Literal["CREATED", "MESSAGE", "COMPLETED", "NO_ANSWER", "REOPENED", "REMINDER"]
     body: str | None
     created_at: datetime
 
@@ -93,6 +94,7 @@ class CreateTask(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=4000)
     due_at: AwareDatetime | None = None
+    reminder_at: AwareDatetime | None = None
 
     @field_validator("description")
     @classmethod
@@ -124,7 +126,7 @@ class CreateTask(BaseModel):
 
 class TaskAction(BaseModel):
     client_request_id: UUID
-    kind: Literal["COMPLETED"]
+    kind: Literal["MESSAGE", "COMPLETED"]
     body: str | None = Field(default=None, max_length=4000)
 
     @model_validator(mode="after")
@@ -193,6 +195,7 @@ def create_task(payload: CreateTask, identity: CsrfIdentityDep, db: SessionDep):
         payload.title,
         payload.description,
         payload.due_at,
+        payload.reminder_at,
         payload.client_request_id,
     )
 

@@ -54,6 +54,7 @@ class InternalTask(Base):
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="OPEN")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
@@ -72,7 +73,7 @@ class InternalTaskEvent(Base):
             "task_id", "actor_id", "client_request_id", name="uq_internal_task_events_request"
         ),
         CheckConstraint(
-            "kind IN ('CREATED','MESSAGE','COMPLETED','NO_ANSWER','REOPENED')",
+            "kind IN ('CREATED','MESSAGE','COMPLETED','NO_ANSWER','REOPENED','REMINDER')",
             name="ck_internal_task_events_kind",
         ),
         CheckConstraint(
@@ -112,6 +113,14 @@ class InternalTaskNotification(Base):
             "created_at",
             postgresql_where=text("read_at IS NULL"),
         ),
+        Index(
+            "ix_internal_task_notifications_recipient_available",
+            "recipient_id",
+            "available_at",
+            "created_at",
+            "id",
+            postgresql_where=text("read_at IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -127,6 +136,9 @@ class InternalTaskNotification(Base):
         PGUUID(as_uuid=True), ForeignKey("app_users.id", ondelete="RESTRICT"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

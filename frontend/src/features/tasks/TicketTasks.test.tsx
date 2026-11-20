@@ -17,7 +17,7 @@ const session: MeResponse = {
 const task: InternalTask = {
   id: 'task-id', ticket_id: 'ticket-id', ticket_number: 10, ticket_subject: 'Тема',
   creator_id: 'engineer-id', creator_name: 'Инженер', assignee_id: 'sima-id', assignee_name: 'Сима',
-  title: 'Уточнить время', description: 'Уточнить время', due_at: null, status: 'OPEN', version: 1,
+  title: 'Уточнить время', description: 'Уточнить время', due_at: null, reminder_at: null, status: 'OPEN', version: 1,
   created_at: '2026-11-01T10:00:00Z', updated_at: '2026-11-01T10:00:00Z', completed_at: null,
 }
 
@@ -57,6 +57,21 @@ it('opens the task from a deep link inside the ticket', async () => {
   expect(await screen.findByText('Открыто поручение task-id')).toBeInTheDocument()
 })
 
+it('sends a preset reminder as an absolute timestamp', async () => {
+  const now = Date.parse('2026-11-20T09:00:00Z')
+  vi.spyOn(Date, 'now').mockReturnValue(now)
+  mount()
+  await screen.findByRole('option', { name: 'Сима' })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Сотрудник' }), { target: { value: 'sima-id' } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Что нужно узнать или сделать?' }), { target: { value: 'Уточнить время' } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Напомнить' }), { target: { value: '30' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Создать поручение' }))
+  await waitFor(() => expect(taskApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    reminder_at: '2026-11-20T09:30:00.000Z',
+  })))
+  vi.restoreAllMocks()
+})
+
 it('highlights only unread assignments and clears the accent after the shared list refresh', async () => {
   let unread = true
   vi.mocked(taskApi.list).mockImplementation(async () => ({
@@ -65,11 +80,11 @@ it('highlights only unread assignments and clears the accent after the shared li
   }))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><MemoryRouter><TicketTasks ticketId="ticket-id" session={session} /></MemoryRouter></QueryClientProvider>)
-  const fresh = await screen.findByRole('button', { name: /Уточнить время.*Новое поручение/ })
+  const fresh = await screen.findByRole('button', { name: /Уточнить время.*Новое/ })
   expect(fresh).toHaveClass('internal-task-list__item--new')
   expect(screen.getByRole('button', { name: /Прочитанное/ })).not.toHaveClass('internal-task-list__item--new')
   unread = false
   await client.invalidateQueries({ queryKey: ['internal-tasks'] })
   await waitFor(() => expect(fresh).not.toHaveClass('internal-task-list__item--new'))
-  expect(screen.queryByText('Новое поручение')).not.toBeInTheDocument()
+  expect(screen.queryByText('Новое')).not.toBeInTheDocument()
 })

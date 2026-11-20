@@ -10,7 +10,7 @@ import { taskApi, type TaskEventKind } from './task-api'
 
 const eventNames: Record<TaskEventKind, string> = {
   CREATED: 'Поручение создано', MESSAGE: 'Сообщение', COMPLETED: 'Ответ',
-  NO_ANSWER: 'Не дозвонилась', REOPENED: 'Открыто повторно',
+  NO_ANSWER: 'Не дозвонилась', REOPENED: 'Открыто повторно', REMINDER: 'Напоминание запланировано',
 }
 
 export function TaskConversation({ taskId, session, ticketId, onUpdated }: { taskId: string; session: MeResponse; ticketId?: string; onUpdated?: () => void }) {
@@ -20,6 +20,7 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState(false)
   const task = useQuery({ queryKey: ['internal-task', taskId], queryFn: ({ signal }) => taskApi.get(taskId, signal), refetchInterval: 15_000 })
   const events = useQuery({ queryKey: ['internal-task-events', taskId, page], queryFn: ({ signal }) => taskApi.events(taskId, page, signal), refetchInterval: page === 1 ? 15_000 : false })
   useEffect(() => {
@@ -36,13 +37,17 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
     return () => { active = false }
   }, [taskId, task.data?.id, task.data?.is_unread, ticketId, queryClient])
   const canFinish = task.data?.status === 'OPEN' && task.data?.assignee_id === session.user.id && session.permissions.includes('tasks.execute')
+  const canReply = task.data?.status === 'OPEN' && (
+    (task.data?.creator_id === session.user.id && session.permissions.includes('tasks.create'))
+    || (task.data?.assignee_id === session.user.id && session.permissions.includes('tasks.execute'))
+  )
 
-  async function finish() {
+  async function submit(kind: 'MESSAGE' | 'COMPLETED') {
     if (!task.data || busy || !answer.trim()) return
     setBusy(true)
     setError(null)
     try {
-      await taskApi.act(taskId, task.data.version, answer.trim(), crypto.randomUUID())
+      await taskApi.act(taskId, task.data.version, kind, answer.trim(), crypto.randomUUID())
       setAnswer('')
       setPage(1)
       await Promise.all([
@@ -59,8 +64,9 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
   }
 
   async function copyPhone(phone: string) {
+    setCopyError(false)
     try { await navigator.clipboard.writeText(phone); setCopied(true) }
-    catch (cause) { setError(cause) }
+    catch { setCopyError(true) }
   }
 
   if (task.isPending) return <p role="status">Загружаем поручение…</p>
@@ -71,11 +77,13 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
     <div className="internal-task-conversation__heading"><div><h3>Поручение</h3><p>Заявка <Link to={`/tickets/${item.ticket_id}`}>#{item.ticket_number}</Link> · {item.creator_name} → {item.assignee_name}</p></div><span className={`internal-task-status internal-task-status--${item.status.toLowerCase()}`}>{item.status === 'OPEN' ? 'Активно' : 'Завершено'}</span></div>
     {(item.subscriber_name || item.phone || item.account_no) && <dl className="internal-task-contact">{item.subscriber_name && <div><dt>Абонент</dt><dd>{item.subscriber_name}</dd></div>}{item.phone && <div><dt>Телефон</dt><dd><a href={`tel:${item.phone.replace(/[^\d+]/g, '')}`}>{item.phone}</a><Button variant="quiet" onClick={() => void copyPhone(item.phone!)}>{copied ? 'Скопировано' : 'Копировать'}</Button></dd></div>}{item.account_no && <div><dt>Лицевой счёт</dt><dd>{item.account_no}</dd></div>}</dl>}
     <p className="internal-task-description">{item.description}</p>
+    {item.reminder_at && <p className="muted">Напоминание: {formatDate(item.reminder_at)}</p>}
     {events.isPending && <p>Загружаем ответ…</p>}
     {events.isError && <Notice tone="error">{errorText(events.error)}</Notice>}
     {events.data?.items.filter((entry) => entry.kind !== 'CREATED').slice().reverse().map((entry) => <div key={entry.id} className="internal-task-event"><div><b>{entry.actor_name}</b><time dateTime={entry.created_at}>{formatDate(entry.created_at)}</time></div><span>{eventNames[entry.kind]}</span>{entry.body && <p>{entry.body}</p>}</div>)}
     {events.data && events.data.total > 50 && <div className="fact-pager"><Button variant="quiet" disabled={page === 1} onClick={() => setPage(page - 1)}>Новее</Button><span>{page} / {Math.ceil(events.data.total / 50)}</span><Button variant="quiet" disabled={page * 50 >= events.data.total} onClick={() => setPage(page + 1)}>Ранее</Button></div>}
     {error !== null && <Notice tone="error">{errorText(error)}</Notice>}
-    {canFinish && <form className="internal-task-reply" onSubmit={(event) => { event.preventDefault(); void finish() }}><label className="field"><span>Ответ</span><textarea value={answer} maxLength={4000} onChange={(event) => setAnswer(event.target.value)} rows={3} /></label><Button type="submit" disabled={busy || !answer.trim()}>Завершить поручение</Button></form>}
+    {copyError && <Notice tone="error">Не удалось скопировать номер. Выделите и скопируйте его вручную.</Notice>}
+    {canReply && <form className="internal-task-reply" onSubmit={(event) => { event.preventDefault(); void submit('MESSAGE') }}><label className="field"><span>Ответ</span><textarea value={answer} maxLength={4000} onChange={(event) => setAnswer(event.target.value)} rows={3} /></label><div className="internal-task-reply__actions"><Button type="submit" disabled={busy || !answer.trim()}>Ответить</Button>{canFinish && <Button type="button" disabled={busy || !answer.trim()} onClick={() => void submit('COMPLETED')}>Завершить поручение</Button>}</div></form>}
   </section>
 }
