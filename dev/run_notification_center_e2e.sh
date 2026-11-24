@@ -39,6 +39,7 @@ docker run --rm --user 1001:1001 --network oss-notification-acceptance_isolated 
   -e OSS_DISPOSABLE_DB=oss_test_notification_center -e OSS_SCREENSHOTS=1 \
   -v "$browser_runtime:/opt/browser-runtime:ro" \
   -v "$project_dir/dev/browser_notification_center.cjs:/run/browser.cjs:ro" \
+  -v "$project_dir/dev/browser_notification_center_readonly.cjs:/run/browser-readonly.cjs:ro" \
   -v "$project_dir/.dev-secrets/users.json:/run/dev-users.json:ro" \
   -v "$project_dir/.dev-secrets/screenshots:/run/screenshots" \
-  oss-control-dev-browser:local node /run/browser.cjs
+  oss-control-dev-browser:local sh -c 'node /run/browser.cjs && OSS_READ_ONLY=1 node /run/browser-readonly.cjs'

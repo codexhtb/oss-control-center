@@ -8,7 +8,7 @@ async function main() {
   const users = JSON.parse(fs.readFileSync('/run/dev-users.json', 'utf8'))
   const browser = await chromium.launch({ headless: true })
   try {
-    for (const login of ['dev-engineer', 'dev-admin', 'dev-operator']) {
+    for (const login of Object.keys(users)) {
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
       try {
         const page = await context.newPage()

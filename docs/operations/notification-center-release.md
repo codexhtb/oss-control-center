@@ -57,3 +57,36 @@ docker compose --env-file .env.dev -p oss-control-dev \
 
 Секреты этого этапа не создаются и не ротируются; DEV seed использует уже
 существующий manifest только в disposable database. Runtime не получает manifest.
+
+## Live smoke identities
+
+Read-only Chromium принимает manifest `{login: password}` из защищённого
+`/run/dev-users.json`; имена не зашиты в runner. Не предполагается, что старые
+DEV-пользователи существуют в рабочих данных. Для релиза 24.11.2026 прежние
+DEV-записи отсутствовали, а сохранённый старый credential не совпадал. Первый
+live smoke выполнил автоматический rollback; затем подготовлены три отдельные
+временные smoke identity с минимальными разрешениями для engineer/admin/operator.
+Существующие аккаунты, пароли и персональные grants не меняются.
+
+Создание и удаление выполняются штатным identity service с аудитом; после
+проверки все временные записи удаляются мягко, а сессии отзываются. Никаких
+заявок или прочтений рабочих уведомлений live smoke не создаёт. DEV runner
+проверяет этот же read-only script перед production promotion.
+
+Manifest хранится в `.dev-secrets/credentials/notification-center-smoke.json`
+(`0600`, родитель `0700`), проверенная локальная копия —
+`.dev-secrets/backups/notification-center-smoke.json` (`0600`). В локальном
+`.dev-secrets/registry.tsv` регистрируются только метаданные. Владелец может
+прочесть файлы как root; codexdev не обходит запрет доступа к `/root/oss-secrets`.
+После проверки отсутствия целевого файла владелец может сохранить свою копию:
+
+```bash
+sudo install -d -o root -g root -m 0700 /root/oss-secrets/notification-center-20261124
+sudo install -o root -g root -m 0600 \
+  /opt/oss-control-center/.dev-secrets/credentials/notification-center-smoke.json \
+  /root/oss-secrets/notification-center-20261124/smoke-users.json
+```
+
+Добавить путь в реестр владельца. Зашифрованная off-host копия этих временных
+credentials не подтверждена; локальная копия сверена побайтно. После удаления
+smoke identities сохранённые пароли не дают доступа к порталу.
