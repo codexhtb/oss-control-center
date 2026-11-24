@@ -1,0 +1,53 @@
+# Disposable DEV acceptance. No host ports or live API/database switching.
+name: oss-notification-acceptance
+services:
+  acceptance_api:
+    image: oss-notification-center-api:tested
+    env_file: ../.env.dev
+    environment:
+      APP_ENV: dev
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: oss_test_notification_center
+      BILLING_PROVIDER: MOCK
+      AUTH_PUBLIC_ORIGIN: https://sd.oss-ab.net
+      AUTH_TRUSTED_PROXY_HOST: acceptance_web
+    networks:
+      isolated:
+        aliases: [api]
+      database: {}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=5)"]
+      interval: 2s
+      timeout: 6s
+      retries: 20
+  acceptance_web:
+    image: oss-notification-center-web:tested
+    user: "1001:1001"
+    environment:
+      XDG_CONFIG_HOME: /tmp/caddy-config
+      XDG_DATA_HOME: /tmp/caddy-data
+    volumes:
+      - ../.dev-secrets/certs/server.crt:/run/dev-certs/server.crt:ro
+      - ../.dev-secrets/certs/server.key:/run/dev-certs/server.key:ro
+      - ../.dev-secrets/certs/sd.oss-ab.net.fullchain.crt:/run/domain-tls/fullchain.crt:ro
+      - ../.dev-secrets/certs/sd.oss-ab.net.key:/run/domain-tls/private.key:ro
+    depends_on:
+      acceptance_api:
+        condition: service_healthy
+    networks:
+      isolated:
+        aliases: [sd.oss-ab.net]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+networks:
+  isolated:
+    internal: true
+  database:
+    external: true
+    name: oss-control-dev_backend

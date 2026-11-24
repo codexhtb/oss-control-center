@@ -472,3 +472,21 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 Критерии доступа и очереди этапа 1: [oss-field-work-phase1.md](oss-field-work-phase1.md).
 Критерии отчёта, переноса и конкуренции этапа 2: [oss-field-work-phase2.md](oss-field-work-phase2.md).
 Критерии публикации, старой отправки и запуска этапа 3: [oss-field-work-phase3.md](oss-field-work-phase3.md).
+
+## Notification Center regression gates
+
+- Один `COMPLETED` с ответом создаёт одно уведомление; повтор с прежним request ID
+  идемпотентен. Исторический идентичный MESSAGE скрыт, различный ответ сохранён.
+- Чужие/собственные события, отозванные права, INTERNAL для оператора и удалённые
+  заявки не попадают в центр. Engineer/admin проверяются по текущим разрешениям.
+- В основном списке только unread, в истории только read. Чтение повторяемо,
+  сохраняет timestamp, переживает новый GET/session/reload. Чтение одного
+  пользователя не затрагивает остальных. Field receipts общие со старым API.
+- Общие счётчики верны на каждой странице и при пустой странице. «Прочитать все»
+  охватывает обе ленты и все страницы, не поглощает будущие напоминания/новые события.
+- UI отменяет старый polling: отложенный ответ GET не возвращает прочитанную
+  запись. Ошибка POST не вызывает переход или ложное уменьшение счётчика.
+- Браузерная приёмка в `oss_test_notification_center`: completion через UI,
+  переход в заявку, история, reload, bulk read и мобильный popover.
+- Полный backend набор включает mock BillingProvider, operator/engineer RBAC,
+  создание/закрытие, историю, Telegram/Field Work и независимые статусы.

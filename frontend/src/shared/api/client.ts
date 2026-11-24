@@ -60,13 +60,14 @@ export async function apiRequest<T>(path: `/api/v1/${string}`, options: ApiReque
     redirect: 'error',
     referrerPolicy: 'no-referrer',
   })
+  // FastAPI may retain Content-Type: application/json on a bodyless 204.
+  if (response.status === 204) return undefined as T
   const isJson = response.headers.get('content-type')?.includes('application/json') ?? false
   const payload: unknown = isJson ? await response.json() : null
   if (!response.ok) {
     const error = isErrorBody(payload) ? payload : null
     throw new ApiError(response.status, error?.code ?? 'api_error', error?.request_id)
   }
-  if (response.status === 204) return undefined as T
   if (!isJson) throw new ApiError(response.status, 'invalid_response')
   return payload as T
 }

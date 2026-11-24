@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import type { MeResponse } from '../../shared/api/types'
 import { errorText } from '../../shared/api/client'
@@ -21,6 +21,7 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
   const [error, setError] = useState<unknown>(null)
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
+  const pendingAction = useRef<{ key: string; requestId: string } | null>(null)
   const task = useQuery({ queryKey: ['internal-task', taskId], queryFn: ({ signal }) => taskApi.get(taskId, signal), refetchInterval: 15_000 })
   const events = useQuery({ queryKey: ['internal-task-events', taskId, page], queryFn: ({ signal }) => taskApi.events(taskId, page, signal), refetchInterval: page === 1 ? 15_000 : false })
   useEffect(() => {
@@ -32,6 +33,7 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
         queryClient.invalidateQueries({ queryKey: ['internal-task', taskId] }),
         queryClient.invalidateQueries({ queryKey: ['internal-tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['internal-task-notifications'] }),
+        queryClient.invalidateQueries({ queryKey: ['notification-center', session.user.id] }),
       ])
     }).catch((cause: unknown) => { if (active) setError(cause) })
     return () => { active = false }
@@ -47,7 +49,10 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
     setBusy(true)
     setError(null)
     try {
-      await taskApi.act(taskId, task.data.version, kind, answer.trim(), crypto.randomUUID())
+      const key = JSON.stringify([taskId, kind, answer.trim()])
+      if (pendingAction.current?.key !== key) pendingAction.current = { key, requestId: crypto.randomUUID() }
+      await taskApi.act(taskId, task.data.version, kind, answer.trim(), pendingAction.current.requestId)
+      pendingAction.current = null
       setAnswer('')
       setPage(1)
       await Promise.all([
@@ -55,6 +60,7 @@ export function TaskConversation({ taskId, session, ticketId, onUpdated }: { tas
         queryClient.invalidateQueries({ queryKey: ['internal-task-events', taskId] }),
         queryClient.invalidateQueries({ queryKey: ['internal-tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['internal-task-notifications'] }),
+        queryClient.invalidateQueries({ queryKey: ['notification-center', session.user.id] }),
       ])
       onUpdated?.()
     } catch (cause) {

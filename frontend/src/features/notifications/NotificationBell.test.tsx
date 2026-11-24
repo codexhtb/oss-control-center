@@ -1,14 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { MeResponse } from '../../shared/api/types'
 import { NotificationBell } from './NotificationBell'
-import { notificationApi } from './notification-api'
-import { taskApi } from '../tasks/task-api'
+import { notificationApi, type CenterNotification, type CenterPage } from './notification-api'
 
-vi.mock('./notification-api', () => ({ notificationApi: { list: vi.fn(), markRead: vi.fn() } }))
-vi.mock('../tasks/task-api', () => ({ taskApi: { notifications: vi.fn(), markRead: vi.fn() } }))
+vi.mock('./notification-api', () => ({ notificationApi: { center: vi.fn(), readCenter: vi.fn(), readAll: vi.fn() } }))
 
 const engineer: MeResponse = {
   user: {
@@ -16,102 +14,162 @@ const engineer: MeResponse = {
     display_name: 'Инженер', role: 'engineer', is_active: true,
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   },
-  permissions: ['tickets.read.all', 'tickets.field_work'],
+  permissions: ['tickets.read.all', 'tickets.field_work', 'tasks.create'],
 }
-
-function TicketDestination() {
+const task: CenterNotification = {
+  id: 'task-notice', source: 'task', ticket_id: 'ticket-2', task_id: 'task-2', ticket_number: 67,
+  title: 'Позвонить абоненту', kind: 'COMPLETED', created_at: '2026-11-03T11:00:00Z', read_at: null,
+}
+const field: CenterNotification = {
+  id: 'field-notice', source: 'field_report', ticket_id: 'ticket-1', task_id: null, ticket_number: 66,
+  title: 'Отчёт: Монтажник Тест', kind: 'FIELD_REPORT', created_at: '2026-11-03T10:00:00Z', read_at: null,
+}
+let notices: CenterNotification[]
+function response(state: 'unread' | 'read', page = 1): CenterPage {
+  const items = notices.filter((item) => state === 'unread' ? !item.read_at : !!item.read_at)
+  return { items: items.slice((page - 1) * 20, page * 20), page, size: 20,
+    total: items.length, unread_count: notices.filter((item) => !item.read_at).length }
+}
+function Destination() {
   const location = useLocation()
-  return <><p>Заявка открыта</p><span data-testid="task-destination">{location.pathname}{location.search}</span></>
+  return <span data-testid="destination">{location.pathname}{location.search}</span>
 }
-
 function mount(session = engineer, start = '/') {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[start]}>
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } } })
+  const rendered = render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[start]}>
     <NotificationBell session={session} />
-    <Routes><Route path="/" element={null} />
-      <Route path="/tickets/:id" element={<TicketDestination />} /></Routes>
+    <Routes><Route path="*" element={<Destination />} /></Routes>
   </MemoryRouter></QueryClientProvider>)
+  return { client, ...rendered }
+}
+async function open(count = 2) {
+  fireEvent.click(await screen.findByRole('button', { name: `Уведомления, непрочитанных: ${count}` }))
 }
 
 beforeEach(() => {
-  vi.mocked(notificationApi.list).mockReset()
-  vi.mocked(notificationApi.markRead).mockReset()
-  vi.mocked(notificationApi.list).mockResolvedValue({
-    items: [{ id: 'notice-1', ticket_id: 'ticket-1', ticket_number: 66,
-      sender_name: 'Монтажник Тест', reported_at: '2026-11-03T10:00:00Z',
-      read_at: null, awaiting_verification: true }],
-    page: 1, size: 20, total: 1, unread_count: 1,
+  notices = [{ ...task }, { ...field }]
+  vi.mocked(notificationApi.center).mockReset().mockImplementation(async (state, page) => response(state, page))
+  vi.mocked(notificationApi.readCenter).mockReset().mockImplementation(async (source, id) => {
+    notices = notices.map((item) => item.id === id && item.source === source ? { ...item, read_at: '2026-11-24T10:00:00Z' } : item)
   })
-  vi.mocked(notificationApi.markRead).mockResolvedValue(undefined)
-  vi.mocked(taskApi.notifications).mockReset().mockResolvedValue({ items: [], page: 1, size: 20, total: 0, unread_count: 0 })
-  vi.mocked(taskApi.markRead).mockReset().mockResolvedValue(undefined)
+  vi.mocked(notificationApi.readAll).mockReset().mockImplementation(async () => {
+    notices = notices.map((item) => ({ ...item, read_at: item.read_at ?? '2026-11-24T10:00:00Z' }))
+  })
 })
 
-it('shows persisted report and marks it read before opening its ticket', async () => {
+it('shows one chronological list and navigates to a task after persisting its read', async () => {
+  mount(engineer, '/tickets/another-ticket?task=another-task')
+  await open()
+  expect(screen.getAllByRole('button', { name: /Заявка #/ })[0]).toHaveTextContent('Поручение завершено')
+  fireEvent.click(screen.getByRole('button', { name: /Поручение завершено/ }))
+  await waitFor(() => expect(notificationApi.readCenter).toHaveBeenCalledWith('task', 'task-notice'))
+  await waitFor(() => expect(screen.getByTestId('destination')).toHaveTextContent('/tickets/ticket-2?task=task-2'))
+  await open(1)
+  expect(screen.queryByText('Поручение завершено')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('tab', { name: 'История' }))
+  expect(await screen.findByText('Поручение завершено')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /Поручение завершено/ }))
+  expect(notificationApi.readCenter).toHaveBeenCalledTimes(1)
+})
+
+it('marks field reports read before opening the associated ticket', async () => {
   mount()
-  fireEvent.click(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 1' }))
-  expect(screen.getByText('Монтажник Тест', { exact: false })).toBeInTheDocument()
-  expect(screen.getByLabelText('Ожидает подтверждения')).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: /Заявка #66/ }))
-  await waitFor(() => expect(notificationApi.markRead).toHaveBeenCalledWith('notice-1'))
-  expect(await screen.findByText('Заявка открыта')).toBeInTheDocument()
+  await open()
+  fireEvent.click(screen.getByRole('button', { name: /Отчёт монтажника/ }))
+  await waitFor(() => expect(notificationApi.readCenter).toHaveBeenCalledWith('field_report', 'field-notice'))
+  await waitFor(() => expect(screen.getByTestId('destination')).toHaveTextContent('/tickets/ticket-1'))
+  expect(screen.getByRole('button', { name: 'Уведомления, непрочитанных: 1' })).toBeInTheDocument()
 })
 
-it('does not fetch or show engineer reports to an operator', () => {
-  mount({ ...engineer, user: { ...engineer.user, role: 'operator' } })
+it('reads both sources in one action, retains history and stays read across reload', async () => {
+  const first = mount()
+  await open()
+  fireEvent.click(screen.getByRole('button', { name: 'Прочитать все' }))
+  expect(await screen.findByText('Непрочитанных уведомлений нет.')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Уведомления, непрочитанных: 0' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Прочитать все' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('tab', { name: 'История' }))
+  expect(await screen.findByText('Поручение завершено')).toBeInTheDocument()
+  expect(screen.getByText('Отчёт монтажника')).toBeInTheDocument()
+  first.unmount()
+  mount()
+  await open(0)
+  expect(screen.getByText('Непрочитанных уведомлений нет.')).toBeInTheDocument()
+})
+
+it('retains unread notice and location when persisting read fails', async () => {
+  vi.mocked(notificationApi.readCenter).mockRejectedValue(new Error('Offline'))
+  mount()
+  await open()
+  fireEvent.click(screen.getByRole('button', { name: /Поручение завершено/ }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось отметить прочтение')
+  expect(screen.getByRole('button', { name: 'Уведомления, непрочитанных: 2' })).toBeInTheDocument()
+  expect(screen.getByText('Поручение завершено')).toBeInTheDocument()
+  expect(screen.getByTestId('destination').textContent).toBe('/')
+})
+
+it('does not clear counts or history when bulk reading fails', async () => {
+  vi.mocked(notificationApi.readAll).mockRejectedValue(new Error('Offline'))
+  mount()
+  await open()
+  fireEvent.click(screen.getByRole('button', { name: 'Прочитать все' }))
+  expect(await screen.findByRole('alert')).toBeInTheDocument()
+  expect(screen.getAllByRole('button', { name: /Заявка #/ })).toHaveLength(2)
+  expect(screen.getByRole('button', { name: 'Уведомления, непрочитанных: 2' })).toBeInTheDocument()
+})
+
+it('cancels stale polling so an old response cannot resurrect a read notice', async () => {
+  const { client } = mount()
+  await open()
+  let resolvePoll!: (page: CenterPage) => void
+  let pollSignal: AbortSignal | undefined
+  const stalePage = response('unread')
+  vi.mocked(notificationApi.center).mockImplementationOnce((_state, _page, signal) => {
+    pollSignal = signal
+    return new Promise((resolve) => { resolvePoll = resolve })
+  })
+  void client.invalidateQueries({ queryKey: ['notification-center'] })
+  await waitFor(() => expect(resolvePoll).toBeDefined())
+  fireEvent.click(screen.getByRole('button', { name: /Поручение завершено/ }))
+  await waitFor(() => expect(screen.getByTestId('destination')).toHaveTextContent('/tickets/ticket-2?task=task-2'))
+  expect(pollSignal?.aborted).toBe(true)
+  await act(async () => { resolvePoll(stalePage) })
+  await open(1)
+  expect(screen.queryByText('Поручение завершено')).not.toBeInTheDocument()
+  await act(async () => { await client.invalidateQueries({ queryKey: ['notification-center'] }) })
+  expect(screen.queryByText('Поручение завершено')).not.toBeInTheDocument()
+})
+
+it('refreshes the count when another tab reads and when a new event arrives', async () => {
+  const { client } = mount()
+  await open()
+  notices = notices.map((item) => ({ ...item, read_at: '2026-11-24T10:00:00Z' }))
+  await act(async () => { await client.invalidateQueries({ queryKey: ['notification-center'] }) })
+  expect(await screen.findByText('Непрочитанных уведомлений нет.')).toBeInTheDocument()
+  notices.push({ ...task, id: 'new-notice' })
+  await act(async () => { await client.invalidateQueries({ queryKey: ['notification-center'] }) })
+  expect(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 1' })).toBeInTheDocument()
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /Заявка #/ })).toHaveLength(1))
+})
+
+it('paginates without truncating counts and excludes read entries from the main list', async () => {
+  notices = Array.from({ length: 23 }, (_, index) => ({ ...task, id: `notice-${index}` }))
+  mount()
+  await open(23)
+  expect(screen.getAllByRole('button', { name: /Заявка #/ })).toHaveLength(20)
+  fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /Заявка #/ })).toHaveLength(3))
+  expect(screen.getByRole('button', { name: 'Уведомления, непрочитанных: 23' })).toBeInTheDocument()
+})
+
+it('does not request notifications without access and allows admin with saved permissions', async () => {
+  const view = mount({ ...engineer, user: { ...engineer.user, role: 'operator' }, permissions: ['tickets.read.all'] })
   expect(screen.queryByRole('button', { name: /Уведомления/ })).not.toBeInTheDocument()
-  expect(notificationApi.list).not.toHaveBeenCalled()
-})
-
-it('shows a task notice to a permitted operator and marks it read on opening', async () => {
-  vi.mocked(taskApi.notifications).mockResolvedValue({
-    items: [{ id: 'task-notice', task_id: 'task-1', ticket_id: 'ticket-1', ticket_number: 66,
-      title: 'Позвонить абоненту', kind: 'CREATED', created_at: '2026-11-03T10:00:00Z', read_at: null }],
-    page: 1, size: 20, total: 1, unread_count: 1,
-  })
-  const session = { ...engineer, user: { ...engineer.user, role: 'operator' as const },
-    permissions: ['tickets.read.all', 'tasks.execute'] as MeResponse['permissions'] }
-  mount(session)
-  fireEvent.click(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 1' }))
-  fireEvent.click(screen.getByRole('button', { name: /Новое поручение · Заявка #66/ }))
-  await waitFor(() => expect(taskApi.markRead).toHaveBeenCalledWith('task-notice'))
-  expect(await screen.findByText('Заявка открыта')).toBeInTheDocument()
-  expect(screen.getByTestId('task-destination')).toHaveTextContent('/tickets/ticket-1?task=task-1')
-  expect(notificationApi.list).not.toHaveBeenCalled()
-})
-
-it('opens a different task while already viewing another ticket', async () => {
-  vi.mocked(taskApi.notifications).mockResolvedValue({
-    items: [{ id: 'task-notice', task_id: 'task-2', ticket_id: 'ticket-2', ticket_number: 67,
-      title: 'Уточнить проблему', kind: 'COMPLETED', created_at: '2026-11-03T10:00:00Z', read_at: null }],
-    page: 1, size: 20, total: 1, unread_count: 1,
-  })
-  mount({ ...engineer, permissions: [...engineer.permissions, 'tasks.create'] }, '/tickets/ticket-1?task=task-1')
-  fireEvent.click(await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 2' }))
-  fireEvent.click(screen.getByRole('button', { name: /Поручение завершено · Заявка #67/ }))
-  await waitFor(() => expect(screen.getByTestId('task-destination')).toHaveTextContent('/tickets/ticket-2?task=task-2'))
-})
-
-it('updates orange attention through the existing inbox query and removes it on read', async () => {
-  let unread = false
-  vi.mocked(taskApi.notifications).mockImplementation(async () => ({
-    items: unread ? [{ id: 'new-notice', task_id: 'new-task', ticket_id: 'ticket-1', ticket_number: 1,
-      title: 'Уточнить', kind: 'CREATED', created_at: '2026-11-18T10:00:00Z', read_at: null }] : [],
-    page: 1, size: 20, total: unread ? 1 : 0, unread_count: unread ? 1 : 0,
-    new_assignments_count: unread ? 1 : 0,
-  }))
-  vi.mocked(notificationApi.list).mockResolvedValue({ items: [], page: 1, size: 20, total: 0, unread_count: 0 })
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(<QueryClientProvider client={client}><MemoryRouter>
-    <NotificationBell session={{ ...engineer, permissions: [...engineer.permissions, 'tasks.execute'] }} />
-  </MemoryRouter></QueryClientProvider>)
-  const bell = await screen.findByRole('button', { name: 'Уведомления, непрочитанных: 0' })
-  expect(bell).not.toHaveClass('notification-bell__trigger--new-task')
-  unread = true
-  await client.invalidateQueries({ queryKey: ['internal-task-notifications'] })
-  await waitFor(() => expect(bell).toHaveClass('notification-bell__trigger--new-task'))
-  expect(bell).toHaveAccessibleName('Уведомления, непрочитанных: 1')
-  unread = false
-  await client.invalidateQueries({ queryKey: ['internal-task-notifications'] })
-  await waitFor(() => expect(bell).not.toHaveClass('notification-bell__trigger--new-task'))
+  expect(notificationApi.center).not.toHaveBeenCalled()
+  view.unmount()
+  mount({ ...engineer, user: { ...engineer.user, role: 'admin' }, permissions: ['tickets.read.all', 'tickets.field_work'] })
+  await open()
+  expect(screen.getByRole('tab', { name: 'Непрочитанные' })).toHaveAttribute('aria-selected', 'true')
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(screen.queryByRole('region', { name: 'Уведомления' })).not.toBeInTheDocument()
 })

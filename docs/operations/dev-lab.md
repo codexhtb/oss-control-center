@@ -281,3 +281,22 @@ IP-группами, финансовыми сведениями для опер
 общих журналах. Автоматического fallback на MOCK нет. Контролируемая очистка
 lookup snapshots без заявок возможна после 24 часов; расписание очистки пока
 не настроено. Production NetUP не задействован.
+
+## Notification Center: изолированная DEV-приёмка
+
+`dev/compose.notification-center.yaml` запускает API/WEB проверяемой версии
+без опубликованных host ports. Используется отдельная сеть и одноразовая
+`oss_test_notification_center` в существующем PostgreSQL. Runtime рабочего
+API, его база, NetUP, Telegram poller и BDCOM proxy не переключаются.
+
+После подготовки `oss-notification-center-api:tested` и
+`oss-notification-center-web:tested`:
+
+```bash
+sg docker -c 'sh dev/run_notification_center_e2e.sh'
+```
+
+Runner отказывается перезаписывать существующую тестовую базу. Он применяет
+миграции только к ней, использует существующие DEV-пароли без ротации, проверяет
+Chromium с TLS-проверкой, затем удаляет только отдельный acceptance-стек и базу.
+Скриншоты синтетических данных остаются в защищённой `.dev-secrets/screenshots/`.

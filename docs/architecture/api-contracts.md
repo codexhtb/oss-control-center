@@ -367,3 +367,19 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 Контракт авторизации, реестра и очередей этапа 1: [oss-field-work-phase1.md](oss-field-work-phase1.md).
 Контракт завершения и переноса через Mini App: [oss-field-work-phase2.md](oss-field-work-phase2.md).
 Контракт публикации без Telegram-доставки: [oss-field-work-phase3.md](oss-field-work-phase3.md).
+
+## Notification Center
+
+- `GET /api/v1/notifications/center?state=unread|read&page=1&size=20`:
+  `items[{id,source,task_id,ticket_id,ticket_number,kind,title,created_at,read_at}]`,
+  `page,size,total,unread_count`. `source=task|field_report`, `task_id` nullable.
+  `total` относится к выбранной вкладке, `unread_count` — ко всей доступной ленте,
+  включая другие страницы. Пустая страница тоже содержит корректные счётчики.
+- `POST /api/v1/notifications/center/{source}/{id}/read`: 204, идемпотентно.
+- `POST /api/v1/notifications/center/read-all`: 204; обе ленты в одной транзакции,
+  все доступные страницы, без будущих напоминаний. Оба POST требуют CSRF/Origin.
+- 403 при отсутствии прав центра; 404 для чужого, скрытого или будущего события.
+  Существующие `/tasks/notifications` и field `/notifications` сохраняют контракт
+  для совместимости. Все пути используют прежние персистентные read receipts.
+
+Подробности: [Notification Center](notification-center.md).

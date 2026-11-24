@@ -441,3 +441,14 @@ truth для зафиксированного в заявке наблюдени
 # OSS Field Work Mini App
 
 Таблицы `field_installers` и `field_installer_directions`: [oss-field-work-phase1.md](oss-field-work-phase1.md).
+
+## Общее представление уведомлений
+
+Notification Center не добавляет таблиц или миграций. Он объединяет
+`internal_task_notifications` (индивидуальный `read_at`, `available_at`) и
+`field_report_notifications` с `field_report_notification_reads` для текущего
+пользователя. `source + id` образуют идентификатор строки центра. Список и
+счётчик вычисляются одним SQL statement; чтение обеих лент фиксируется общей
+транзакцией, без изменения событий заявок, аудита или Telegram outbox.
+Дедупликация исторического ответа не удаляет исходных фактов.
+См. [Notification Center](notification-center.md).

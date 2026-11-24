@@ -5793,6 +5793,37 @@ def test_telegram_replies_completion_and_engineer_verification_are_independent(
     assert ticket_client.get(path).json()["status"] == "IN_PROGRESS"
     assert ticket_client.get("/api/v1/tickets").json()["items"][0]["field_report_pending"] is False
     assert ticket_client.get(inbox_path).json()["items"][0]["awaiting_verification"] is False
+    center = "/api/v1/notifications/center"
+    assert ticket_client.get(center).json()["unread_count"] == 0
+    assert ticket_client.get(center, params={"state": "read"}).json()["total"] == 1
+    task_notice = ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json={
+        "ticket_id": ticket_id, "assignee_id": str(second_engineer.id),
+        "description": "Synthetic combined inbox", "client_request_id": str(uuid4()),
+    })
+    assert task_notice.status_code == 201
+    login(ticket_client, second_engineer.login)
+    combined = ticket_client.get(center).json()
+    assert combined["unread_count"] == 2
+    assert {item["source"] for item in combined["items"]} == {"task", "field_report"}
+    assert ticket_client.post(center + "/read-all", headers=csrf(ticket_client)).status_code == 204
+    assert ticket_client.get(center, params={"state": "read"}).json()["total"] == 2
+    assert ticket_client.get(center).json()["items"] == []
+    assert ticket_client.get(inbox_path).json()["unread_count"] == 0
+    admin = seed_user(ticket_engine, "center_field_admin", Role.ADMIN)
+    login(ticket_client, admin.login)
+    assert ticket_client.get(center).json()["unread_count"] == 1
+    with Session(ticket_engine) as db:
+        saved_notice = db.get(FieldReportNotification, UUID(notification["id"]))
+        report = db.get(FieldExternalMessage, saved_notice.message_id)
+        db.add(FieldWorkStaffAccess(
+            user_id=second_engineer.id, telegram_user_id=report.sender_telegram_id,
+        ))
+        db.commit()
+    login(ticket_client, second_engineer.login)
+    own_history = ticket_client.get(center, params={"state": "read"}).json()
+    assert all(item["source"] != "field_report" for item in own_history["items"])
+    own_read = f"{center}/field_report/{notification['id']}/read"
+    assert ticket_client.post(own_read, headers=csrf(ticket_client)).status_code == 404
 
 
 def test_dynamic_group_binding_requires_admin_and_tracks_supergroup_migration(
@@ -7496,3 +7527,143 @@ def test_internal_task_reminder_is_durable_and_only_visible_when_due(
         f"/api/v1/tasks/{task_id}/read", headers=csrf(ticket_client)
     ).status_code == 204
     assert ticket_client.get("/api/v1/tasks/notifications").json()["unread_count"] == 0
+
+
+def test_notification_center_completion_is_one_durable_personal_notice(
+    ticket_engine: Engine, ticket_client: TestClient,
+) -> None:
+    creator = seed_user(ticket_engine, "center_creator", Role.ENGINEER)
+    assignee = seed_user(ticket_engine, "center_assignee", Role.ENGINEER)
+    outsider = seed_user(ticket_engine, "center_outsider", Role.ENGINEER)
+    login(ticket_client, creator.login)
+    ticket = make_manual_ticket(ticket_client, subject="Notification regression")
+    created = ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json={
+        "ticket_id": ticket["id"], "assignee_id": str(assignee.id),
+        "description": "Synthetic task", "client_request_id": str(uuid4()),
+    })
+    assert created.status_code == 201
+    task = created.json()
+    path = "/api/v1/notifications/center"
+    assert ticket_client.get(path).json()["unread_count"] == 0  # No own creation.
+    login(ticket_client, assignee.login)
+    action = {"kind": "COMPLETED", "body": "Synthetic answer", "client_request_id": str(uuid4())}
+    event_path = f"/api/v1/tasks/{task['id']}/events"
+    for _ in range(2):  # Retry of the same action remains idempotent, even with old If-Match.
+        assert ticket_client.post(event_path, headers={
+            **csrf(ticket_client), "If-Match": '"1"',
+        }, json=action).status_code == 200
+    with Session(ticket_engine) as db:
+        completion = db.scalar(select(InternalTaskEvent).where(
+            InternalTaskEvent.task_id == UUID(task["id"]),
+            InternalTaskEvent.kind == "COMPLETED",
+        ))
+        assert completion is not None and completion.body == action["body"]
+        assert db.scalar(select(func.count()).select_from(InternalTaskEvent).where(
+            InternalTaskEvent.task_id == UUID(task["id"]),
+        )) == 2  # CREATED + COMPLETED, no synthetic MESSAGE.
+        # A historical split answer must not duplicate the canonical completion notice.
+        old_answer = InternalTaskEvent(
+            task_id=UUID(task["id"]), actor_id=assignee.id, client_request_id=uuid4(),
+            kind="MESSAGE", body=action["body"],
+            created_at=completion.created_at - timedelta(seconds=1),
+        )
+        db.add(old_answer)
+        db.flush()
+        db.add(InternalTaskNotification(
+            task_id=UUID(task["id"]), event_id=old_answer.id, recipient_id=creator.id,
+        ))
+        db.commit()
+    login(ticket_client, creator.login)
+    inbox = ticket_client.get(path).json()
+    assert inbox["total"] == inbox["unread_count"] == 1
+    notice = inbox["items"][0]
+    assert notice["kind"] == "COMPLETED" and notice["task_id"] == task["id"]
+    read_path = f"{path}/task/{notice['id']}/read"
+    assert ticket_client.post(read_path).status_code == 403
+    login(ticket_client, outsider.login)
+    assert ticket_client.get(path).json()["total"] == 0
+    assert ticket_client.post(read_path, headers=csrf(ticket_client)).status_code == 404
+    login(ticket_client, creator.login)
+    for _ in range(2):
+        assert ticket_client.post(read_path, headers=csrf(ticket_client)).status_code == 204
+    for _ in range(2):
+        assert ticket_client.get(path).json()["items"] == []
+        assert ticket_client.get(path).json()["unread_count"] == 0
+    history = ticket_client.get(path, params={"state": "read"}).json()
+    assert history["total"] == 1 and history["items"][0]["id"] == notice["id"]
+    assert history["items"][0]["read_at"] is not None
+    assert ticket_client.get(f"/api/v1/tasks/{task['id']}").json()["is_unread"] is False
+    assert ticket_client.get(f"/api/v1/tickets/{ticket['id']}").json()["status"] == ticket["status"]
+    # Session reload cannot resurrect reads; underlying immutable history survives.
+    login(ticket_client, creator.login)
+    assert ticket_client.get(path).json()["unread_count"] == 0
+    assert ticket_client.get(f"/api/v1/tasks/{task['id']}/events").json()["total"] == 3
+
+
+def test_notification_center_bulk_read_pagination_and_future_reminders(
+    ticket_engine: Engine, ticket_client: TestClient,
+) -> None:
+    creator = seed_user(ticket_engine, "center_bulk_creator", Role.ENGINEER)
+    assignee = seed_user(ticket_engine, "center_bulk_assignee", Role.ENGINEER)
+    from app.modules.identity.roles import permissions_for
+
+    with Session(ticket_engine) as db:
+        db.get(User, assignee.id).permissions_customized = True
+        db.add_all(UserPermission(user_id=assignee.id, permission=permission)
+                   for permission in permissions_for(Role.ENGINEER))
+        db.commit()
+    login(ticket_client, creator.login)
+    ticket = make_manual_ticket(ticket_client, subject="Notification bulk regression")
+    task_ids = []
+    for index in range(3):
+        result = ticket_client.post("/api/v1/tasks", headers=csrf(ticket_client), json={
+            "ticket_id": ticket["id"], "assignee_id": str(assignee.id),
+            "description": f"Synthetic task {index}", "client_request_id": str(uuid4()),
+            "reminder_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        })
+        assert result.status_code == 201
+        task_ids.append(result.json()["id"])
+    login(ticket_client, assignee.login)
+    path = "/api/v1/notifications/center"
+    page = ticket_client.get(path, params={"size": 1, "page": 2}).json()
+    assert page["total"] == page["unread_count"] == 3 and len(page["items"]) == 1
+    empty_page = ticket_client.get(path, params={"size": 1, "page": 5}).json()
+    assert empty_page["items"] == [] and empty_page["unread_count"] == 3
+    assert ticket_client.get(path, params={"state": "read"}).json()["unread_count"] == 3
+    assert ticket_client.post(path + "/read-all").status_code == 403
+    for _ in range(2):
+        result = ticket_client.post(path + "/read-all", headers=csrf(ticket_client))
+        assert result.status_code == 204
+    assert ticket_client.get(path).json()["unread_count"] == 0
+    history = ticket_client.get(path, params={"state": "read"}).json()
+    assert history["total"] == 3 and all(item["read_at"] for item in history["items"])
+    with Session(ticket_engine) as db:
+        reminders = db.scalars(select(InternalTaskNotification).join(
+            InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id,
+        ).where(InternalTaskEvent.kind == "REMINDER")).all()
+        assert len(reminders) == 3 and all(item.read_at is None for item in reminders)
+        future_id = reminders[0].id
+        future_read = f"{path}/task/{future_id}/read"
+        assert ticket_client.post(future_read, headers=csrf(ticket_client)).status_code == 404
+        reminders[0].available_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    inbox = ticket_client.get(path).json()
+    assert inbox["unread_count"] == 1 and inbox["items"][0]["kind"] == "REMINDER"
+    tasks = ticket_client.get("/api/v1/tasks").json()["items"]
+    assert sum(item["is_unread"] for item in tasks) == 1
+    # New events arriving after bulk read remain unread.
+    login(ticket_client, creator.login)
+    response = ticket_client.post(f"/api/v1/tasks/{task_ids[0]}/events", headers={
+        **csrf(ticket_client), "If-Match": '"1"',
+    }, json={"kind": "MESSAGE", "body": "New message", "client_request_id": str(uuid4())})
+    assert response.status_code == 200
+    login(ticket_client, assignee.login)
+    assert ticket_client.get(path).json()["unread_count"] == 2
+    # Revoked permission is enforced immediately on lists and mutations.
+    with Session(ticket_engine) as db:
+        permission = db.get(UserPermission, (assignee.id, Permission.TASK_EXECUTE.value))
+        assert permission is not None
+        db.delete(permission)
+        db.commit()
+    assert ticket_client.get(path).json()["items"] == []  # Engineer still sees field inbox.
+    assert ticket_client.post(future_read, headers=csrf(ticket_client)).status_code == 404

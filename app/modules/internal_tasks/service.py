@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.errors import ApiError
 from app.modules.identity.access import has_permission
@@ -68,6 +68,24 @@ def _task(
     return row
 
 
+def _meaningful_event(actor: User):
+    # Old clients could send the answer separately before completing with the same text.
+    # Keep both immutable events, but expose the completion as the canonical notice.
+    completion = aliased(InternalTaskEvent)
+    repeated_answer = exists(select(completion.id).where(
+        completion.task_id == InternalTaskEvent.task_id,
+        completion.actor_id == InternalTaskEvent.actor_id,
+        completion.kind == "COMPLETED",
+        completion.body == InternalTaskEvent.body,
+        completion.created_at >= InternalTaskEvent.created_at,
+    ))
+    return and_(
+        InternalTaskEvent.actor_id != actor.id,
+        or_(InternalTaskEvent.kind != "MESSAGE", ~repeated_answer),
+        or_(InternalTaskEvent.kind != "REMINDER", InternalTask.status == "OPEN"),
+    )
+
+
 def _unread_task(db: Session, actor: User):
     return exists(select(InternalTaskNotification.id).join(
         InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id,
@@ -76,6 +94,7 @@ def _unread_task(db: Session, actor: User):
         InternalTaskNotification.recipient_id == actor.id,
         InternalTaskNotification.read_at.is_(None),
         InternalTaskNotification.available_at <= datetime.now(UTC),
+        _meaningful_event(actor),
     ))
 
 
@@ -470,14 +489,14 @@ def add_event(
     return _summary(db, task, ticket)
 
 
-def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
+def visible_notifications(db: Session, actor: User, *, now: datetime | None = None):
     if not (
         has_permission(db, actor, Permission.TASK_CREATE)
         or has_permission(db, actor, Permission.TASK_EXECUTE)
     ):
         raise ApiError(403, "forbidden", "Permission denied")
     scope = _ticket_scope(db, actor)
-    visible = (
+    return (
         select(
             InternalTaskNotification.id,
             InternalTaskNotification.task_id,
@@ -494,7 +513,8 @@ def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
         .join(InternalTaskEvent, InternalTaskEvent.id == InternalTaskNotification.event_id)
         .where(
             InternalTaskNotification.recipient_id == actor.id,
-            InternalTaskNotification.available_at <= datetime.now(UTC),
+            InternalTaskNotification.available_at <= (now or datetime.now(UTC)),
+            _meaningful_event(actor),
             scope,
             or_(
                 and_(
@@ -507,7 +527,11 @@ def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
                 ),
             ),
         )
-    ).subquery()
+    )
+
+
+def list_notifications(db: Session, actor: User, page: int, size: int) -> dict:
+    visible = visible_notifications(db, actor).subquery()
     total = db.scalar(select(func.count()).select_from(visible)) or 0
     unread = (
         db.scalar(select(func.count()).select_from(visible).where(visible.c.read_at.is_(None))) or 0

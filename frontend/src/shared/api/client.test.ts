@@ -36,6 +36,14 @@ describe('same-origin API client', () => {
     expect(csrfCookie('other=1; oss_csrf=token-2')).toBe('token-2')
   })
 
+  it('accepts an empty 204 response even when FastAPI advertises JSON', async () => {
+    document.cookie = 'oss_csrf=synthetic-token; Path=/'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, {
+      status: 204, headers: { 'Content-Type': 'application/json' },
+    })))
+    await expect(apiRequest('/api/v1/notifications/center/read-all', { method: 'POST' })).resolves.toBeUndefined()
+  })
+
   it('maps structured API errors without exposing server text', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       code: 'version_conflict', message: 'Sensitive detail', request_id: 'synthetic-id',

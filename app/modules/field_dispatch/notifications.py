@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.modules.field_dispatch.models import (
     FieldReportNotification,
     FieldReportNotificationRead,
     FieldWorkHandoff,
+    FieldWorkStaffAccess,
 )
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
@@ -20,7 +21,9 @@ from app.modules.tickets.models import Ticket
 
 
 def _visibility(db: Session, user: User):
-    if user.role != Role.ENGINEER or not has_permission(db, user, Permission.TICKET_FIELD_WORK):
+    if user.role not in (Role.ENGINEER, Role.ADMIN) or not has_permission(
+        db, user, Permission.TICKET_FIELD_WORK
+    ):
         raise ApiError(403, "forbidden", "Permission denied")
     if has_permission(db, user, Permission.TICKET_READ):
         return Ticket.deleted_at.is_(None)
@@ -50,7 +53,17 @@ def _visible_notifications(db: Session, user: User):
                 FieldReportNotificationRead.user_id == user.id,
             ),
         )
-        .where(_visibility(db, user))
+        .where(
+            _visibility(db, user),
+            or_(
+                FieldExternalMessage.primary_staff_user_id.is_(None),
+                FieldExternalMessage.primary_staff_user_id != user.id,
+            ),
+            ~exists(select(FieldWorkStaffAccess.user_id).where(
+                FieldWorkStaffAccess.user_id == user.id,
+                FieldWorkStaffAccess.telegram_user_id == FieldExternalMessage.sender_telegram_id,
+            )),
+        )
     )
 
 

@@ -67,3 +67,24 @@ it('marks a newly opened assignment read through the protected API and refreshes
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ['internal-task-notifications'] })
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ['internal-tasks'] })
 })
+
+
+it('reuses the action request ID after a lost response so retry cannot duplicate a notice', async () => {
+  vi.mocked(taskApi.act).mockRejectedValueOnce(new TypeError('Connection lost'))
+  mount(engineer)
+  const answer = await screen.findByRole('textbox', { name: 'Ответ' })
+  fireEvent.change(answer, { target: { value: 'Повторяемый ответ' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Ответить' }))
+  await screen.findByRole('alert')
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Ответить' })).toBeEnabled())
+  const originalId = vi.mocked(taskApi.act).mock.calls[0]![4]
+  fireEvent.click(screen.getByRole('button', { name: 'Ответить' }))
+  await waitFor(() => expect(taskApi.act).toHaveBeenCalledTimes(2))
+  expect(vi.mocked(taskApi.act).mock.calls[1]![4]).toBe(originalId)
+  await waitFor(() => expect(answer).toHaveValue(''))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Ответить' })).toBeDisabled())
+  fireEvent.change(answer, { target: { value: 'Повторяемый ответ' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Ответить' }))
+  await waitFor(() => expect(taskApi.act).toHaveBeenCalledTimes(3))
+  expect(vi.mocked(taskApi.act).mock.calls[2]![4]).not.toBe(originalId)
+})
