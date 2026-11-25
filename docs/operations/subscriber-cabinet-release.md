@@ -119,3 +119,9 @@ Chromium DEV проверил engineer/operator/admin с синтетическ�
 проверен HTTPS-входом; пароли остальных существующих staff accounts не менялись.
 Миграция OCC проверена upgrade/downgrade на disposable PostgreSQL.
 Реальные реквизиты абонентов автоматические проверки не запрашивают.
+
+Первый promotion автоматически откатился: live smoke унаследовал прежний
+DEV origin из `.env.dev` и был остановлен собственным guard до создания
+проверочных staff accounts. Схема 0053 и прежние API/WEB восстановлены,
+HTTPS readiness прошёл. Runner теперь явно получает production origin;
+его configuration gate проверен отдельно до повторного promotion.

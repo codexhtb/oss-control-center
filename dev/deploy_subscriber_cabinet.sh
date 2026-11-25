@@ -103,6 +103,7 @@ test -n "$web_ip"
 docker run --rm --user 1001:1001 --network oss-control-dev_backend \
   --add-host "sd.oss-ab.net:$web_ip" \
   --env-file .env.dev -e POSTGRES_HOST=postgres -e OSS_LIVE_SMOKE=1 \
+  -e AUTH_PUBLIC_ORIGIN=https://sd.oss-ab.net \
   -e SUBSCRIBER_CABINET_MODE=disabled -e SUBSCRIBER_CABINET_MEMO_VERIFIED=false \
   -v "$PWD/dev/smoke_subscriber_cabinet_live.py:/app/dev/smoke_subscriber_cabinet_live.py:ro" \
   -v "$PWD/.dev-secrets/credentials/notification-center-smoke.json:/run/staff-smoke.json:ro" \
