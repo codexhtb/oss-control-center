@@ -8,10 +8,11 @@ from app.modules.billing.netup.cabinet import CabinetUnavailable, load_cabinet, 
 
 
 class Cursor:
-    def __init__(self, *, owners=None, encrypted=0, tls="TLS-test"):
+    def __init__(self, *, owners=None, encrypted=0, tls="TLS-test", server_id=2, read_only=1):
         self.owners = [{"id": 101}] if owners is None else owners
         self.encrypted, self.tls = encrypted, tls
         self.sql = []
+        self.server_id, self.read_only = server_id, read_only
 
     def __enter__(self):
         return self
@@ -28,6 +29,8 @@ class Cursor:
     def fetchone(self):
         if self.sql[-1][0].startswith("SHOW"):
             return {"Value": self.tls}
+        if self.sql[-1][0].startswith("SELECT @@"):
+            return {"server_id": self.server_id, "read_only": self.read_only}
         return {"login": "synthetic-login", "password": "synthetic-secret",
                 "encrypted": self.encrypted}
 
@@ -86,6 +89,42 @@ def test_secret_is_masked_and_not_part_of_billing_provider():
     assert result.password.get_secret_value() == "synthetic-secret"
     assert "synthetic-secret" not in repr(result)
     assert "synthetic-secret" not in repr(result.password)
+
+
+@pytest.mark.parametrize("server_id,read_only,allowed", [
+    (2, 1, True), (1, 1, False), (2, 0, False),
+])
+def test_management_password_requires_approved_read_only_replica(server_id, read_only, allowed):
+    q = Cursor(tls="", server_id=server_id, read_only=read_only)
+    cfg, connection = config(q)
+    cfg.allow_plaintext_management = True
+    if allowed:
+        assert load_cabinet(cfg, 202, 101, password=True, require_tls=False).password is not None
+    else:
+        with pytest.raises(CabinetUnavailable):
+            load_cabinet(cfg, 202, 101, password=True, require_tls=False)
+        assert not any("SELECT login,password" in sql for sql, _ in q.sql)
+    assert not any(sql.startswith("SHOW") for sql, _ in q.sql)
+    assert connection.closed and connection.rolled_back
+
+
+@pytest.mark.parametrize("host,port,approved", [
+    ("172.17.7.1", 3307, True), ("172.17.7.1", 3306, False), ("172.17.7.70", 3307, False),
+])
+def test_management_exception_is_restricted_to_existing_endpoint(host, port, approved):
+    from app.modules.billing.netup.config import NetupConfig
+
+    values = dict(host=host, port=port, app_env="production", purpose="production",
+                  user="synthetic_ro", password="synthetic-secret", allow_plaintext_management=True)
+    if approved:
+        cfg = NetupConfig(**values)
+        assert password_enabled(SimpleNamespace(subscriber_cabinet_mode="management"), cfg)
+        assert cfg.tls_ca is None
+    else:
+        with pytest.raises(ValueError):
+            NetupConfig(**values)
+    with pytest.raises(ValueError):
+        NetupConfig(**(values | {"allow_plaintext_management": False}))
 
 
 @pytest.mark.parametrize("mode,verified,tls,expected", [

@@ -497,3 +497,7 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
 проверки перед включением PROD описаны в [subscriber-cabinet.md](subscriber-cabinet.md).
 Ручная сверка с памяткой выполняется владельцем через отдельный DEV;
 реальные subscriber credentials не записываются в fixtures или файлы.
+Режим management проверяется без TLS/SSH на утверждённом endpoint;
+неверный endpoint, writable source и другой server_id блокируют чтение.
+Production приёмка включает reveal/copy/hide под оператором, аудит и отсутствие
+пароля в snapshot; значения реквизитов и скриншоты с ними не сохраняются.

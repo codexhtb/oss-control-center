@@ -19,6 +19,12 @@ class CabinetCredentials:
 
 
 def password_enabled(settings: Settings, config: NetupConfig) -> bool:
+    if settings.subscriber_cabinet_mode == "management":
+        return (
+            getattr(config, "allow_plaintext_management", False)
+            and config.host == "172.17.7.1" and config.port == 3307
+            and config.purpose == "production"
+        )
     if settings.subscriber_cabinet_mode == "verified":
         return (
             settings.subscriber_cabinet_memo_verified
@@ -41,6 +47,11 @@ def load_cabinet(
             cursor.execute("SET SESSION max_statement_time=%s", (config.max_execution_ms / 1000,))
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+            if password and getattr(config, "allow_plaintext_management", False):
+                cursor.execute("SELECT @@server_id AS server_id, @@read_only AS read_only")
+                replica = cursor.fetchone()
+                if not replica or replica["server_id"] != 2 or replica["read_only"] != 1:
+                    raise CabinetUnavailable from None
             if password and require_tls:
                 cursor.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
                 tls = cursor.fetchone()

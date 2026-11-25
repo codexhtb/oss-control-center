@@ -106,7 +106,6 @@ export function errorText(error: unknown): string {
       case 404: return 'Запрашиваемые данные не найдены.'
       case 409:
         switch (error.code) {
-          case 'cabinet_password_disabled': return 'Просмотр паролей ЛК ещё не включён. Это разрешение пока нельзя назначить.'
           case 'user_conflict': return 'Логин уже занят другим сотрудником.'
           case 'no_change': return 'Изменений нет.'
           case 'last_admin': return 'Нельзя отключить последнего активного администратора.'

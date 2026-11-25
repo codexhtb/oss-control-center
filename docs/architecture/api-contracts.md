@@ -388,5 +388,6 @@ Phase 3 добавит операции `field_dispatch`, Phase 4 — автом
 
 Отдельные ephemeral GET login / POST password, RBAC, CSRF, аудит и release gates
 описаны в [контракте Subscriber cabinet](subscriber-cabinet.md).
-Назначение `subscribers.password.read` через создание сотрудника или изменение
-grants при выключенной выдаче пароля отклоняется с 409 `cabinet_password_disabled`.
+Права оператора включают логин и пароль ЛК; редактирование grants независимо
+от режима источника. В режиме `management` раскрытие не требует TLS/SSH
+для утверждённого endpoint, сохраняя RBAC, CSRF, аудит и запрет кэширования.

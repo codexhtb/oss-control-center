@@ -86,7 +86,7 @@ def cabinet_password(lookup_id: UUID, identity: CsrfIdentityDep, db: SessionDep)
             raise ValueError("disabled")
         result = load_cabinet(
             config, account_id, user_id, password=True,
-            require_tls=settings.subscriber_cabinet_mode != "dev_preview",
+            require_tls=settings.subscriber_cabinet_mode not in {"dev_preview", "management"},
         )
         if result.password is None:
             raise ValueError("unavailable")

@@ -707,20 +707,15 @@ def test_personal_grants_temporary_password_and_live_session_revocation(
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_password_grant_cannot_reach_legacy_workers_while_disabled(
+def test_password_grants_are_independent_of_transport_gate(
     identity_engine: Engine, identity_client: TestClient,
     monkeypatch: pytest.MonkeyPatch, enabled: bool,
 ) -> None:
-    from types import SimpleNamespace
-
-    from app.api.v1 import identity as identity_api
-
     admin = seed_user(identity_engine, "admin", Role.ADMIN)
     worker = seed_user(identity_engine, "worker", Role.OPERATOR)
     assert login(identity_client, admin.login).status_code == 200
-    monkeypatch.setattr(identity_api, "get_settings", lambda: SimpleNamespace(
-        subscriber_cabinet_mode="dev_preview" if enabled else "disabled"
-    ))
+    monkeypatch.setenv("SUBSCRIBER_CABINET_MODE", "verified" if enabled else "disabled")
+    get_settings.cache_clear()
     grants = [Permission.SUBSCRIBER_READ, Permission.SUBSCRIBER_PASSWORD_READ]
     changed = identity_client.put(
         f"/api/v1/users/{worker.id}/permissions", headers=csrf(identity_client),
@@ -731,14 +726,56 @@ def test_password_grant_cannot_reach_legacy_workers_while_disabled(
         json={"login": "new-worker", "display_name": "Synthetic", "role": "operator",
               "permissions": grants},
     )
-    assert changed.status_code == (200 if enabled else 409)
-    assert created.status_code == (201 if enabled else 409)
+    assert changed.status_code == 200
+    assert created.status_code == 201
+    default_operator = identity_client.post(
+        "/api/v1/users", headers=csrf(identity_client),
+        json={"login": "default-worker", "display_name": "Synthetic", "role": "operator"},
+    )
+    assert default_operator.status_code == 201
+    assert Permission.SUBSCRIBER_PASSWORD_READ in default_operator.json()["permissions"]
     with Session(identity_engine) as db:
         stored = db.scalars(select(UserPermission).where(
             UserPermission.permission == Permission.SUBSCRIBER_PASSWORD_READ
         )).all()
-        assert len(stored) == (2 if enabled else 0)
-        assert (db.scalar(select(User.id).where(User.login == "new-worker")) is not None) == enabled
+        assert len(stored) == 3
+        assert db.scalar(select(User.id).where(User.login == "new-worker")) is not None
+
+
+def test_operator_cabinet_rollout_preserves_grants_and_audits_only_operators(
+    identity_engine: Engine,
+) -> None:
+    admin = seed_user(identity_engine, "admin", Role.ADMIN)
+    operator = seed_user(identity_engine, "operator", Role.OPERATOR)
+    inactive = seed_user(identity_engine, "inactive", Role.OPERATOR, active=False)
+    engineer = seed_user(identity_engine, "engineer", Role.ENGINEER)
+    with Session(identity_engine) as db:
+        target = db.get(User, operator.id)
+        target.permissions_customized = True
+        db.add(UserPermission(user_id=operator.id, permission=Permission.TICKET_READ_OWN))
+        db.commit()
+        assert identity_service.grant_operator_cabinet_access(db, db.get(User, admin.id)) == 2
+        assert identity_service.grant_operator_cabinet_access(db, db.get(User, admin.id)) == 0
+        grants = set(db.scalars(select(UserPermission.permission).where(
+            UserPermission.user_id == operator.id
+        )))
+        assert grants == {
+            Permission.TICKET_READ_OWN, Permission.SUBSCRIBER_READ,
+            Permission.SUBSCRIBER_PASSWORD_READ,
+        }
+        assert db.scalar(select(UserPermission.user_id).where(
+            UserPermission.user_id == inactive.id,
+            UserPermission.permission == Permission.SUBSCRIBER_PASSWORD_READ,
+        )) == inactive.id
+        assert db.scalar(select(UserPermission.user_id).where(
+            UserPermission.user_id == engineer.id,
+            UserPermission.permission == Permission.SUBSCRIBER_PASSWORD_READ,
+        )) is None
+        events = db.scalars(select(IdentityAuditEvent).where(
+            IdentityAuditEvent.action == "permissions_changed"
+        )).all()
+        assert len(events) == 2
+        assert all(e.details["reason"] == "operator_cabinet_access" for e in events)
 
 
 def test_admin_sets_unrestricted_password_and_employee_changes_it(

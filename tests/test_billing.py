@@ -149,6 +149,8 @@ def cabinet_fixture(engine, client, monkeypatch, *, role=Role.OPERATOR, grant=Tr
         grants = set(permissions_for(role))
         if grant:
             grants.add(Permission.SUBSCRIBER_PASSWORD_READ)
+        else:
+            grants.discard(Permission.SUBSCRIBER_PASSWORD_READ)
         db.add_all(UserPermission(user_id=actor.id, permission=p) for p in grants)
         snapshot = SubscriberSnapshot(
             account_no="202", subscriber_id="101", source="NETUP", fetched_at=now,
@@ -204,6 +206,34 @@ def test_cabinet_password_is_on_demand_audited_and_never_persisted(
     assert "synthetic-cabinet-secret" not in caplog.text
     assert "synthetic-cabinet-secret" not in billing_client.get(
         f"/api/v1/subscriber-lookups/{key}").text
+
+
+def test_operator_management_reveal_is_audited_without_tls_probe(
+    billing_engine, billing_client, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from app.api.v1 import subscriber_cabinet as api
+    from app.modules.identity.models import IdentityAuditEvent
+
+    _, key, calls = cabinet_fixture(billing_engine, billing_client, monkeypatch)
+    monkeypatch.setenv("SUBSCRIBER_CABINET_MODE", "management")
+    get_settings.cache_clear()
+    monkeypatch.setattr(api.NetupConfig, "from_env", lambda **_: SimpleNamespace(
+        host="172.17.7.1", port=3307, purpose="production", allow_plaintext_management=True,
+    ))
+    path = f"/api/v1/subscriber-lookups/{key}/cabinet"
+    assert billing_client.get(path).json()["password_available"] is True
+    assert not any(call[2] for call in calls)
+    response = billing_client.post(path + "/password", headers=csrf(billing_client))
+    assert response.status_code == 200
+    assert response.json()["password"] == "synthetic-cabinet-secret"
+    assert calls[-1] == (202, 101, True, False)
+    with Session(billing_engine) as db:
+        events = db.scalars(select(IdentityAuditEvent).where(
+            IdentityAuditEvent.action == "subscriber_password_view"
+        )).all()
+        assert len(events) == 1 and events[0].outcome == "success"
 
 
 @pytest.mark.parametrize("role", [Role.OPERATOR, Role.ENGINEER, Role.ADMIN])

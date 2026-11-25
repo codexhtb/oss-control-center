@@ -1,0 +1,9 @@
+# Owner accepted the existing management-network transport on 2026-11-25.
+services:
+  api:
+    environment:
+      SUBSCRIBER_CABINET_MODE: management
+      SUBSCRIBER_CABINET_MEMO_VERIFIED: "true"
+      NETUP_PURPOSE: production
+      NETUP_ALLOW_PLAINTEXT_LAB: "false"
+      NETUP_ALLOW_PLAINTEXT_MANAGEMENT: "true"

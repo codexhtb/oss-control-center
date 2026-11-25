@@ -79,3 +79,11 @@ production-разделения привилегий; процедуру очи�
 короткий проход, когда у счёта один owner; худший случай — просмотр около
 5 тыс. пользователей. Отдельный lab индекс можно исследовать после
 измерения, но provider не изменяет схему UTM5.
+
+## Текущий Subscriber cabinet
+
+По утверждённому владельцем исключению существующая реплика 172.17.7.1:3307
+использует management transport. Overlay `compose.subscriber-cabinet-management.yaml`
+включает явный `NETUP_ALLOW_PLAINTEXT_MANAGEMENT`; SQL credentials остаются
+в прежнем runtime env. Текущая процедура promotion/rollback описана в
+[management release](../operations/subscriber-cabinet-management-release.md).

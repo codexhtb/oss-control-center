@@ -13,7 +13,9 @@ from sqlalchemy.engine import URL
 class Settings(BaseModel):
     app_env: Literal["dev", "test", "production"] = "dev"
     billing_provider: Literal["MOCK", "NETUP"] = "MOCK"
-    subscriber_cabinet_mode: Literal["disabled", "dev_preview", "verified"] = "disabled"
+    subscriber_cabinet_mode: Literal[
+        "disabled", "dev_preview", "verified", "management"
+    ] = "disabled"
     subscriber_cabinet_memo_verified: bool = False
     postgres_host: str = Field(default="postgres", min_length=1)
     postgres_port: int = Field(default=5432, ge=1, le=65535)
@@ -81,6 +83,8 @@ class Settings(BaseModel):
             or origin.port in {None, 443, 8443}
         ):
             raise ValueError("Cabinet preview requires a separate DEV HTTPS port")
+        if self.subscriber_cabinet_mode == "management" and origin.scheme != "https":
+            raise ValueError("Cabinet credentials require an HTTPS portal")
         return self
 
     @property

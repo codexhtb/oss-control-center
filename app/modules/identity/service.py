@@ -385,6 +385,37 @@ def set_user_permissions(db: Session, actor: User, user_id: UUID, grants: set[Pe
     return target
 
 
+def grant_operator_cabinet_access(db: Session, actor: User) -> int:
+    """Owner-requested rollout: add cabinet grants, preserve every other grant."""
+    _lock_admin_changes(db)
+    _ensure_actor_can_manage(db, actor)
+    if actor.role != Role.ADMIN:
+        raise ApiError(403, "forbidden", "Administrative release identity required")
+    changed = 0
+    targets = db.scalars(select(User).where(
+        User.role == Role.OPERATOR, User.deleted_at.is_(None)
+    ).order_by(User.id).with_for_update()).all()
+    required = {Permission.SUBSCRIBER_READ, Permission.SUBSCRIBER_PASSWORD_READ}
+    for target in targets:
+        stored = set(db.scalars(select(UserPermission.permission).where(
+            UserPermission.user_id == target.id
+        )))
+        previous = effective_permissions(db, target)
+        desired = set(previous) | required
+        added = desired - stored
+        if not added and target.permissions_customized:
+            continue
+        db.add_all(UserPermission(user_id=target.id, permission=p) for p in added)
+        target.permissions_customized = True
+        target.updated_at = utc_now()
+        audit(db, "permissions_changed", "success", actor=actor.id, target=target.id,
+              details={"before": sorted(previous), "after": sorted(desired),
+                       "reason": "operator_cabinet_access"})
+        changed += 1
+    db.commit()
+    return changed
+
+
 def reset_password(db: Session, actor: User, user_id: UUID) -> str:
     _lock_admin_changes(db)
     _ensure_actor_can_manage(db, actor)

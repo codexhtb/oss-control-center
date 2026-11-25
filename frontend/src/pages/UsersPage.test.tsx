@@ -54,6 +54,7 @@ it('creates a user with an administrator-supplied one-character password', async
   const call = vi.mocked(apiRequest).mock.calls.find(([path]) => path === '/api/v1/users')
   expect(call?.[1]).toMatchObject({ method: 'POST', json: {
     login: 'new.worker', display_name: 'Новый сотрудник', password: '1', must_change_password: false,
+    permissions: expect.arrayContaining(['subscribers.read', 'subscribers.password.read']),
   } })
 })
 

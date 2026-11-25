@@ -1,0 +1,11 @@
+services:
+  cabinet_api:
+    image: oss-cabinet-management-api:tested
+    environment:
+      SUBSCRIBER_CABINET_MODE: management
+      SUBSCRIBER_CABINET_MEMO_VERIFIED: "true"
+      NETUP_PURPOSE: production
+      NETUP_ALLOW_PLAINTEXT_LAB: "false"
+      NETUP_ALLOW_PLAINTEXT_MANAGEMENT: "true"
+  cabinet_web:
+    image: oss-cabinet-management-web:tested

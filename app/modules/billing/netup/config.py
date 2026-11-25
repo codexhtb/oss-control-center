@@ -20,6 +20,7 @@ class NetupConfig(BaseModel):
     password: SecretStr
     tls_ca: Path | None = None
     allow_plaintext_lab: bool = False
+    allow_plaintext_management: bool = False
     connect_timeout: int = Field(default=3, ge=1, le=10)
     read_timeout: int = Field(default=5, ge=1, le=15)
     max_execution_ms: int = Field(default=3000, ge=100, le=10000)
@@ -34,6 +35,15 @@ class NetupConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_transport(self) -> "NetupConfig":
+        # Owner-approved exception for this existing read-only replica only.
+        if self.allow_plaintext_management:
+            if (
+                self.host != "172.17.7.1" or self.port != 3307
+                or self.purpose != "production" or self.allow_plaintext_lab
+                or self.lab_as_of_utc is not None
+            ):
+                raise ValueError("Management exception is restricted to the approved replica")
+            return self
         if self.app_env == "production" and (self.purpose == "lab" or self.allow_plaintext_lab):
             raise ValueError("Lab NetUP transport is unavailable in production APP_ENV")
         if self.lab_as_of_utc is not None:
@@ -70,6 +80,9 @@ class NetupConfig(BaseModel):
                 "password": values.get("NETUP_PASSWORD"),
                 "tls_ca": values.get("NETUP_TLS_CA"),
                 "allow_plaintext_lab": values.get("NETUP_ALLOW_PLAINTEXT_LAB", "false"),
+                "allow_plaintext_management": values.get(
+                    "NETUP_ALLOW_PLAINTEXT_MANAGEMENT", "false"
+                ),
                 "connect_timeout": values.get("NETUP_CONNECT_TIMEOUT", "3"),
                 "read_timeout": values.get("NETUP_READ_TIMEOUT", "5"),
                 "max_execution_ms": values.get("NETUP_MAX_EXECUTION_MS", "3000"),
@@ -78,7 +91,7 @@ class NetupConfig(BaseModel):
         )
 
     def connect(self):
-        """Open a single TLS connection; credentials never enter SQL or logs."""
+        """Open the configured read-only channel; credentials never enter SQL or logs."""
         import pymysql
 
         tls_args = (

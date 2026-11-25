@@ -1,5 +1,12 @@
 # Модель безопасности NetUP provider
 
+**Утверждённое исключение 25.11.2026:** владелец принял риск management-сети
+для существующей реплики `172.17.7.1:3307`. `NETUP_ALLOW_PLAINTEXT_MANAGEMENT=true`
+разрешает только этот endpoint с production-purpose без lab/as_of. Режим кабинета
+`management` не требует TLS/SSH; перед паролем проверяются read_only=1/server_id=2.
+HTTPS портала, RBAC, CSRF, аудит и запрет сохранения пароля сохраняются.
+Остальные подключения следуют прежним TLS/lab ограничениям. Новых туннелей нет.
+
 **Граница доступа:** HTTP lookup требует `subscriber.read`, серверную
 сессию и CSRF. Администратор Identity не получает автоматического доступа.
 Для production целевой SQL-пользователь должен иметь column-level SELECT
