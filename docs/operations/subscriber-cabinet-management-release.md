@@ -83,3 +83,19 @@ assertion preset оператора повторный targeted frontend про�
 Настоящая DEV-приёмка оператора через API и Chromium прошла: исходная маска,
 ленивый POST, копирование обоих значений, скрытие, CSRF, no-store и аудит.
 Значения реквизитов не выводились; test account удалён, сессии отозваны.
+
+## Production receipt
+
+Commit `6c69153` отправлен в origin/main и развернут на `sd.oss-ab.net`.
+Проверенная резервная копия:
+`.dev-secrets/backups/cabinet-management-20261125T085654Z.dump` (0600).
+Restore и точный rollback grants проверены на отдельной копии до promotion.
+На PROD всем 10 неудалённым операторам выданы оба права; остальные grants
+сохранены. Новый management mode активен. Настоящая HTTPS API + Chromium
+приёмка оператора прошла: исходная маска, reveal, copy login/password, hide,
+CSRF, no-store, аудит и отсутствие пароля в snapshot. Тестовая identity мягко
+удалена, сессии отозваны; значения реквизитов/скриншоты не сохранялись.
+API/WEB healthy, ограничения 8443 сохранены. Worker понимает все сохранённые
+permissions, offset не уменьшился, restart count=0. PostgreSQL, BDCOM proxy
+и legacy containers не пересоздавались; MariaDB/репликация/SSH не менялись.
+Rollback images и protected grants receipt сохранены; off-host backup не подтверждён.
