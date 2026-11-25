@@ -125,3 +125,15 @@ DEV origin из `.env.dev` и был остановлен собственным
 проверочных staff accounts. Схема 0053 и прежние API/WEB восстановлены,
 HTTPS readiness прошёл. Runner теперь явно получает production origin;
 его configuration gate проверен отдельно до повторного promotion.
+
+Повторный promotion commit `64511a3` завершён успешно: API/WEB используют
+проверенные на DEV images, OCC head `0054_subscriber_password`; HTTPS readiness,
+границы 443/8443 и login/RBAC/no-store/tickets для трёх ролей прошли.
+Проверочные identities мягко удалены, сессии отозваны. Контейнеры PostgreSQL,
+Telegram poller, BDCOM proxy и legacy project не пересоздавались.
+`SUBSCRIBER_CABINET_MODE=disabled`, memo_verified=false, новых production grants
+на пароль нет. Выдача остаётся выключенной до защищённого SQL-транспорта и
+выполнения остальных gates; доступ dev-admin не переносился на PROD.
+Восстановленный и проверенный PostgreSQL backup:
+`.dev-secrets/backups/subscriber-cabinet-predeploy-20261125T081701Z.dump` (0600).
+Сохранённые rollback images остаются на хосте. Off-host backup не подтверждён.
