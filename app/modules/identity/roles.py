@@ -12,6 +12,7 @@ class Role(StrEnum):
 class Permission(StrEnum):
     SUBSCRIBER_READ = "subscribers.read"
     SUBSCRIBER_FINANCE_READ = "subscribers.finance.read"
+    SUBSCRIBER_PASSWORD_READ = "subscribers.password.read"
     TICKET_READ = "tickets.read.all"
     TICKET_READ_OWN = "tickets.read.own"
     TICKET_CREATE = "tickets.create"
@@ -77,7 +78,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
         }
     ),
     # Settings management is opt-in for existing accounts, including legacy admins.
-    Role.ADMIN: frozenset(value for value in Permission if value != Permission.SETTINGS_MANAGE),
+    Role.ADMIN: frozenset(value for value in Permission if value not in {
+        Permission.SETTINGS_MANAGE, Permission.SUBSCRIBER_PASSWORD_READ,
+    }),
 }
 
 

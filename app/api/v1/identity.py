@@ -319,6 +319,7 @@ def admin_create_user(
     identity: ManagedIdentityDep,
     db: SessionDep,
 ) -> CreatedUserResponse:
+    _check_cabinet_grant(payload.permissions or [])
     user, temporary_password = create_user(db, identity.user, payload)
     response.headers["Cache-Control"] = "no-store"
     return CreatedUserResponse(
@@ -337,9 +338,19 @@ def admin_update_user(
 def admin_set_permissions(
     user_id: UUID, payload: SetPermissionsRequest, identity: ManagedIdentityDep, db: SessionDep
 ):
+    _check_cabinet_grant(payload.permissions)
     return managed_user(
         db, set_user_permissions(db, identity.user, user_id, set(payload.permissions))
     )
+
+
+def _check_cabinet_grant(permissions: list[Permission]) -> None:
+    # Older workers share the permissions table and cannot parse the new enum yet.
+    if (
+        Permission.SUBSCRIBER_PASSWORD_READ in permissions
+        and get_settings().subscriber_cabinet_mode == "disabled"
+    ):
+        raise ApiError(409, "cabinet_password_disabled", "Cabinet password access is disabled")
 
 
 @router.post("/users/{user_id}/reset-password", response_model=ResetPasswordResponse)

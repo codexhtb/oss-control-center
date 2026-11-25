@@ -13,6 +13,8 @@ from sqlalchemy.engine import URL
 class Settings(BaseModel):
     app_env: Literal["dev", "test", "production"] = "dev"
     billing_provider: Literal["MOCK", "NETUP"] = "MOCK"
+    subscriber_cabinet_mode: Literal["disabled", "dev_preview", "verified"] = "disabled"
+    subscriber_cabinet_memo_verified: bool = False
     postgres_host: str = Field(default="postgres", min_length=1)
     postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_db: str = Field(default="oss_control", min_length=1)
@@ -73,6 +75,12 @@ class Settings(BaseModel):
             raise ValueError("HTTP authentication is allowed only on explicit dev loopback")
         if self.auth_allow_http_loopback and self.app_env != "dev":
             raise ValueError("AUTH_ALLOW_HTTP_LOOPBACK is dev-only")
+        if self.subscriber_cabinet_mode == "dev_preview" and (
+            self.app_env not in {"dev", "test"}
+            or origin.scheme != "https"
+            or origin.port in {None, 443, 8443}
+        ):
+            raise ValueError("Cabinet preview requires a separate DEV HTTPS port")
         return self
 
     @property
@@ -97,6 +105,10 @@ class Settings(BaseModel):
             {
                 "app_env": values.get("APP_ENV", "dev"),
                 "billing_provider": values.get("BILLING_PROVIDER", "MOCK"),
+                "subscriber_cabinet_mode": values.get("SUBSCRIBER_CABINET_MODE", "disabled"),
+                "subscriber_cabinet_memo_verified": values.get(
+                    "SUBSCRIBER_CABINET_MEMO_VERIFIED", "false"
+                ),
                 "postgres_host": values.get("POSTGRES_HOST", "postgres"),
                 "postgres_port": values.get("POSTGRES_PORT", "5432"),
                 "postgres_db": values.get("POSTGRES_DB", "oss_control"),

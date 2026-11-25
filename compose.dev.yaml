@@ -35,6 +35,8 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       AUTH_TRUSTED_PROXY_HOST: web
+      SUBSCRIBER_CABINET_MODE: ${SUBSCRIBER_CABINET_MODE:-disabled}
+      SUBSCRIBER_CABINET_MEMO_VERIFIED: ${SUBSCRIBER_CABINET_MEMO_VERIFIED:-false}
     depends_on:
       postgres:
         condition: service_healthy

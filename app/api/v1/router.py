@@ -14,11 +14,13 @@ from app.api.v1.internal_tasks import router as internal_tasks_router
 from app.api.v1.notifications import router as notifications_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.settings import router as settings_router
+from app.api.v1.subscriber_cabinet import router as subscriber_cabinet_router
 from app.api.v1.tickets import router as tickets_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(health_router)
 router.include_router(billing_router)
+router.include_router(subscriber_cabinet_router)
 router.include_router(chat_router)
 router.include_router(categories_router)
 router.include_router(settings_router)

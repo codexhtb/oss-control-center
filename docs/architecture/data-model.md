@@ -452,3 +452,9 @@ Notification Center не добавляет таблиц или миграций
 транзакцией, без изменения событий заявок, аудита или Telegram outbox.
 Дедупликация исторического ответа не удаляет исходных фактов.
 См. [Notification Center](notification-center.md).
+
+# Реквизиты личного кабинета Subscriber360
+
+Login/password NetUP не сохраняются в SubscriberSnapshot. Миграция OCC 0054
+добавляет только допустимое значение `subscribers.password.read` в constraint
+персональных разрешений, без автоматических grants. [Контракт](subscriber-cabinet.md).

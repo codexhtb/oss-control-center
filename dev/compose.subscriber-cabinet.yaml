@@ -1,0 +1,61 @@
+# Separate DEV preview. Port/IP origin keeps cookies separate from the live portal.
+name: oss-cabinet-dev
+services:
+  cabinet_api:
+    image: oss-subscriber-cabinet-api:tested
+    env_file:
+      - ../.env.dev
+      - path: ../.dev-secrets/netup-runtime.env
+        format: raw
+    environment:
+      APP_ENV: dev
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: oss_test_subscriber_cabinet
+      AUTH_PUBLIC_ORIGIN: https://172.17.7.2:9443
+      AUTH_ADDITIONAL_ORIGINS: ""
+      AUTH_TRUSTED_PROXY_HOST: cabinet_web
+      SUBSCRIBER_CABINET_MODE: dev_preview
+      SUBSCRIBER_CABINET_MEMO_VERIFIED: "false"
+    networks: [isolated, database, edge]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=5)"]
+      interval: 3s
+      timeout: 6s
+      retries: 20
+  cabinet_web:
+    image: oss-subscriber-cabinet-web:tested
+    user: "1001:1001"
+    environment:
+      XDG_CONFIG_HOME: /tmp/caddy-config
+      XDG_DATA_HOME: /tmp/caddy-data
+    volumes:
+      - ./Caddyfile.subscriber-cabinet:/etc/caddy/Caddyfile:ro
+      - ../.dev-secrets/certs/server.crt:/run/dev-certs/server.crt:ro
+      - ../.dev-secrets/certs/server.key:/run/dev-certs/server.key:ro
+      - ../.dev-secrets/certs/ca.crt:/run/dev-certs/ca.crt:ro
+    ports: ["9443:9443"]
+    depends_on:
+      cabinet_api:
+        condition: service_healthy
+    networks: [isolated]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --cacert, /run/dev-certs/ca.crt, "https://172.17.7.2:9443/api/v1/health/ready"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+networks:
+  isolated: {}
+  database:
+    external: true
+    name: oss-control-dev_backend
+  edge:
+    external: true
+    name: oss-control-dev_edge

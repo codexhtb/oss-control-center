@@ -10,7 +10,7 @@ import type { MeResponse } from '../shared/api/types'
 import { SubscriberPage } from './SubscriberPage'
 
 vi.mock('../features/tickets/ticket-api', () => ({
-  ticketApi: { lookup: vi.fn(), searchSubscribers: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), subscriberServices: vi.fn(), subscriberTariffHistory: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
+  ticketApi: { subscriberCabinet: vi.fn().mockResolvedValue({ login: 'synthetic-login', password_available: false }), lookup: vi.fn(), searchSubscribers: vi.fn(), getLookup: vi.fn(), subscriberTickets: vi.fn(), subscriberFinance: vi.fn(), subscriberServices: vi.fn(), subscriberTariffHistory: vi.fn(), checkSubscriber: vi.fn(), subscriberOnu: vi.fn() },
 }))
 
 const timestamp = '2026-01-01T00:00:00Z'

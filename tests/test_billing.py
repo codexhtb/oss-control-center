@@ -133,6 +133,147 @@ def lookup(client: TestClient, account: str):
     )
 
 
+def cabinet_fixture(engine, client, monkeypatch, *, role=Role.OPERATOR, grant=True):
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from app.api.v1 import subscriber_cabinet as api
+    from app.modules.billing.netup.cabinet import CabinetCredentials
+
+    actor = seed_user(engine, "cabinet_test_actor", role)
+    now = datetime.now(UTC)
+    with Session(engine) as db:
+        user = db.get(User, actor.id)
+        user.permissions_customized = True
+        grants = set(permissions_for(role))
+        if grant:
+            grants.add(Permission.SUBSCRIBER_PASSWORD_READ)
+        db.add_all(UserPermission(user_id=actor.id, permission=p) for p in grants)
+        snapshot = SubscriberSnapshot(
+            account_no="202", subscriber_id="101", source="NETUP", fetched_at=now,
+            expires_at=now + timedelta(minutes=15), requested_by=actor.id,
+            contracts=[], services=[],
+        )
+        db.add(snapshot)
+        db.commit()
+        lookup_id = snapshot.id
+    login(client, actor.login)
+    monkeypatch.setenv("BILLING_PROVIDER", "NETUP")
+    monkeypatch.setenv("SUBSCRIBER_CABINET_MODE", "verified")
+    monkeypatch.setenv("SUBSCRIBER_CABINET_MEMO_VERIFIED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(api.NetupConfig, "from_env", lambda **_: SimpleNamespace(
+        tls_ca="test-ca", purpose="production"))
+    calls = []
+
+    def load(config, account_id, user_id, *, password=False, require_tls=True):
+        calls.append((account_id, user_id, password, require_tls))
+        return CabinetCredentials("synthetic-cabinet-login",
+                                  SecretStr("synthetic-cabinet-secret") if password else None)
+
+    monkeypatch.setattr(api, "load_cabinet", load)
+    return actor, lookup_id, calls
+
+
+def test_cabinet_password_is_on_demand_audited_and_never_persisted(
+    billing_engine, billing_client, monkeypatch, caplog,
+):
+    from app.modules.identity.models import IdentityAuditEvent
+
+    actor, key, calls = cabinet_fixture(billing_engine, billing_client, monkeypatch)
+    path = f"/api/v1/subscriber-lookups/{key}/cabinet"
+    response = billing_client.get(path)
+    assert response.json() == {"login": "synthetic-cabinet-login", "password_available": True}
+    assert calls == [(202, 101, False, True)]
+    assert billing_client.post(path + "/password").status_code == 403  # CSRF
+    response = billing_client.post(path + "/password", headers=csrf(billing_client))
+    assert response.status_code == 200
+    assert response.json() == {"password": "synthetic-cabinet-secret"}
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert calls[-1] == (202, 101, True, True)
+    with Session(billing_engine) as db:
+        event = db.scalar(select(IdentityAuditEvent).where(
+            IdentityAuditEvent.action == "subscriber_password_view"))
+        assert event.actor_user_id == actor.id and event.outcome == "success"
+        assert event.details == {"lookup_id": str(key)}
+        stored = db.execute(text("SELECT row_to_json(s)::text FROM subscriber_snapshots s")).all()
+        audit_rows = db.execute(text("SELECT row_to_json(a)::text FROM identity_audit_events a"))
+        assert "synthetic-cabinet-secret" not in str(stored) + str(audit_rows.all())
+    assert "synthetic-cabinet-secret" not in caplog.text
+    assert "synthetic-cabinet-secret" not in billing_client.get(
+        f"/api/v1/subscriber-lookups/{key}").text
+
+
+@pytest.mark.parametrize("role", [Role.OPERATOR, Role.ENGINEER, Role.ADMIN])
+def test_cabinet_permission_is_explicit_for_all_roles(
+    billing_engine, billing_client, monkeypatch, role,
+):
+    _, key, calls = cabinet_fixture(
+        billing_engine, billing_client, monkeypatch, role=role, grant=False)
+    path = f"/api/v1/subscriber-lookups/{key}/cabinet"
+    assert billing_client.get(path).json()["password_available"] is False
+    assert billing_client.post(path + "/password", headers=csrf(billing_client)).status_code == 403
+    assert not any(call[2] for call in calls)
+
+
+def test_cabinet_foreign_lookup_disabled_gate_and_safe_source_failure(
+    billing_engine, billing_client, monkeypatch,
+):
+    from app.api.v1 import subscriber_cabinet as api
+
+    _, key, calls = cabinet_fixture(billing_engine, billing_client, monkeypatch)
+    path = f"/api/v1/subscriber-lookups/{key}/cabinet/password"
+    monkeypatch.setenv("SUBSCRIBER_CABINET_MEMO_VERIFIED", "false")
+    get_settings.cache_clear()
+    assert billing_client.post(path, headers=csrf(billing_client)).status_code == 503
+    assert calls == []
+    monkeypatch.setenv("SUBSCRIBER_CABINET_MEMO_VERIFIED", "true")
+    get_settings.cache_clear()
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic-cabinet-secret")
+
+    monkeypatch.setattr(api, "load_cabinet", fail)
+    response = billing_client.post(path, headers=csrf(billing_client))
+    assert response.status_code == 503 and "synthetic-cabinet-secret" not in response.text
+    seed_user(billing_engine, "other_cabinet_actor", Role.ADMIN)
+    login(billing_client, "other_cabinet_actor")
+    assert billing_client.get(f"/api/v1/subscriber-lookups/{key}/cabinet").status_code == 404
+    assert billing_client.get(path).status_code == 405
+
+
+@pytest.mark.parametrize("revoke", ["permission", "session", "user"])
+def test_cabinet_rechecks_authorization_after_remote_io(
+    billing_engine, billing_client, monkeypatch, revoke,
+):
+    from pydantic import SecretStr
+
+    from app.api.v1 import subscriber_cabinet as api
+    from app.modules.billing.netup.cabinet import CabinetCredentials
+    from app.modules.identity.models import AuthSession
+
+    actor, key, _ = cabinet_fixture(billing_engine, billing_client, monkeypatch)
+
+    def load(*args, **kwargs):
+        with Session(billing_engine) as db:
+            if revoke == "permission":
+                db.delete(db.get(UserPermission, (actor.id, Permission.SUBSCRIBER_PASSWORD_READ)))
+            elif revoke == "session":
+                session = db.scalar(select(AuthSession).where(AuthSession.user_id == actor.id))
+                session.revoked_at = datetime.now(UTC)
+            else:
+                db.get(User, actor.id).is_active = False
+            db.commit()
+        return CabinetCredentials("synthetic-login", SecretStr("synthetic-cabinet-secret"))
+
+    monkeypatch.setattr(api, "load_cabinet", load)
+    response = billing_client.post(
+        f"/api/v1/subscriber-lookups/{key}/cabinet/password", headers=csrf(billing_client))
+    assert response.status_code == 403 and "synthetic-cabinet-secret" not in response.text
+
+
 def test_subscriber_search_api_requires_session_and_preserves_lookup_flow(
     billing_engine: Engine, billing_client: TestClient
 ) -> None:

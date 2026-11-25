@@ -490,3 +490,10 @@ sg docker -c 'OSS_BROWSER_SCRIPT=/opt/oss-control-center/dev/browser_ticket_acti
   переход в заявку, история, reload, bulk read и мобильный popover.
 - Полный backend набор включает mock BillingProvider, operator/engineer RBAC,
   создание/закрытие, историю, Telegram/Field Work и независимые статусы.
+
+# Приёмка реквизитов Subscriber360
+
+Синтетические regression-тесты, границы хранения секрета и обязательные
+проверки перед включением PROD описаны в [subscriber-cabinet.md](subscriber-cabinet.md).
+Ручная сверка с памяткой выполняется владельцем через отдельный DEV;
+реальные subscriber credentials не записываются в fixtures или файлы.

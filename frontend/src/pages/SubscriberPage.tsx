@@ -8,6 +8,7 @@ import { MonitoringReport } from '../features/tickets/MonitoringReport'
 import { SubscriberOnuCard } from '../features/tickets/OnuCard'
 import { SubscriberFinance } from '../features/tickets/SubscriberFinance'
 import { SubscriberServices } from '../features/tickets/SubscriberServices'
+import { SubscriberCabinet } from '../features/tickets/SubscriberCabinet'
 import type { DataQuality, FieldOrigin, SubscriberCard, SubscriberConnectionCard, SubscriberIpRow, SubscriberService } from '../features/tickets/types'
 import { configuredIpv4, formatSubscriberAddress } from '../features/tickets/subscriber-presentation'
 import type { MeResponse } from '../shared/api/types'
@@ -135,6 +136,7 @@ function SubscriberDetails({ card, session }: { card: SubscriberCard; session: M
       <section className="subscriber-panel"><div className="subscriber-section-title"><h2>Контакты и адрес</h2><Origin meta={subscriber.field_meta.full_name} /></div>
         <div className="subscriber-facts"><Fact label="Адрес NetUP" value={formatSubscriberAddress(subscriber.actual_address, subscriber.house_number)} meta={subscriber.field_meta.actual_address} />{subscriber.email && <Fact label="E-mail" value={subscriber.email} meta={subscriber.field_meta.email} />}</div>
         {subscriber.contacts.length ? <div className="contact-list">{subscriber.contacts.map((contact, index) => <div key={`${contact.type}-${index}`}><span>{({ mobile: 'Мобильный', work: 'Рабочий', home: 'Домашний' })[contact.type]}</span><strong>{contact.value}</strong><Origin meta={{ source: card.source as 'MOCK' | 'NETUP', observed_at: contact.observed_at, quality: contact.quality }} /></div>)}</div> : <p className="muted">Контактные номера неизвестны</p>}
+        {card.source === 'NETUP' && <SubscriberCabinet key={card.lookup_id} lookupId={card.lookup_id} canReadPassword={session.permissions.includes('subscribers.password.read')} />}
         <details className="subscriber-technical"><summary>Идентификаторы и договоры</summary>
           <div className="subscriber-facts"><Fact label="ID абонента" value={subscriber.subscriber_id} meta={subscriber.field_meta.subscriber_id} /><Fact label="Счета" value={card.accounts.map((account) => account.account_id).join(', ')} /><Fact label="Договоры" value={card.contracts.map((contract) => contract.label || contract.contract_id).join(', ')} meta={subscriber.field_meta.contracts} /></div>
         </details>

@@ -31,6 +31,7 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
   { title: 'Абоненты', values: [
     { key: 'subscribers.read', label: 'Карточки абонентов' },
     { key: 'subscribers.finance.read', label: 'Финансовые сведения' },
+    { key: 'subscribers.password.read', label: 'Просмотр пароля личного кабинета' },
   ] },
   { title: 'Диагностика', values: [
     { key: 'tickets.diagnose', label: 'Диагностика заявки' },
@@ -55,7 +56,7 @@ const permissionGroups: { title: string; values: { key: Permission; label: strin
 const presets: Record<Role, Permission[]> = {
   operator: ['subscribers.read', 'subscribers.finance.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.own', 'tickets.comment', 'diagnostics.read'],
   engineer: ['subscribers.read', 'tickets.read.all', 'tickets.create', 'tickets.edit.all', 'tickets.comment', 'tickets.start', 'tickets.assign', 'tickets.field_work', 'field_work.perform', 'tickets.diagnose', 'diagnostics.read', 'diagnostics.run', 'tickets.resolve', 'tickets.close', 'audit.read', 'reports.read', 'tasks.create', 'tasks.execute'],
-  admin: permissionGroups.flatMap((group) => group.values.map((entry) => entry.key)),
+  admin: permissionGroups.flatMap((group) => group.values.map((entry) => entry.key)).filter((key) => key !== 'subscribers.password.read'),
 }
 
 function generatePassword(): string {

@@ -1,5 +1,9 @@
 # Развёртывание NetUP provider: отдельный read-only канал
 
+Реквизиты ЛК Subscriber360 развёртываются отдельно от snapshot provider:
+[текущий release и gates](../operations/subscriber-cabinet-release.md).
+Пароли на рабочем портале выключены до подтверждения памятки и TLS.
+
 Изолированный HTTPS project `oss-control-dev` использует восстановленную
 NetUP Lab с read-only SQL-учётной записью. Исследовательский `netup-sql`
 wrapper остаётся только для Discovery SQL и не является runtime-каналом.
@@ -12,7 +16,9 @@ NetUP не подключён. Dev-настройка описана в
 - Отдельный SQL user с минимальными **column-level `SELECT`** на подтверждённых таблицах
   `users`, `accounts`, `users_accounts`, `service_links`, `services_data`,
   `periodic_service_links`, `iptraffic_service_links`, `ip_groups`, `switches`,
-  `dhcp_pool_info`, `dhcp_pool_ranges`; без DDL/DML, журналов и столбцов паролей.
+  `dhcp_pool_info`, `dhcp_pool_ranges`; без DDL/DML и административных таблиц.
+  Обычный snapshot provider не читает парольные колонки; отдельное разрешённое
+  чтение ЛК ограничено [cabinet security contract](../architecture/subscriber-cabinet.md).
   Команды для lab администратора — [`lab-access-admin.md`](lab-access-admin.md).
 - Для production TLS с проверкой сертификата и имени сервера. В отдельной
   изолированной лаборатории допускается plaintext только при

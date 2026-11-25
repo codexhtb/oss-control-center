@@ -706,6 +706,41 @@ def test_personal_grants_temporary_password_and_live_session_revocation(
         assert temp not in str([event.details for event in events])
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_password_grant_cannot_reach_legacy_workers_while_disabled(
+    identity_engine: Engine, identity_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch, enabled: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.api.v1 import identity as identity_api
+
+    admin = seed_user(identity_engine, "admin", Role.ADMIN)
+    worker = seed_user(identity_engine, "worker", Role.OPERATOR)
+    assert login(identity_client, admin.login).status_code == 200
+    monkeypatch.setattr(identity_api, "get_settings", lambda: SimpleNamespace(
+        subscriber_cabinet_mode="dev_preview" if enabled else "disabled"
+    ))
+    grants = [Permission.SUBSCRIBER_READ, Permission.SUBSCRIBER_PASSWORD_READ]
+    changed = identity_client.put(
+        f"/api/v1/users/{worker.id}/permissions", headers=csrf(identity_client),
+        json={"permissions": grants},
+    )
+    created = identity_client.post(
+        "/api/v1/users", headers=csrf(identity_client),
+        json={"login": "new-worker", "display_name": "Synthetic", "role": "operator",
+              "permissions": grants},
+    )
+    assert changed.status_code == (200 if enabled else 409)
+    assert created.status_code == (201 if enabled else 409)
+    with Session(identity_engine) as db:
+        stored = db.scalars(select(UserPermission).where(
+            UserPermission.permission == Permission.SUBSCRIBER_PASSWORD_READ
+        )).all()
+        assert len(stored) == (2 if enabled else 0)
+        assert (db.scalar(select(User.id).where(User.login == "new-worker")) is not None) == enabled
+
+
 def test_admin_sets_unrestricted_password_and_employee_changes_it(
     identity_engine: Engine, identity_client: TestClient
 ) -> None:

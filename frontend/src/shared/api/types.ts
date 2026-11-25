@@ -3,6 +3,7 @@ export type Role = 'operator' | 'engineer' | 'admin'
 export type Permission =
   | 'subscribers.read'
   | 'subscribers.finance.read'
+  | 'subscribers.password.read'
   | 'tickets.read.all'
   | 'tickets.read.own'
   | 'tickets.edit.all'

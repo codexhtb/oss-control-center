@@ -54,6 +54,10 @@ export const ticketApi = {
     apiRequest<SubscriberSearchResult>(withQuery('/api/v1/subscriber-lookups/search', { q: query })),
   getLookup: (lookupId: string, signal?: AbortSignal) =>
     apiRequest<SubscriberCard>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}`, { signal }),
+  subscriberCabinet: (lookupId: string, signal?: AbortSignal) =>
+    apiRequest<{ login: string; password_available: boolean }>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/cabinet`, { signal }),
+  subscriberPassword: (lookupId: string, signal?: AbortSignal) =>
+    apiRequest<{ password: string }>(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/cabinet/password`, { method: 'POST', signal }),
   subscriberFinance: (lookupId: string, start: string, end: string, kind: SubscriberFinanceKind, page: number, signal?: AbortSignal, serviceLinkId?: number | null) =>
     apiRequest<SubscriberFinancePage>(withQuery(`/api/v1/subscriber-lookups/${encodeURIComponent(lookupId)}/finance`, { start, end, kind, page, size: 30, service_link_id: serviceLinkId ?? undefined }), { signal }),
   subscriberServices: (lookupId: string, signal?: AbortSignal) =>
