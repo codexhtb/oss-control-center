@@ -37,6 +37,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN_FILE: /run/telegram/telegram-bot-token
       TELEGRAM_OCHAMCHIRA_CHAT_ID: "-1004473201977"
+      FIELD_WORK_MINIAPP_URL: "https://sd.oss-ab.net:8443/field-work"
     volumes:
       - telegram_secret_runtime:/run/telegram:ro
     depends_on:

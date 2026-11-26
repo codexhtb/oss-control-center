@@ -16,6 +16,7 @@ from app.api.v1.field_work_miniapp import (
     _mutable_handoff,
     complete_handoff_as_staff,
     handoff_detail,
+    miniapp_changes,
     queue_handoffs,
     reschedule_history,
 )
@@ -361,6 +362,14 @@ def staff_handoff(handoff_id: UUID, auth: StaffDep, db: SessionDep):
     return handoff_detail(handoff_id, auth, db)
 
 
+@router.get("/miniapp/staff/handoffs/{handoff_id}/changes")
+def staff_changes(
+    handoff_id: UUID, auth: StaffDep, db: SessionDep,
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+):
+    return miniapp_changes(handoff_id, auth, db, page)
+
+
 @router.get("/miniapp/staff/handoffs/{handoff_id}/reschedules")
 def staff_reschedules(
     handoff_id: UUID,
@@ -465,7 +474,8 @@ def staff_verify(handoff_id: UUID, auth: StaffDep, db: SessionDep):
             FieldWorkHandoff.direction.in_(allowed),
             FieldWorkHandoff.delivery_status.in_(("SENT", "PUBLISHED")),
             Ticket.deleted_at.is_(None),
-            Ticket.ticket_type != "INTERNAL",
+            (Ticket.ticket_type != "INTERNAL")
+            | FieldWorkHandoff.internal_dispatch_approved.is_(True),
         )
     ).one_or_none()
     if row is None:

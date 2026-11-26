@@ -7340,7 +7340,7 @@ def test_field_work_note_preparation_publication_and_privacy(
     )
     login(ticket_client, engineer.login)
     assert ticket_client.patch(note_path, json={"note": "other"}).status_code == 403
-    for invalid in ("bad\x00note", "x" * 4001):
+    for invalid in ("bad\x00note", "x" * 10001):
         assert (
             ticket_client.patch(
                 note_path,
@@ -7424,6 +7424,150 @@ def test_field_work_note_preparation_publication_and_privacy(
         # Outbox stores references only; message construction never includes the note.
         # The public event schema itself contains no subscriber data or notes.
         assert all("note" not in event.__table__.columns.keys() for event in events)
+
+
+@pytest.mark.parametrize("direction", ["SUKHUM", "OCHAMCHIRA"])
+@pytest.mark.parametrize("ticket_type,delivery", [("INTERNAL", "PUBLISHED"), ("MANUAL", "SENT")])
+def test_field_work_editable_details_history_and_long_text(
+    ticket_engine: Engine, ticket_client: TestClient, monkeypatch: pytest.MonkeyPatch,
+    direction: str, ticket_type: str, delivery: str,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.api.v1 import field_work_miniapp
+    from app.core.errors import ApiError
+    from app.modules.field_dispatch.models import FieldNotificationEvent
+    from app.modules.field_dispatch.schemas import UpdateFieldDetails
+    from app.modules.field_dispatch.service import update_handoff_details
+
+    monkeypatch.setenv("TELEGRAM_OCHAMCHIRA_CHAT_ID", "-1009000000002")
+    monkeypatch.setenv("FIELD_WORK_MINIAPP_URL", "https://example.invalid/field-work")
+    token = "synthetic-edit-token"
+    monkeypatch.setattr(field_work_miniapp, "configured_bot_token", lambda: token)
+    admin = seed_user(ticket_engine, "edit_dispatch_admin", Role.ADMIN)
+    operator = seed_user(ticket_engine, "edit_dispatch_operator", Role.OPERATOR)
+    login(ticket_client, admin.login)
+    for telegram_id, allowed in [(90101, direction), (90102, "OCHAMCHIRA"
+                                 if direction == "SUKHUM" else "SUKHUM")]:
+        registered = ticket_client.post(
+            "/api/v1/field-work/installers", headers=csrf(ticket_client),
+            json={"telegram_user_id": telegram_id, "name": "Synthetic Installer",
+                  "directions": [allowed]})
+        assert registered.status_code == 201, registered.text
+    if ticket_type == "MANUAL":
+        ticket = make_manual_ticket(ticket_client)
+    else:
+        response = ticket_client.post("/api/v1/tickets", headers=csrf(ticket_client), json={
+            "ticket_type": "INTERNAL", "description": "Synthetic maintenance",
+            "client_request_id": str(uuid4()),
+        })
+        assert response.status_code == 201
+        ticket = response.json()
+    path = f"/api/v1/tickets/{ticket['id']}"
+    claimed = ticket_client.post(path + "/claim",
+        headers={**csrf(ticket_client), "If-Match": '"1"'})
+    assert claimed.status_code == 200
+    # No source/customer data: this synthetic text covers paste, CRLF, tabs and symbols.
+    reason = ("Ремонтные работы. Провода мешают; свяжитесь, пожалуйста.\r\n"
+              "IP 192.0.2.1\tMAC AA:BB:CC:DD:EE:FF < > & «текст» 😀\n")
+    reason = reason + "я" * (10000 - len(reason))
+    note = "N" * 9999 + "я"
+    requested = ticket_client.post(path + "/field-work-request",
+        headers={**csrf(ticket_client), "If-Match": '"2"'},
+        json={"reason": reason, "note": note})
+    assert requested.status_code == 200, requested.text
+    saved_ticket_version = requested.json()["version"]
+    handoff = ticket_client.get(path + "/field-work-handoffs/latest").json()["handoff"]
+    assert handoff["reason"] == reason and handoff["note"] == note
+    assert not handoff["missing_fields"]
+    assert len(handoff["generated_preview"]) < 4096
+    assert handoff["id"] in handoff["generated_preview"]
+    gateway = RecordingFieldGateway()
+    ticket_client.app.dependency_overrides[get_field_dispatch_gateway] = lambda: gateway
+    root = path + f"/field-work-handoffs/{handoff['id']}"
+    payload = {"direction": direction}
+    operation = "publish" if delivery == "PUBLISHED" else "send"
+    if operation == "send":
+        payload["client_request_id"] = str(uuid4())
+    published = ticket_client.post(root + f"/{operation}",
+        headers=csrf(ticket_client), json=payload)
+    assert published.status_code == 200, published.text
+    original = published.json()
+    assert original["delivery_status"] == delivery
+    assert len(gateway.calls) == (1 if delivery == "SENT" else 0)
+    installer_headers = _miniapp_headers(token, 90101)
+    miniapp = "/api/v1/field-work/miniapp/handoffs"
+    agreed_date = (datetime.now(UTC) + timedelta(days=3)).date().isoformat()
+    schedule = ticket_client.post(miniapp + f"/{handoff['id']}/reschedules",
+        headers=installer_headers, json={"reason": "Agreed visit", "scheduled_date": agreed_date,
+                                        "expected_version": 0})
+    assert schedule.status_code == 200, schedule.text
+    original = ticket_client.get(path + "/field-work-handoffs/latest").json()["handoff"]
+    url = root + "/details"
+    change = {"client_request_id": str(uuid4()), "expected_version": 1,
+        "reason": "Ремонт продолжается\nЖдут звонка!", "note": "Новый MAC < > &\nТекст",
+        "visit_address": "Тестовая улица\nВход со двора",
+        "additional_information": "Связаться позже"}
+    assert ticket_client.patch(url, json=change).status_code == 403
+    login(ticket_client, operator.login)
+    assert ticket_client.patch(url, headers=csrf(ticket_client), json=change).status_code == 403
+    login(ticket_client, admin.login)
+    for invalid in [" ", "bad\x00text", "x" * 10001]:
+        response = ticket_client.patch(url, headers=csrf(ticket_client),
+            json={**change, "reason": invalid})
+        assert response.status_code == 422 and response.json()["code"] == "invalid_field_details"
+    updated = ticket_client.patch(url, headers=csrf(ticket_client), json=change)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["details_version"] == 2
+    for field in ("delivery_status", "work_status", "direction", "chat_id", "sent_at",
+                  "published_at", "telegram_message_id", "schedule_version", "scheduled_for",
+                  "scheduled_date", "schedule_status"):
+        assert updated.json()[field] == original[field]
+    if delivery == "SENT":
+        assert updated.json()["message_preview"] == original["message_preview"]
+    assert ticket_client.patch(url, headers=csrf(ticket_client), json=change).status_code == 200
+    assert ticket_client.patch(url, headers=csrf(ticket_client),
+        json={**change, "client_request_id": str(uuid4())}).status_code == 409
+    history = ticket_client.get(root + "/changes").json()
+    assert history["total"] == 1
+    assert history["items"][0]["before"]["reason"] == reason
+    assert history["items"][0]["additional_information"] == "Связаться позже"
+    assert history["items"][0]["author"] == admin.display_name
+    assert ticket_client.get(path).json()["version"] == saved_ticket_version
+
+    def concurrent_update(text: str) -> int:
+        with Session(ticket_engine) as db:
+            try:
+                update_handoff_details(db, admin.id, UUID(ticket["id"]), UUID(handoff["id"]),
+                    UpdateFieldDetails(**{**change, "expected_version": 2,
+                        "client_request_id": uuid4(), "additional_information": text}))
+                return 200
+            except ApiError as exc:
+                return exc.status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(concurrent_update, ["Уточнение 1", "Уточнение 2"])) == [200, 409]
+    headers = installer_headers
+    detail = ticket_client.get(miniapp + f"/{handoff['id']}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["note"] == change["note"]
+    assert detail.json()["address"] == change["visit_address"]
+    assert detail.json()["changes"]["total"] == 2
+    assert ticket_client.get(miniapp + f"/{handoff['id']}/changes?page=2",
+        headers=headers).json()["items"] == []
+    assert ticket_client.get(miniapp + f"/{handoff['id']}",
+        headers=_miniapp_headers(token, 90102)).status_code == 404
+    report = ticket_client.post(miniapp + f"/{handoff['id']}/report", headers=headers, json={
+        "client_request_id": str(uuid4()), "work_text": "Работы завершены",
+    })
+    assert report.status_code == 200, report.text
+    assert ticket_client.patch(url, headers=csrf(ticket_client), json={**change,
+        "expected_version": 3, "client_request_id": str(uuid4())}).status_code == 409
+    assert ticket_client.get(path).json()["status"] == "IN_PROGRESS"
+    with Session(ticket_engine) as db:
+        assert db.scalar(select(func.count()).select_from(FieldWorkHandoff)) == 1
+        assert db.scalar(select(func.count()).select_from(FieldNotificationEvent)
+            .where(FieldNotificationEvent.kind == "RESCHEDULED",
+                   FieldNotificationEvent.dedupe_key.like("%details:%"))) == 2
 
 
 def test_internal_task_orange_read_state_is_scoped_and_durable(

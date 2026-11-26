@@ -259,6 +259,7 @@ export interface TicketComment {
 }
 
 export interface FieldWorkHandoff {
+  details_version?: number
   note?: string | null
   id: string
   ticket_id: string
@@ -297,6 +298,22 @@ export interface FieldWorkHandoff {
   updated_at: string
   completion_prompt_status?: 'REQUESTING' | 'WAITING' | 'FAILED' | 'UNCERTAIN' | 'COMPLETED' | null
   completion_prompt_sent_at?: string | null
+}
+
+export interface FieldWorkChange {
+  id: string
+  author: string
+  created_at: string
+  before: { reason: string; note: string | null; visit_address: string | null }
+  after: { reason: string; note: string | null; visit_address: string | null }
+  additional_information: string | null
+}
+
+export interface FieldWorkChanges {
+  items: FieldWorkChange[]
+  page: number
+  page_size: number
+  total: number
 }
 
 export interface FieldExternalMessage {

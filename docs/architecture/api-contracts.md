@@ -1,5 +1,14 @@
 # API contracts — Phase 1
 
+**Field Work 0055:** причина и примечание — до 10 000 символов, Telegram-лимит
+не применяется к публикации Mini App. `PATCH /tickets/{ticket_id}/field-work-handoffs/{id}/details`
+редактирует причину/адрес/примечание и добавляет отдельное дополнение с
+`expected_version` и `client_request_id`. История — `GET .../changes?page=N`;
+`tickets.field_work`, право чтения заявки и Origin/CSRF сохраняются. Только
+AWAITING_REPORT в DRAFT/FAILED/PUBLISHED/SENT; конфликт/завершение — 409,
+ошибка текста — 422 `invalid_field_details`. Полный контракт и границы INTERNAL:
+[Field Work: редактирование и дополнения](oss-field-work-phase3.md#редактирование-и-дополнения-0055).
+
 **Поиск Subscriber 360:** `GET /api/v1/subscriber-lookups/search?q=` с `subscribers.read` возвращает до 20 абонентов (`subscriber_id`, ФИО, NetUP login, все активные ЛС) и `has_more`; ответ `no-store`, запрос и персональные поля не записываются в аудит. Выбор конкретного ЛС открывает прежний `POST /subscriber-lookups` и сохраняет прежнюю проверку целостности snapshot. Недоступность NetUP — `503`, пустая выдача — `items: []`.
 
 **Telegram UX переноса (`0041`):** latest handoff и история переносов дополнены `scheduled_date` (дата без точного времени); latest handoff сообщает `schedule_card_status`. Существующий OSS POST с обязательным точным `scheduled_for` не меняется. Кнопочный Telegram-диалог сохраняет перенос через тот же доменный сервис с проверкой chat/message ID и инициатора.

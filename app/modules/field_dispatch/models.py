@@ -39,7 +39,9 @@ class FieldWorkHandoff(Base):
             name="ck_field_handoffs_work",
         ),
         CheckConstraint("length(btrim(reason)) > 0", name="ck_field_handoffs_reason"),
-        CheckConstraint("note IS NULL OR length(note) <= 4000", name="ck_field_handoffs_note"),
+        CheckConstraint("note IS NULL OR length(note) <= 10000", name="ck_field_handoffs_note"),
+        CheckConstraint("length(reason) <= 10000", name="ck_field_handoffs_reason_length"),
+        CheckConstraint("details_version >= 1", name="ck_field_handoffs_details_version"),
         CheckConstraint(
             "direction IS NULL OR direction IN ('SUKHUM', 'OCHAMCHIRA')",
             name="ck_field_handoffs_direction",
@@ -101,8 +103,12 @@ class FieldWorkHandoff(Base):
         PGUUID(as_uuid=True), ForeignKey("tickets.id", ondelete="RESTRICT"), nullable=False
     )
     ticket_version: Mapped[int] = mapped_column(nullable=False)
-    reason: Mapped[str] = mapped_column(String(2000), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
+    details_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    internal_dispatch_approved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     delivery_status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="DRAFT")
     work_status: Mapped[str] = mapped_column(
         String(24), nullable=False, server_default="AWAITING_REPORT"

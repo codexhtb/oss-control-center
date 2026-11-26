@@ -29,10 +29,10 @@ from app.modules.field_dispatch.models import (
     FieldWorkHandoff,
     FieldWorkReschedule,
 )
-from app.modules.field_dispatch.personal_notifications import enqueue_notification
+from app.modules.field_dispatch.personal_notifications import _miniapp_url, enqueue_notification
 from app.modules.field_dispatch.reschedule_dialog import active_dialog
 from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
-from app.modules.field_dispatch.schemas import FieldWorkHandoffView
+from app.modules.field_dispatch.schemas import FieldWorkHandoffView, UpdateFieldDetails
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission
@@ -83,6 +83,15 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     ticket = db.get(Ticket, handoff.ticket_id)
     if ticket is None or ticket.deleted_at is not None:
         raise ApiError(404, "ticket_not_found", "Ticket not found")
+    if ticket.ticket_type == TicketType.INTERNAL:
+        return MessageData("\n".join((
+            f"Заявка #{ticket.number}",
+            "Тип: Внутренняя",
+            f"Тема: {ticket.subject or ticket.category_name or 'Внутренние работы'}",
+            f"Адрес: {handoff.visit_address or ticket.address_override or 'не указан'}",
+            f"Причина передачи: {handoff.reason}",
+            f"Отправил инженер: {sender.display_name}",
+        )), ())
     if ticket.ticket_type in (TicketType.MANUAL, TicketType.NEW_CONNECTION):
         values = {
             "caller_full_name": ticket.caller_full_name,
@@ -102,14 +111,12 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
                 f"ФИО: {ticket.caller_full_name}",
                 f"Телефон: {ticket.caller_phone}",
                 f"Город: {ticket.city}",
-                f"Адрес подключения: {ticket.address_override}",
+                f"Адрес подключения: {handoff.visit_address or ticket.address_override}",
                 f"Комментарий: {ticket.description or 'не указан'}",
                 f"Причина передачи: {handoff.reason}",
                 f"Отправил инженер: {engineer.display_name}",
             ]
             text = "\n".join(lines)
-            if len(text) > 4096:
-                raise ApiError(422, "telegram_message_too_long", "Telegram message is too long")
             return MessageData(text, ())
         lines = [
             f"Заявка #{ticket.number}",
@@ -121,13 +128,11 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
             f"Обратившийся: {ticket.caller_full_name}",
             f"Контактный номер: {ticket.caller_phone}",
             f"Город: {ticket.city}",
-            f"Адрес: {ticket.address_override or handoff.visit_address or 'не указан'}",
+            f"Адрес: {handoff.visit_address or ticket.address_override or 'не указан'}",
             f"Причина передачи: {handoff.reason}",
             f"Отправил инженер: {engineer.display_name}",
         ))
         text = "\n".join(lines)
-        if len(text) > 4096:
-            raise ApiError(422, "telegram_message_too_long", "Telegram message is too long")
         return MessageData(text, ())
     snapshot = (
         db.get(SubscriberSnapshot, ticket.subscriber_snapshot_id)
@@ -141,7 +146,7 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
     source_address = (
         None if snapshot is None else _address(snapshot.actual_address, snapshot.house_number)
     )
-    address = ticket.address_override or source_address or handoff.visit_address or "не указан"
+    address = handoff.visit_address or ticket.address_override or source_address or "не указан"
     values = {"subscriber": name, "contact": contact, "account": account}
     missing = tuple(key for key, value in values.items() if not value)
     if missing:
@@ -158,9 +163,86 @@ def _message(db: Session, handoff: FieldWorkHandoff, sender: User) -> MessageDat
             f"Отправил инженер: {sender.display_name}",
         )
     )
-    if len(text) > 4096:
-        raise ApiError(422, "telegram_message_too_long", "Telegram message is too long")
     return MessageData(text, ())
+
+
+def _telegram_preview(data: MessageData, handoff: FieldWorkHandoff, ticket: Ticket) -> str | None:
+    if data.text is None or len(data.text.encode("utf-16-le")) // 2 <= 4096:
+        return data.text
+    try:
+        url = _miniapp_url(handoff.id)
+    except ValueError:
+        return None
+    return f"Выездное задание по заявке #{ticket.number}\nПолное задание в OSS Field Work:\n{url}"
+
+
+def handoff_changes(db: Session, handoff_id: UUID, page: int = 1, size: int = 20) -> dict:
+    conditions = (
+        TicketEvent.ticket_id == select(FieldWorkHandoff.ticket_id)
+        .where(FieldWorkHandoff.id == handoff_id).scalar_subquery(),
+        TicketEvent.event_type == "field_work_details_updated",
+        TicketEvent.event_data["handoff_id"].astext == str(handoff_id),
+    )
+    total = db.scalar(select(func.count()).select_from(TicketEvent).where(*conditions)) or 0
+    rows = db.execute(select(TicketEvent, User.display_name)
+        .join(User, User.id == TicketEvent.actor_id).where(*conditions)
+        .order_by(TicketEvent.occurred_at.desc(), TicketEvent.id.desc())
+        .offset((page - 1) * size).limit(size)).all()
+    return {"items": [{"id": event.id, "author": name, "created_at": event.occurred_at,
+        "before": event.event_data["before"], "after": event.event_data["after"],
+        "additional_information": event.event_data.get("additional_information")}
+        for event, name in rows], "page": page, "page_size": size, "total": total}
+
+
+def update_handoff_details(
+    db: Session, actor_id: UUID, ticket_id: UUID, handoff_id: UUID, payload: UpdateFieldDetails,
+) -> FieldWorkHandoff:
+    _actor(db, actor_id)
+    handoff = db.scalar(select(FieldWorkHandoff).where(
+        FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    ticket = db.get(Ticket, ticket_id)
+    if handoff is None or ticket is None or ticket.deleted_at is not None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    content = {"reason": payload.reason, "note": payload.note,
+        "visit_address": payload.visit_address}
+    existing = db.scalar(select(TicketEvent).where(
+        TicketEvent.ticket_id == ticket_id,
+        TicketEvent.event_type == "field_work_details_updated",
+        TicketEvent.event_data["handoff_id"].astext == str(handoff_id),
+        TicketEvent.event_data["request_id"].astext == str(payload.client_request_id),
+    ))
+    if existing is not None:
+        if (existing.actor_id != actor_id or existing.event_data["after"] != content
+                or existing.event_data.get("additional_information")
+                != payload.additional_information):
+            raise ApiError(409, "request_conflict", "Request ID already used")
+        return handoff
+    if (handoff.work_status != "AWAITING_REPORT"
+            or handoff.delivery_status not in {"DRAFT", "FAILED", "PUBLISHED", "SENT"}):
+        raise ApiError(409, "field_details_locked", "Field work can no longer be edited")
+    if handoff.details_version != payload.expected_version:
+        raise ApiError(409, "version_conflict", "Field work changed; refresh it")
+    previous = {key: getattr(handoff, key) for key in content}
+    if previous == content and not payload.additional_information:
+        raise ApiError(409, "no_change", "Field work details have not changed")
+    for key, value in content.items():
+        setattr(handoff, key, value)
+    handoff.details_version += 1
+    handoff.updated_at = datetime.now(UTC)
+    db.add(TicketEvent(ticket_id=ticket_id, actor_id=actor_id,
+        event_type="field_work_details_updated", ticket_version=ticket.version,
+        event_data={"handoff_id": str(handoff.id), "request_id": str(payload.client_request_id),
+            "version": handoff.details_version, "before": previous, "after": content,
+            "additional_information": payload.additional_information}))
+    db.add(TicketAudit(ticket_id=ticket_id, actor_id=actor_id,
+        action="field_work_details_updated", outcome="success", origin="API"))
+    if handoff.delivery_status in {"PUBLISHED", "SENT"}:
+        enqueue_notification(db, handoff, "RESCHEDULED",
+            dedupe_suffix=f"details:{handoff.details_version}")
+    db.commit()
+    db.refresh(handoff)
+    return handoff
 
 
 def create_handoff(
@@ -204,6 +286,7 @@ def update_handoff_note(
         raise ApiError(409, "version_conflict", "Note changed; refresh it")
     if handoff.note != note:
         handoff.note = note
+        handoff.details_version += 1
         handoff.updated_at = datetime.now(UTC)
         db.add(TicketEvent(ticket_id=ticket_id, actor_id=actor_id,
             event_type="field_work_note_updated", ticket_version=ticket.version,
@@ -226,6 +309,7 @@ def latest_handoff(db: Session, ticket_id: UUID) -> FieldWorkHandoff | None:
 
 def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldWorkHandoffView:
     data = _message(db, handoff, viewer)
+    preview = _telegram_preview(data, handoff, db.get(Ticket, handoff.ticket_id))
     sender_name = (
         db.scalar(select(User.display_name).where(User.id == handoff.sent_by))
         if handoff.sent_by
@@ -251,13 +335,14 @@ def handoff_view(db: Session, handoff: FieldWorkHandoff, viewer: User) -> FieldW
     ).order_by(FieldWorkReschedule.schedule_version.desc()).limit(1))
     return FieldWorkHandoffView.model_validate(handoff).model_copy(
         update={
-            "message_preview": handoff.message_text or data.text,
+            "message_preview": handoff.message_text or preview,
             "group_name": direction_title(handoff.direction),
             "schedule_reason": latest_schedule.reason if latest_schedule else None,
             "scheduled_by_name": latest_schedule.author_name if latest_schedule else None,
             "schedule_changed_at": latest_schedule.created_at if latest_schedule else None,
-            "generated_preview": data.text,
-            "ready_to_send": not data.missing and handoff.delivery_status in {"DRAFT", "FAILED"},
+            "generated_preview": preview,
+            "ready_to_send": bool(preview) and not data.missing
+            and handoff.delivery_status in {"DRAFT", "FAILED"},
             "missing_fields": list(data.missing),
             "sent_by_name": sender_name,
             "verified_by_name": verified_by_name,
@@ -317,6 +402,7 @@ def publish_handoff(
         raise ApiError(409, "field_dispatch_incomplete", "Required dispatch data is missing")
     now = datetime.now(UTC)
     handoff.delivery_status = "PUBLISHED"
+    handoff.internal_dispatch_approved = ticket.ticket_type == TicketType.INTERNAL
     handoff.published_by = actor_id
     handoff.published_at = now
     handoff.updated_at = now
@@ -422,9 +508,11 @@ def prepare_send(
     message = _message(db, handoff, actor)
     if message.missing:
         raise ApiError(409, "field_dispatch_incomplete", "Required dispatch data is missing")
-    text = message_text if message_text is not None else message.text
-    if not text or not text.strip() or len(text) > 4096 or any(
-        category(char) == "Cc" and char != "\n" for char in text
+    text = message_text if message_text is not None else _telegram_preview(message, handoff, ticket)
+    if text is None and message.text:
+        raise ApiError(422, "field_work_link_unavailable", "Mini App link is not configured")
+    if not text or not text.strip() or len(text.encode("utf-16-le")) // 2 > 4096 or any(
+        category(char) == "Cc" and char not in "\n\r\t" for char in text
     ):
         raise ApiError(422, "field_message_invalid", "Telegram message must contain valid text")
     now = datetime.now(UTC)
@@ -438,6 +526,7 @@ def prepare_send(
     db.add(attempt)
     handoff.delivery_status = "SENDING"
     handoff.message_text = text
+    handoff.internal_dispatch_approved = ticket.ticket_type == TicketType.INTERNAL
     handoff.sent_by = actor_id
     handoff.send_started_at = now
     handoff.last_error_code = None

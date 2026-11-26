@@ -282,8 +282,15 @@ class AddComment(StrictModel):
 
 
 class FieldWorkRequest(StrictModel):
-    reason: str = Field(min_length=1, max_length=2000)
-    note: str | None = Field(default=None, max_length=4000)
+    reason: str = Field(min_length=1, max_length=10000)
+    note: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("reason")
+    @classmethod
+    def valid_reason(cls, value: str) -> str:
+        from app.modules.field_dispatch.schemas import validate_field_reason
+
+        return validate_field_reason(value)
 
     @field_validator("note")
     @classmethod

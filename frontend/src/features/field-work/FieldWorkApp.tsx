@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Bell, CalendarDays, Check, ChevronRight, Clipboard, LoaderCircle, Phone, RefreshCw } from 'lucide-react'
-import { type Direction, type Handoff, type HandoffDetail, type NotificationSettings, type Page, type Partner, type QueueTab, type Reschedule, FieldWorkError, fieldWorkRequest } from './miniapp-api'
+import { type Changes, type Direction, type Handoff, type HandoffDetail, type NotificationSettings, type Page, type Partner, type QueueTab, type Reschedule, FieldWorkError, fieldWorkRequest } from './miniapp-api'
 import './field-work.css'
 
 type TelegramWebApp = {
@@ -82,6 +82,8 @@ export function FieldWorkApp() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<HandoffDetail | null>(null)
+  const [changes, setChanges] = useState<Changes | null>(null)
+  const [changesPage, setChangesPage] = useState(1)
   const [history, setHistory] = useState<Reschedule[]>([])
   const [historyPage, setHistoryPage] = useState<Page<Reschedule> | null>(null)
   const [partners, setPartners] = useState<Partner[]>([])
@@ -198,6 +200,47 @@ export function FieldWorkApp() {
 
   useEffect(() => {
     if (!initData || !directions.length) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load(1)
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [initData, directions.length, load])
+
+  const selectedId = selected?.id
+  useEffect(() => {
+    if (!initData || !selectedId) return
+    let active = true
+    let sequence = 0
+    const refresh = async () => {
+      if (document.visibilityState !== 'visible') return
+      const request = ++sequence
+      try {
+        const detail = await fieldWorkRequest<HandoffDetail>(initData, apiPath(`/handoffs/${selectedId}`))
+        const entries = changesPage === 1 ? detail.changes
+          : await fieldWorkRequest<Changes>(initData, apiPath(`/handoffs/${selectedId}/changes?page=${changesPage}`))
+        if (active && request === sequence) { setSelected(detail); setChanges(entries ?? null) }
+      } catch (cause) {
+        if (active && request === sequence) {
+          setError(cause instanceof Error ? cause.message : 'Не удалось обновить задание')
+          if (cause instanceof FieldWorkError && [401, 403, 404].includes(cause.status)) setSelected(null)
+        }
+      }
+    }
+    const timer = window.setInterval(() => void refresh(), 15000)
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    window.Telegram?.WebApp?.onEvent('activated', refresh)
+    void refresh()
+    return () => {
+      active = false; window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+      window.Telegram?.WebApp?.offEvent('activated', refresh)
+    }
+  }, [initData, selectedId, apiPath, changesPage])
+
+  useEffect(() => {
+    if (!initData || !directions.length) return
     const refresh = () => {
       if (document.visibilityState === 'visible') void load(1, true)
     }
@@ -222,7 +265,8 @@ export function FieldWorkApp() {
         fieldWorkRequest<HandoffDetail>(initData, apiPath(`/handoffs/${id}`)),
         fieldWorkRequest<Page<Reschedule>>(initData, apiPath(`/handoffs/${id}/reschedules?page_size=20`)),
       ])
-      setSelected(detail); setHistory(reschedules.items); setHistoryPage(reschedules)
+      setSelected(detail); setChanges(detail.changes ?? null); setChangesPage(1)
+      setHistory(reschedules.items); setHistoryPage(reschedules)
       if ((principalKind === 'installer' || canPerform) && detail.work_status === 'AWAITING_REPORT') {
         const value = await fieldWorkRequest<{ items: Partner[] }>(initData, apiPath(`/partners?direction=${detail.direction}`))
         setPartners(value.items)
@@ -331,7 +375,7 @@ export function FieldWorkApp() {
         {showNotificationSettings && notificationSettings && <section className="fw-notification-settings" aria-label="Настройки уведомлений">
           <div><strong>Личные уведомления</strong><span>{notificationSettings.subscription_status === 'ACTIVE' ? 'Бот доступен' : notificationSettings.subscription_status === 'UNAVAILABLE' ? 'Личный чат недоступен. Откройте диалог с ботом и нажмите Start.' : 'Доставка ещё не проверена. Откройте личный диалог с ботом.'}</span></div>
           <label><input type="checkbox" checked={notificationSettings.notify_new_work} disabled={savingNotifications} onChange={(event) => void saveNotifications({ ...notificationSettings, notify_new_work: event.target.checked })} /> Новые выезды</label>
-          <label><input type="checkbox" checked={notificationSettings.notify_reschedules} disabled={savingNotifications} onChange={(event) => void saveNotifications({ ...notificationSettings, notify_reschedules: event.target.checked })} /> Изменения даты и переносы</label>
+          <label><input type="checkbox" checked={notificationSettings.notify_reschedules} disabled={savingNotifications} onChange={(event) => void saveNotifications({ ...notificationSettings, notify_reschedules: event.target.checked })} /> Изменения задания и переносы</label>
           {notificationSettings.can_verify && <label><input type="checkbox" checked={notificationSettings.notify_verification} disabled={savingNotifications} onChange={(event) => void saveNotifications({ ...notificationSettings, notify_verification: event.target.checked })} /> Отчёты, ожидающие проверки</label>}
         </section>}
         {!selected ? <>
@@ -365,6 +409,13 @@ export function FieldWorkApp() {
             <div className="fw-facts">
               <div><span>Причина выезда</span><strong>{selected.reason}</strong></div>
               {selected.note && <div className="fw-note"><span>Примечание</span><strong>{selected.note}</strong></div>}
+              {!!changes?.total && <div className="fw-changes"><h3>Изменения и дополнения</h3>{changes.items.map((entry) => <article key={entry.id}>
+                <small>{entry.author} · {formatDate(entry.created_at)}</small>
+                {entry.before.reason !== entry.after.reason && <p>Причина: {entry.after.reason}</p>}
+                {entry.before.visit_address !== entry.after.visit_address && <p>Адрес: {entry.after.visit_address || 'не указан'}</p>}
+                {entry.before.note !== entry.after.note && <p>Примечание: {entry.after.note || 'не указано'}</p>}
+                {entry.additional_information && <p>{entry.additional_information}</p>}
+              </article>)}{changes.total > 20 && <div className="fw-actions"><button disabled={changesPage === 1} onClick={() => setChangesPage(changesPage - 1)}>Новее</button><span>{changesPage}</span><button disabled={changesPage * 20 >= changes.total} onClick={() => setChangesPage(changesPage + 1)}>Ранее</button></div>}</div>}
               <div><span>Абонент</span><strong>{selected.name || 'Не указано'}</strong></div>
               <div><span>Телефон</span><strong>{selected.phone || 'Не указан'}</strong></div>
               <div><span>Населённый пункт</span><strong>{selected.city || 'Не указан'}</strong></div>

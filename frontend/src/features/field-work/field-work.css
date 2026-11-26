@@ -90,3 +90,7 @@
 
 .fw-card__subscriber { color: var(--fw-muted); font-size: 14px; overflow-wrap: anywhere; }
 .fw-note strong { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fw-facts strong, .fw-changes p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fw-changes { grid-column: 1 / -1; }
+.fw-changes article { padding: 12px 0; border-bottom: 1px solid var(--fw-muted); }
+.fw-changes small { color: var(--fw-muted); }

@@ -30,4 +30,9 @@ def handle_validation_error(_: Request, exc: RequestValidationError) -> JSONResp
     if any("decision_text" in error["loc"] or "performed_actions" in error["loc"]
            for error in exc.errors()):
         return error_response(422, "invalid_decision_text", "Invalid decision text")
+    if _.url.path.startswith("/api/v1/tickets/") and "/field-work" in _.url.path and any(
+        field in error["loc"] for error in exc.errors()
+        for field in ("reason", "note", "additional_information", "visit_address")
+    ):
+        return error_response(422, "invalid_field_details", "Invalid Field Work text")
     return error_response(422, "invalid_request", "Invalid request")

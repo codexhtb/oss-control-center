@@ -97,6 +97,11 @@ export function errorText(error: unknown): string {
       invalid_description: 'Для этого типа заявки необходимо описание проблемы.',
       invalid_payment: 'Проверьте поля ошибочного платежа.',
       invalid_reminder_at: 'Выберите будущее время напоминания.',
+      invalid_field_details: 'Причина, примечание и дополнительные сведения — до 10 000 символов; адрес — до 500. Разрешены переносы строк и табуляция. Удалите недопустимые управляющие символы.',
+      field_dispatch_incomplete: 'Не хватает контактных данных абонента. Проверьте карточку заявки. Для внутренних работ данные абонента не требуются.',
+      field_work_link_unavailable: 'Не настроена ссылка OSS Field Work. Задание можно опубликовать в Mini App; для краткого сообщения Telegram нужна ссылка.',
+      field_details_locked: 'Работа уже завершена или отправляется. Обновите карточку задания.',
+      field_message_invalid: 'Сообщение Telegram должно содержать от 1 до 4096 символов без недопустимых управляющих символов. Полный текст задания можно опубликовать в Mini App.',
     }
     const ticketEditMessage = ticketEditErrors[error.code]
     if (ticketEditMessage) return ticketEditMessage

@@ -16,10 +16,37 @@ def validate_field_note(value: str | None) -> str | None:
     return value.strip() or None
 
 
+def validate_field_reason(value: str) -> str:
+    result = validate_field_note(value)
+    if result is None:
+        raise ValueError("Reason must not be blank")
+    return result
+
+
+class UpdateFieldDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    client_request_id: UUID
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=10000)
+    note: str | None = Field(max_length=10000)
+    visit_address: str | None = Field(max_length=500)
+    additional_information: str | None = Field(default=None, max_length=10000)
+
+    @field_validator("reason")
+    @classmethod
+    def valid_reason(cls, value: str) -> str:
+        return validate_field_reason(value)
+
+    @field_validator("note", "visit_address", "additional_information")
+    @classmethod
+    def valid_text(cls, value: str | None) -> str | None:
+        return validate_field_note(value)
+
+
 class UpdateFieldNote(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    note: str | None = Field(default=None, max_length=4000)
-    expected_note: str | None = Field(default=None, max_length=4000)
+    note: str | None = Field(default=None, max_length=10000)
+    expected_note: str | None = Field(default=None, max_length=10000)
 
     @field_validator("note")
     @classmethod
@@ -104,6 +131,7 @@ class FieldWorkHandoffView(BaseModel):
     verified_by_name: str | None = None
     verified_at: datetime | None
     updated_at: datetime
+    details_version: int = 1
     completion_prompt_status: (
         Literal["REQUESTING", "WAITING", "FAILED", "UNCERTAIN", "COMPLETED"] | None
     ) = None

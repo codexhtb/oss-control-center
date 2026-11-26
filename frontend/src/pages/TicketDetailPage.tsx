@@ -8,6 +8,7 @@ import { Button } from '../shared/ui/Button'
 import { Notice } from '../shared/ui/Notice'
 import { ticketApi } from '../features/tickets/ticket-api'
 import { TicketEditor } from '../features/tickets/TicketEditor'
+import { FieldWorkEditor } from '../features/tickets/FieldWorkEditor'
 import { TicketTasks } from '../features/tasks/TicketTasks'
 import { settingsApi } from '../features/tickets/settings-api'
 import { TemplatePicker } from '../features/tickets/TemplatePicker'
@@ -220,7 +221,7 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
   const fieldMessage = editedFieldMessage && editedFieldMessage.id === handoffId
     ? editedFieldMessage.text : withVisitAddress(handoff?.message_preview ?? '')
   const validFieldMessage = !!fieldMessage.trim() && fieldMessage.length <= 4096
-    && !Array.from(fieldMessage).some((char) => /[\x00-\x09\x0b-\x1f\x7f]/.test(char))
+    && !Array.from(fieldMessage).some((char) => /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(char))
   const additionalPhones = [
     ticket.subscriber?.phone,
     ...(ticket.subscriber?.contacts?.map((contact) => contact.value) || []),
@@ -374,13 +375,14 @@ export function TicketDetailPage({ session }: { session: MeResponse }) {
             {ticket.status === 'CLOSED' && <p className="rail-note">Заявка закрыта {ticket.closed_at ? formatDate(ticket.closed_at) : ''}.</p>}
           </section>
               {(inProgress || !!fieldHandoff.data?.handoff) && canFieldWork && <section className="detail-panel ticket-work-panel ticket-work-panel--field"><div className="detail-panel__heading"><h2>Выездные работы</h2></div><div className="ticket-action-form">
-                {inProgress && <><label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={2000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label>
-                <label className="field"><span>Примечание к новому выезду (необязательно)</span><textarea aria-label="Примечание к новому выезду" rows={3} maxLength={4000} value={fieldNote} onChange={(event) => setFieldNote(event.target.value)} /></label>
+                {inProgress && <><label className="field"><span>Причина передачи</span><textarea aria-label="Причина передачи" rows={3} maxLength={10000} value={fieldReason} onChange={(event) => setFieldReason(event.target.value)} /></label>
+                <label className="field"><span>Примечание к новому выезду (необязательно)</span><textarea aria-label="Примечание к новому выезду" rows={3} maxLength={10000} value={fieldNote} onChange={(event) => setFieldNote(event.target.value)} /></label>
                 <Button disabled={!fieldReason.trim() || !!busy} onClick={() => void runAction('field', () => ticketApi.requestFieldWork(id, fieldReason.trim(), ticket.version, fieldNote), () => { setFieldReason(''); setFieldNote('') })}>Зафиксировать запрос</Button></>}
                 {fieldHandoff.isPending && <p className="rail-note">Проверяем сохранённую передачу…</p>}
                 {fieldHandoff.isError && <Notice tone="error">{errorText(fieldHandoff.error)}</Notice>}
                 {fieldHandoff.data?.handoff && <div className="field-dispatch-preview">
-                  {canEditFieldMessage ? <><label className="field"><span>Примечание для монтажников</span><textarea aria-label="Примечание для монтажников" rows={3} maxLength={4000} value={noteText} onChange={(event) => setEditedFieldNote({ id: handoffId!, text: event.target.value })} /><small>Отдельно от причины передачи. Будет доступно в Mini App.</small></label><Button variant="quiet" disabled={!!busy || !noteDirty} onClick={() => void runAction('field-note', () => ticketApi.updateFieldNote(id, handoffId!, noteText.trim() || null, handoff?.note || null), () => setEditedFieldNote(null))}>Сохранить примечание</Button>{noteDirty && <p className="rail-note">Сохраните примечание перед публикацией или отправкой.</p>}</> : handoff?.note && <div className="field-work-note"><strong>Примечание</strong><p>{handoff.note}</p></div>}
+                  {fieldWorkAvailable && <FieldWorkEditor key={fieldHandoff.data.handoff.id} ticketId={id} handoff={fieldHandoff.data.handoff} address={ticket.address_override || formatSubscriberAddress(ticket.subscriber?.actual_address, ticket.subscriber?.house_number) || ''} />}
+                  {canEditFieldMessage ? <><label className="field"><span>Примечание для монтажников</span><textarea aria-label="Примечание для монтажников" rows={3} maxLength={10000} value={noteText} onChange={(event) => setEditedFieldNote({ id: handoffId!, text: event.target.value })} /><small>Отдельно от причины передачи. Будет доступно в Mini App.</small></label><Button variant="quiet" disabled={!!busy || !noteDirty} onClick={() => void runAction('field-note', () => ticketApi.updateFieldNote(id, handoffId!, noteText.trim() || null, handoff?.note || null), () => setEditedFieldNote(null))}>Сохранить примечание</Button>{noteDirty && <p className="rail-note">Сохраните примечание перед публикацией или отправкой.</p>}</> : handoff?.note && <div className="field-work-note"><strong>Примечание</strong><p>{handoff.note}</p></div>}
                   <strong>{fieldHandoff.data.handoff.delivery_status === 'PUBLISHED' ? 'Выездное задание в OSS Field Work' : 'Передача в Telegram'}</strong>
                   {canEditFieldMessage ? <label className="field"><span>Монтажное направление</span><select aria-label="Монтажное направление" value={fieldDirection} onChange={(event) => setFieldDirection(event.target.value as '' | 'SUKHUM' | 'OCHAMCHIRA')} disabled={fieldHandoff.data.handoff.direction != null}><option value="">Выберите группу</option><option value="SUKHUM">Сухум — OSS Sukhum</option><option value="OCHAMCHIRA">Очамчира — OSS Ochamchira</option></select></label> : fieldHandoff.data.handoff.group_name && <p className="rail-note">Группа: {fieldHandoff.data.handoff.group_name}</p>}
                   {canEditFieldMessage ? <><label className="field"><span>Текст сообщения для Telegram</span><textarea aria-label="Текст сообщения для Telegram" rows={8} maxLength={4096} value={fieldMessage} onChange={(event) => setEditedFieldMessage({ id: handoffId!, text: event.target.value })} /><small>{fieldMessage.length} / 4096 символов. Текст сохранится при отправке.</small></label><Button variant="quiet" disabled={!!busy || !originalFieldMessage} onClick={() => setEditedFieldMessage({ id: handoffId!, text: originalFieldMessage })}>Восстановить исходный текст</Button></>

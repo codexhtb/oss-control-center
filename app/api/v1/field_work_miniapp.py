@@ -35,6 +35,7 @@ from app.modules.field_dispatch.personal_notifications import (
 from app.modules.field_dispatch.reporting import record_completed_work
 from app.modules.field_dispatch.reschedule_dialog import active_dialog
 from app.modules.field_dispatch.rescheduling import active_prompt, record_reschedule
+from app.modules.field_dispatch.service import handoff_changes
 from app.modules.identity.access import has_permission
 from app.modules.identity.models import User
 from app.modules.identity.roles import Permission, Role
@@ -666,7 +667,7 @@ def queue_handoffs(
         FieldWorkHandoff.work_status == QUEUE_STATUS[queue],
         FieldWorkHandoff.direction.in_((direction,) if direction else allowed),
         Ticket.deleted_at.is_(None),
-        Ticket.ticket_type != "INTERNAL",
+        (Ticket.ticket_type != "INTERNAL") | FieldWorkHandoff.internal_dispatch_approved.is_(True),
     )
     source = (select(FieldWorkHandoff, Ticket, SubscriberSnapshot)
         .join(Ticket, Ticket.id == FieldWorkHandoff.ticket_id)
@@ -716,7 +717,8 @@ def handoff_detail(handoff_id: UUID, auth: InstallerDep, db: SessionDep):
             FieldWorkHandoff.work_status.in_(tuple(QUEUE_STATUS.values())),
             FieldWorkHandoff.direction.in_(allowed),
             Ticket.deleted_at.is_(None),
-            Ticket.ticket_type != "INTERNAL",
+            (Ticket.ticket_type != "INTERNAL")
+            | FieldWorkHandoff.internal_dispatch_approved.is_(True),
         )
     ).one_or_none()
     if row is None:
@@ -746,6 +748,8 @@ def handoff_detail(handoff_id: UUID, auth: InstallerDep, db: SessionDep):
         **_item(handoff, ticket, snapshot),
         "reason": handoff.reason,
         "note": handoff.note,
+        "details_version": handoff.details_version,
+        "changes": handoff_changes(db, handoff.id),
         "phone": ticket.caller_phone or (snapshot.phone if snapshot else None),
         "account_no": ticket.account_no,
         "city": ticket.city,
@@ -768,6 +772,15 @@ def handoff_detail(handoff_id: UUID, auth: InstallerDep, db: SessionDep):
     }
 
 
+@router.get("/miniapp/handoffs/{handoff_id}/changes")
+def miniapp_changes(
+    handoff_id: UUID, auth: InstallerDep, db: SessionDep,
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+):
+    handoff_detail(handoff_id, auth, db)
+    return handoff_changes(db, handoff_id, page)
+
+
 def _mutable_handoff(
     db: SessionDep, handoff_id: UUID, allowed: tuple[str, ...], *, lock: bool = True
 ) -> FieldWorkHandoff:
@@ -778,7 +791,8 @@ def _mutable_handoff(
             FieldWorkHandoff.id == handoff_id,
             FieldWorkHandoff.direction.in_(allowed),
             Ticket.deleted_at.is_(None),
-            Ticket.ticket_type != "INTERNAL",
+            (Ticket.ticket_type != "INTERNAL")
+            | FieldWorkHandoff.internal_dispatch_approved.is_(True),
         )
         .execution_options(populate_existing=True)
     )

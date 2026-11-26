@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { FieldWorkApp, openPhoneDialer, phoneForDialer } from './FieldWorkApp'
 
@@ -22,7 +22,7 @@ beforeEach(() => {
     ready: vi.fn(), expand: vi.fn(), onEvent: vi.fn(), offEvent: vi.fn(),
   } } })
 })
-afterEach(() => { vi.unstubAllGlobals(); Reflect.deleteProperty(window, 'Telegram'); window.history.replaceState({}, '', '/') })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); Reflect.deleteProperty(window, 'Telegram'); window.history.replaceState({}, '', '/') })
 
 it('loads the shared queue, detail and submits one structured report', async () => {
   let reported = false
@@ -72,6 +72,40 @@ it('normalizes phone numbers and invokes the native tel navigation directly', ()
   expect(openPhoneDialer('+7 (900) 111-22-33', navigate)).toBe(true)
   expect(navigate).toHaveBeenCalledWith('tel:+79001112233')
   expect(openPhoneDialer('нет номера', navigate)).toBe(false)
+})
+
+it('refreshes an open task after an engineer update without losing the installer report draft', async () => {
+  let edited = false
+  const interval = vi.spyOn(window, 'setInterval')
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    let body: unknown
+    if (path.endsWith('/me')) body = { name: 'Монтажник', directions: ['SUKHUM'] }
+    else if (path.includes('/partners')) body = { items: [] }
+    else if (path.includes('/reschedules')) body = { items: [], total: 0, page: 1, page_size: 20 }
+    else if (path.endsWith(`/${id}`)) body = { ...handoff,
+      reason: edited ? 'Уточнённая причина' : 'Исходная причина', note: edited ? 'Новое примечание' : null,
+      changes: { items: edited ? [{ id: 'change', author: 'Инженер', created_at: '2026-11-26T09:00:00Z',
+        before: { reason: 'Исходная причина', note: null, visit_address: null },
+        after: { reason: 'Уточнённая причина', note: 'Новое примечание', visit_address: null },
+        additional_information: 'Дополнительные сведения' }] : [], total: edited ? 1 : 0, page: 1, page_size: 20 },
+      phone: null, address: null, report: null }
+    else body = { items: [handoff], total: 1, page: 1, page_size: 20 }
+    return { ok: true, status: 200, json: async () => body } as Response
+  }))
+  render(<FieldWorkApp />)
+  fireEvent.click(await screen.findByRole('button', { name: /Заявка №201/ }))
+  await screen.findByText('Исходная причина')
+  fireEvent.click(screen.getByRole('button', { name: /Выполнить работу/ }))
+  fireEvent.change(screen.getByLabelText('Что было сделано'), { target: { value: 'Несохранённый отчёт' } })
+  edited = true
+  await act(async () => {
+    for (const [callback, delay] of interval.mock.calls) {
+      if (delay === 15000 && typeof callback === 'function') await callback()
+    }
+  })
+  expect(await screen.findByText('Уточнённая причина')).toBeInTheDocument()
+  expect(screen.getByText('Дополнительные сведения')).toBeInTheDocument()
+  expect(screen.getByLabelText('Что было сделано')).toHaveValue('Несохранённый отчёт')
 })
 
 it('shows subscription state and saves personal notification preferences', async () => {

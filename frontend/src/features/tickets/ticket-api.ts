@@ -4,7 +4,7 @@ import type {
   Ticket, TicketCallback, CallbackOutcome, TicketCategory, TicketComment, TicketDetail, TicketEvent, TicketFilters,
   PreviousTicket,
   ResolutionReason,
-  FieldWorkHandoff, EditTicketInput,
+  FieldWorkHandoff, FieldWorkChanges, EditTicketInput,
   FieldExternalMessage,
   FieldWorkReschedule,
 } from './types'
@@ -120,6 +120,14 @@ export const ticketApi = {
     apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/note`, {
       method: 'PATCH', json: { note, expected_note: expectedNote },
     }),
+  updateFieldDetails: (id: string, handoffId: string, payload: {
+    reason: string; note: string | null; visit_address: string | null;
+    additional_information: string | null; expected_version: number; client_request_id: string;
+  }) => apiRequest<FieldWorkHandoff>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/details`, {
+    method: 'PATCH', json: payload,
+  }),
+  fieldWorkChanges: (id: string, handoffId: string, page: number, signal?: AbortSignal) =>
+    apiRequest<FieldWorkChanges>(`${ticketPath(id)}/field-work-handoffs/${encodeURIComponent(handoffId)}/changes?page=${page}`, { signal }),
   latestFieldWork: (id: string, signal?: AbortSignal) =>
     apiRequest<{ handoff: FieldWorkHandoff | null }>(`${ticketPath(id)}/field-work-handoffs/latest`, { signal }),
   publishFieldWork: (id: string, handoffId: string, direction: 'SUKHUM' | 'OCHAMCHIRA', visitAddress: string | null | undefined) =>

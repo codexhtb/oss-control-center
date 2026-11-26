@@ -46,6 +46,7 @@ export const eventLabel: Record<string, string> = {
   decision_recorded: 'Записано решение',
   ticket_resolved: 'Инженерное решение принято',
   field_work_requested: 'Запрошены выездные работы',
+  field_work_details_updated: 'Изменены данные выезда',
   field_work_sent: 'Заявка передана монтажникам',
   field_work_delivery_failed: 'Не удалось передать заявку монтажникам',
   field_work_delivery_uncertain: 'Статус передачи монтажникам не определён',

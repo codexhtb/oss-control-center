@@ -19,6 +19,8 @@ export type Handoff = {
 }
 
 export type HandoffDetail = Handoff & {
+  details_version?: number
+  changes?: Changes
   reason: string
   note?: string | null
   name: string | null
@@ -30,6 +32,13 @@ export type HandoffDetail = Handoff & {
   schedule_reason: string | null
   schedule_author: string | null
   report: { text: string; installer: string; partner: string | null; reported_at: string } | null
+}
+
+export type Changes = {
+  items: { id: string; author: string; created_at: string; additional_information: string | null;
+    before: { reason: string; note: string | null; visit_address: string | null };
+    after: { reason: string; note: string | null; visit_address: string | null } }[]
+  page: number; page_size: number; total: number
 }
 
 export type Reschedule = {

@@ -28,10 +28,12 @@ from app.modules.field_dispatch.schemas import (
     PublishFieldWork,
     RescheduleFieldWork,
     SendFieldWork,
+    UpdateFieldDetails,
     UpdateFieldNote,
 )
 from app.modules.field_dispatch.service import (
     confirm_absent_delivery,
+    handoff_changes,
     handoff_messages,
     handoff_reschedules,
     handoff_view,
@@ -39,6 +41,7 @@ from app.modules.field_dispatch.service import (
     publish_handoff,
     reschedule_handoff,
     send_handoff,
+    update_handoff_details,
     update_handoff_note,
     verify_handoff,
 )
@@ -857,6 +860,31 @@ def publish_field_work(
         payload.visit_address, update_visit_address="visit_address" in payload.model_fields_set,
     )
     return handoff_view(db, item, identity.user)
+
+
+@router.patch(
+    "/{ticket_id}/field-work-handoffs/{handoff_id}/details", response_model=FieldWorkHandoffView,
+)
+def update_field_details(
+    ticket_id: UUID, handoff_id: UUID, payload: UpdateFieldDetails,
+    identity: FieldDep, db: SessionDep,
+):
+    _mutation_scope(db, identity, ticket_id)
+    item = update_handoff_details(db, identity.user.id, ticket_id, handoff_id, payload)
+    return handoff_view(db, item, identity.user)
+
+
+@router.get("/{ticket_id}/field-work-handoffs/{handoff_id}/changes")
+def field_details_history(
+    ticket_id: UUID, handoff_id: UUID, identity: FieldReadDep, db: SessionDep,
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+):
+    _mutation_scope(db, identity, ticket_id)
+    if db.scalar(select(FieldWorkHandoff.id).where(
+        FieldWorkHandoff.id == handoff_id, FieldWorkHandoff.ticket_id == ticket_id,
+    )) is None:
+        raise ApiError(404, "field_handoff_not_found", "Field work handoff not found")
+    return handoff_changes(db, handoff_id, page)
 
 
 @router.post(
