@@ -33,14 +33,15 @@ const session: MeResponse = {
   permissions: ['tickets.create'],
 }
 
-function renderCreate(role: 'operator' | 'engineer' = 'operator') {
+function renderCreate(role: 'operator' | 'engineer' = 'operator', url = '/tickets/new') {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/tickets/new']}><Routes><Route path="/tickets/new" element={<TicketCreatePage session={{ ...session, user: { ...session.user, role } }} />} /><Route path="/tickets/:id" element={<div>Карточка открыта</div>} /></Routes></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[url]}><Routes><Route path="/tickets/new" element={<TicketCreatePage session={{ ...session, user: { ...session.user, role } }} />} /><Route path="/tickets/:id" element={<div>Карточка открыта</div>} /></Routes></MemoryRouter></QueryClientProvider>)
 }
 
 beforeEach(() => {
   vi.mocked(ticketApi.create).mockReset()
   vi.mocked(ticketApi.lookup).mockReset()
+  vi.mocked(ticketApi.getLookup).mockReset()
   vi.mocked(ticketApi.categories).mockReset().mockResolvedValue([
     { id: categoryId, name: 'Нет интернета', sort_order: 10, is_active: true, is_other: false, version: 1 },
     { id: connectionCategoryId, name: 'Новое подключение', sort_order: 20, is_active: true, is_other: true, version: 1 },
@@ -328,4 +329,70 @@ it('creates a linked ticket with a free topic and overridden NetUP contact', asy
   })))
   expect(vi.mocked(ticketApi.create).mock.calls[0]?.[0]).not.toHaveProperty('category_id')
   expect(vi.mocked(ticketApi.create).mock.calls[0]?.[0]).not.toHaveProperty('city')
+})
+
+
+function internetWithAddon(): SubscriberCard {
+  return {
+    lookup_id: '00000000-0000-4000-8000-000000000010', source: 'NETUP',
+    fetched_at: '2026-01-01T00:00:00Z', expires_at: '2999-01-01T00:00:00Z', is_expired: false,
+    subscriber: { ...subscriberDefaults, billing_account: 'TEST-001', full_name: 'Тестовый абонент', organization_name: null, phone: null, actual_address: null },
+    accounts: [], financial_accounts: [], contracts: [],
+    services: [
+      { ...serviceDefaults, account_id: 'TEST-001', service_id: 'addon', name: 'Внешний IP ', source_type_code: 2 },
+      { ...serviceDefaults, account_id: 'TEST-001', service_id: 'internet', name: 'Бизнес-3', source_type_code: 3 },
+    ],
+    connections: [{ ...connectionDefaults, connection_snapshot_id: '00000000-0000-4000-8000-000000000011', access_type: 'ETHERNET', device: null, port: null, vlan: null, service_id: 'internet' }],
+    technical_state: 'UNKNOWN',
+  }
+}
+
+it.each(['account', 'existing lookup'])('auto-selects internet without the NetUP periodic addon via %s', async (entry) => {
+  const card = internetWithAddon()
+  // Selection follows classification, including renamed extra services.
+  if (entry === 'existing lookup') card.services[0]!.name = 'Дополнительная периодическая услуга'
+  vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  vi.mocked(ticketApi.getLookup).mockResolvedValue(card)
+  vi.mocked(ticketApi.create).mockResolvedValue({ id: '00000000-0000-4000-8000-000000000002' } as Ticket)
+  renderCreate('operator', entry === 'existing lookup' ? `/tickets/new?lookup=${card.lookup_id}` : '/tickets/new')
+  if (entry === 'account') {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Лицевой счёт' }), { target: { value: 'TEST-001' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  }
+  expect(await screen.findByText('Услуга: Бизнес-3')).toBeInTheDocument()
+  expect(screen.queryByRole('combobox', { name: 'Услуга' })).not.toBeInTheDocument()
+  expect(screen.queryByText(/Внешний IP/)).not.toBeInTheDocument()
+  fireEvent.change(await screen.findByRole('combobox', { name: 'Тема обращения' }), { target: { value: categoryId } })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Создать заявку' }))
+  await waitFor(() => expect(ticketApi.create).toHaveBeenCalledWith(expect.objectContaining({
+    selected_service_id: 'internet', connection_snapshot_id: card.connections[0]!.connection_snapshot_id,
+  })))
+  expect(card.services).toHaveLength(2)
+})
+
+it.each(['unknown classification', 'mock source', 'two internet tariffs'])('keeps explicit choice for %s', async (scenario) => {
+  const card = internetWithAddon()
+  if (scenario === 'unknown classification') card.services[0]!.source_type_code = null
+  if (scenario === 'mock source') card.source = 'MOCK'
+  if (scenario === 'two internet tariffs') card.services[0]!.source_type_code = 3
+  vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  renderCreate()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Лицевой счёт' }), { target: { value: 'TEST-001' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByRole('combobox', { name: 'Услуга' })).toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /Внешний IP/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
+})
+
+it('does not auto-select an internet tariff belonging to another account', async () => {
+  const card = internetWithAddon()
+  card.services[1]!.account_id = 'OTHER-ACCOUNT'
+  vi.mocked(ticketApi.lookup).mockResolvedValue(card)
+  renderCreate()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Лицевой счёт' }), { target: { value: 'TEST-001' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Найти' }))
+  expect(await screen.findByText('Нет доступной интернет-услуги для выбранного ЛС. Проверьте лицевой счёт.')).toBeInTheDocument()
+  expect(screen.queryByText('Услуга: Бизнес-3')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Создать заявку' })).toBeDisabled()
 })

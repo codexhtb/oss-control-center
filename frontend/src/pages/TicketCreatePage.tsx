@@ -14,6 +14,14 @@ import { formatDate } from '../features/tickets/presentation'
 
 const priorities: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT']
 
+function ticketServices(card: SubscriberCard) {
+  return card.services.filter((service) =>
+    (!service.account_id || service.account_id === card.subscriber.billing_account) &&
+    // NetUP type 2 is an additional periodic service (e.g. external IP), not internet access.
+    !(card.source === 'NETUP' && service.source_type_code === 2),
+  )
+}
+
 export function TicketCreatePage({ session }: { session: MeResponse }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -59,7 +67,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
     setOtherProblem(false)
     setDuplicateReason('')
     setActivePage(1)
-    const eligible = result.services.filter((service) => !service.account_id || service.account_id === result.subscriber.billing_account)
+    const eligible = ticketServices(result)
     setServiceId(eligible.length === 1 ? eligible[0]!.service_id : '')
     setConnectionId(result.connections.length === 1 ? result.connections[0]!.connection_snapshot_id : '')
   }, [existingLookup.data])
@@ -73,7 +81,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
       setOtherProblem(false)
       setDuplicateReason('')
       setActivePage(1)
-      const eligible = result.services.filter((service) => !service.account_id || service.account_id === result.subscriber.billing_account)
+      const eligible = ticketServices(result)
       setServiceId(eligible.length === 1 ? eligible[0]!.service_id : '')
       setConnectionId(result.connections.length === 1 ? result.connections[0]!.connection_snapshot_id : '')
       edited()
@@ -105,7 +113,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
     enabled: linked && !!card,
   })
   const hasActive = !!active.data && (active.data.total_visible > 0 || active.data.has_hidden_active)
-  const eligibleServices = card?.services.filter((service) => !service.account_id || service.account_id === card.subscriber.billing_account) ?? []
+  const eligibleServices = card ? ticketServices(card) : []
   const ambiguousService = eligibleServices.length > 1
   const ambiguousConnection = (card?.connections.length ?? 0) > 1
   const expired = card ? card.is_expired || Date.now() >= new Date(card.expires_at).getTime() : false
@@ -198,7 +206,7 @@ export function TicketCreatePage({ session }: { session: MeResponse }) {
               <div className="lookup-facts"><span>Контакт: <strong>{card.subscriber.phone || 'UNKNOWN'}</strong></span><span>Адрес: <strong>{formatSubscriberAddress(card.subscriber.actual_address, card.subscriber.house_number) || 'UNKNOWN'}</strong></span></div>
               {ambiguousService && <label className="field"><span>Услуга <em>*</em></span><select aria-label="Услуга" value={serviceId} onChange={(event) => { setServiceId(event.target.value); setConnectionId(''); edited() }}><option value="">Выберите услугу</option>{eligibleServices.map((service) => <option key={service.service_id} value={service.service_id}>{service.name || service.service_id} · {service.service_id}</option>)}</select></label>}
               {eligibleServices.length === 1 && <p className="lookup-single">Услуга: {eligibleServices[0]!.name || eligibleServices[0]!.service_id}</p>}
-              {eligibleServices.length === 0 && card.services.length > 0 && <Notice tone="error">Услуги относятся к другому ЛС. Найдите нужный лицевой счёт для связанной заявки.</Notice>}
+              {eligibleServices.length === 0 && card.services.length > 0 && <Notice tone="error">Нет доступной интернет-услуги для выбранного ЛС. Проверьте лицевой счёт.</Notice>}
               {ambiguousConnection && <label className="field"><span>Подключение <em>*</em></span><select aria-label="Подключение" value={connectionId} onChange={(event) => { setConnectionId(event.target.value); edited() }}><option value="">Выберите подключение</option>{card.connections.map((connection) => <option key={connection.connection_snapshot_id} value={connection.connection_snapshot_id} disabled={!!(serviceId && connection.service_id && connection.service_id !== serviceId)}>{connection.access_type} · {connection.device || 'Устройство UNKNOWN'} · {connection.port || 'Порт UNKNOWN'}{connection.service_id ? ` · ${connection.service_id}` : ''}</option>)}</select></label>}
               {card.connections.length === 1 && <p className="lookup-single">Подключение: {card.connections[0]!.access_type} · {card.connections[0]!.device || 'Устройство UNKNOWN'} · {card.connections[0]!.port || 'Порт UNKNOWN'}</p>}
               {card.connections.length === 0 && <p className="lookup-single">Подключение в источнике не указано. Техническое состояние остаётся UNKNOWN.</p>}
